@@ -106,6 +106,34 @@ def get_photo_by_id(photo_id: UUID) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def create_photo(row: dict[str, Any]) -> dict[str, Any]:
+    """⚠️ UNIQUE (session_id, kind) 때문에 같은 종류가 이미 있으면 실패한다.
+
+    교체는 delete_photo 로 먼저 지우고 넣는다. 그리고 **행보다 Storage 파일을
+    먼저 지워야 한다** — 행을 먼저 지우면 어느 파일을 지울지 알 수 없게 된다.
+    """
+    return get_client().table("photo").insert(row).execute().data[0]
+
+
+def delete_photo(photo_id: UUID) -> None:
+    """사진 행 삭제. segmentation / body_part_segment 는 CASCADE로 딸려 지워진다.
+
+    ⚠️ Storage 파일은 CASCADE 대상이 아니다. 호출부가 먼저 지울 것.
+    """
+    get_client().table("photo").delete().eq("photo_id", str(photo_id)).execute()
+
+
+def rows_for_session(table: str, session_id: UUID, columns: str = "*") -> list[dict[str, Any]]:
+    """세션에 딸린 행들을 그대로 가져온다.
+
+    GET /sessions/active 의 단계별 집계처럼 여러 테이블을 훑어야 할 때 쓴다.
+    테이블마다 전용 함수를 만들면 담당 B 영역까지 여기가 비대해진다.
+    """
+    return (
+        get_client().table(table).select(columns).eq("session_id", str(session_id)).execute().data
+    )
+
+
 def get_segmentation(photo_id: UUID) -> dict[str, Any] | None:
     """행의 존재 = 세그멘테이션 완료. 진행/실패 상태는 job이 소스다."""
     rows = (

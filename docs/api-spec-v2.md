@@ -87,7 +87,9 @@ X-User-Id → users 존재 확인
 
 ### 업로드 제한
 
-jpeg/png · 10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인바디 1건당 5장
+10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인바디 1건당 5장
+
+**형식** — jpeg / png / **heic** / webp 등. ⚠️ **`Content-Type` 헤더로 거르지 않고 실제 디코딩 여부로 판단합니다.** 아이폰 기본 촬영 포맷이 HEIC인데 브라우저가 빈 값이나 `application/octet-stream`을 붙여 보내는 경우가 있어, 헤더로 거르면 멀쩡한 사진이 415로 막힙니다. 저장은 어차피 JPEG로 다시 인코딩하므로 입력 형식은 남지 않습니다.
 
 ---
 
@@ -189,34 +191,64 @@ jpeg/png · 10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인
 
 ### ⚠️ 처리 분할 — 여기가 설계의 핵심
 
-| 처리 | 방식 | 이유 |
+| 처리 | 어디서 | 이유 |
 |---|---|---|
-| MediaPipe Pose | **동기** (수백 ms) | 촬영 화면의 실시간 비교 기준값. 없으면 다음 화면으로 못 감 |
-| Sapiens2 세그멘테이션 | **비동기** (수십 초) | 무거움. 촬영 중에 백그라운드로 돌리면 됨 |
+| MediaPipe Pose | **프론트** (동기) | 촬영 화면의 실시간 비교 기준값. 없으면 다음 화면으로 못 감 |
+| Sapiens2 세그멘테이션 | **서버** (비동기, 수십 초) | 무거움. 촬영 중에 백그라운드로 돌리면 됨 |
 
 둘을 한 잡에 묶으면 사용자가 세그가 끝날 때까지 촬영 화면에 못 들어갑니다.
 
+> **⚠️ MediaPipe는 서버에서 돌리지 않습니다** (2026-08-13 변경). 랜드마크 추출과 P/F 점수 계산은 전부 프론트가 하고, 서버는 **형식 검사 + 임계값 판정**만 합니다. 근거는 F05의 역할 분담 참조.
+
 ### `POST .../photos/reference`
 
-**Request** — `multipart/form-data`: `file` (필수)
+**Request** — `multipart/form-data`
+
+| 필드 | 필수 | 설명 |
+|---|---|---|
+| `file` | O | jpeg/png, 10MB 이하 |
+| `pose_landmarks` | O | MediaPipe 33개 랜드마크 **JSON 배열 문자열**. 0~1 정규화 좌표 |
+| `pose_scale_basis` | O | `TORSO` \| `HIP_KNEE` |
+| `pose_person_area_ratio` | X | 프레이밍 판정용 인물 면적 비율 (0~1) |
+| `multi_person` | X | 기본 `false` |
+| `is_mirrored` | X | 기본 `false`. 거울 촬영이면 `true` — 아래 참조 |
 
 **Response 201**
 ```json
 {
   "photo_id": "a1b2...",
   "job_id": "9f8e...",
+  "kind": "REFERENCE",
   "width": 1080, "height": 1440,
   "pose_scale_basis": "TORSO",
+  "was_mirrored": false,
   "pose_landmarks": [ { "index": 0, "x": 0.51, "y": 0.18, "z": -0.32, "visibility": 0.99 } ],
   "signed_url": "https://...?token=...",
-  "signed_url_expires_at": "2026-08-13T05:21:00Z"
+  "signed_url_expires_at": "2026-08-13T05:21:00Z",
+  "segmented": false
 }
 ```
 
+### ⚠️ 거울 촬영 (`is_mirrored`)
+
+거울 사진은 좌우가 **물리적으로 뒤집혀** 있습니다. 그대로 두면 왼팔 진단이 오른팔에 붙고, 인바디 `LEFT_ARM` 수치가 시각적 왼팔과 교차합니다. **에러는 하나도 안 납니다.**
+
+- 서버는 `is_mirrored=true`면 **저장 직전에 한 번만** 이미지와 랜드마크를 되돌립니다. 이후 단계(맵·크롭·bbox)는 전부 그 저장본에서 파생되므로 손댈 필요가 없습니다.
+- 랜드마크는 x좌표를 뒤집는 것만으로 부족합니다. 좌/우 **이름표까지 맞바꿔야** 합니다 (거울 사진에서 MediaPipe가 "왼쪽 어깨"라 부른 건 실제 오른쪽 어깨입니다). 검증: `scripts/verify_pose_mirror.py`
+- 응답의 `pose_landmarks`와 `was_mirrored`는 **되돌린 뒤** 기준입니다.
+
+**프론트가 `is_mirrored`를 정하는 방법**
+
+| 촬영 방식 | 값 |
+|---|---|
+| 앱 내 웹캠 촬영 (`CAPTURE`) | **항상 `false`** — 화면만 CSS로 미러링하고 원본을 보내므로 |
+| 파일 업로드 (`UPLOAD`) | 알 수 없음 → **사용자에게 체크박스로 물어봄** (기본 꺼짐) |
+
 **주의**
 - ⚠️ **재업로드는 교체입니다.** 삭제 순서: `body-parts` 크롭 → `segmentations` 맵 → `photos` 원본 → `photo` 행. 어기면 고아 파일이 남습니다.
-- ⚠️ 사람 미검출 → 422 `POSE_MISMATCH`(`reason="NO_PERSON"`), 2명 이상 → 422 `MULTI_PERSON`
-- ⚠️ 저장 이미지와 landmarks는 **반전되지 않은 원본 기준.** 미러링은 CSS만.
+- ⚠️ 랜드마크 미전달/빈 배열 → 422 `POSE_MISMATCH`(`reason="NO_PERSON"`), `multi_person=true` → 422 `MULTI_PERSON`
+- ⚠️ 저장 이미지와 landmarks는 **반전되지 않은 원본 기준.** 화면 미러링은 CSS만.
+- ⚠️ EXIF Orientation은 서버가 픽셀에 적용해 저장합니다. 스마트폰 사진이 옆으로 누운 채 모델에 들어가는 걸 막기 위함입니다.
 
 ### `GET .../photos/reference` → 200
 
@@ -230,14 +262,19 @@ jpeg/png · 10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인
 
 | 엔드포인트 | 설명 |
 |---|---|
-| `POST /sessions/{session_id}/photos/user` | 촬영본/업로드본 저장 (**서버 재검증**) |
+| `POST /sessions/{session_id}/photos/user` | 촬영본/업로드본 저장 (**서버가 임계값 판정**) |
 
-### 역할 분담
+### ⚠️ 역할 분담 — 측정은 프론트, 정책은 서버
 
-| 값 | 계산 주체 | 이유 |
+| 하는 일 | 어디서 | 이유 |
 |---|---|---|
-| 실시간 비교 (매 프레임) | **프론트** | 서버 왕복 불가 |
-| 저장 시점 P/F 확정값 | **서버 재계산** | 프론트 값은 조작 가능 + MediaPipe 버전 차로 어긋남 |
+| 랜드마크 추출 · P/F 점수 계산 | **프론트** | 실시간 비교가 매 프레임 필요해 서버 왕복이 불가능하고, 저장 시점만 서버가 다시 재면 **같은 사진에 두 개의 값**이 생긴다 |
+| 값 형식·범위 검사 | **서버** | 픽셀 좌표를 보내거나 랜드마크 개수가 안 맞는 등의 사고를 입구에서 막는다 |
+| 통과/거부 판정 | **서버** | 판정까지 프론트가 하면 임계값이 프론트에 하드코딩돼 `THRESHOLD`/`F_MIN`을 `.env`로 뺀 의미가 없어진다 |
+
+> **왜 서버 재계산을 그만뒀나** (2026-08-13 변경)
+> 서버가 다시 재면 프론트와 MediaPipe 버전·구현이 달라 값이 어긋나고, **화면에서는 92%였는데 저장이 거부되는** 경험이 생깁니다. 재검증의 목적은 값 조작 방지인데, 로그인이 없는 MVP에서 자기 사진 점수를 조작할 동기가 없습니다(진단 품질만 나빠지고, 남의 데이터에는 닿지 않습니다). 서버에 MediaPipe를 얹는 비용도 사라집니다.
+> ⚠️ **실서비스로 가면 이 판단을 다시 해야 합니다.** 그때는 값 조작이 실제 위험이 됩니다.
 
 ### `POST .../photos/user`
 
@@ -247,14 +284,20 @@ jpeg/png · 10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인
 |---|---|---|
 | `file` | O | 촬영본 또는 업로드본 |
 | `capture_source` | O | `CAPTURE` \| `UPLOAD` |
-| `client_pose_similarity` | X | 프론트 계산값 (로깅·추적용) |
-| `client_framing_score` | X | 프론트 계산값 (로깅·추적용) |
+| `pose_landmarks` | O | MediaPipe 33개 랜드마크 JSON 배열 문자열 |
+| `pose_similarity` | O | 0~100. 프론트 계산값 |
+| `framing_score` | O | 0~1. 프론트 계산값 |
+| `pose_scale_basis` | O | ⚠️ 레퍼런스와 **같아야** 함. 다르면 422 |
+| `pose_person_area_ratio` | X | 0~1 |
+| `multi_person` | X | 기본 `false` |
+| `is_mirrored` | X | 기본 `false`. F04의 거울 촬영 항목과 동일 |
 
 **Response 201**
 ```json
-{ "photo_id": "b2c3...", "job_id": "7d6c...",
+{ "photo_id": "b2c3...", "job_id": "7d6c...", "kind": "USER",
   "pose_similarity": 92.4, "framing_score": 0.87,
-  "pose_scale_basis": "TORSO", "multi_person": false }
+  "pose_scale_basis": "TORSO", "multi_person": false,
+  "was_mirrored": false, "capture_source": "CAPTURE" }
 ```
 
 **Response 422 `POSE_MISMATCH`**
@@ -269,16 +312,23 @@ jpeg/png · 10MB/파일 · 긴 변 4096px(초과 시 서버 리사이즈) · 인
 > 화면 안내 문구가 달라야 하므로 나눕니다. "포즈를 맞춰주세요" vs "몸이 화면에 다 나오게 서주세요"는 다른 지시입니다.
 
 **서버 처리 순서**
-1. 레퍼런스 `pose_landmarks` / `pose_scale_basis` 로드 (없으면 409 `PRECONDITION_NOT_MET`)
-2. MediaPipe 추출 → **레퍼런스와 같은 `pose_scale_basis`로** 정규화
-3. `F = Jaccard(레퍼런스 인물 bbox, 사용자 인물 bbox)`, `P = 관절 각도 유사도`
-4. 최종 `= (F ≥ F_MIN) ? P : 0` → `THRESHOLD` 미만이면 **저장하지 않고** 422
-5. 통과 시 저장 → `photo(kind='USER')` → `job(kind='SEG_USER')` 큐잉
+1. 레퍼런스 사진 존재 확인 (없으면 409 `PRECONDITION_NOT_MET`)
+2. 파일 형식·크기 검사 → 랜드마크 형식 검사 (33개, 0~1 정규화 좌표)
+3. `multi_person` → 422 `MULTI_PERSON`
+4. `pose_scale_basis`가 레퍼런스와 다르면 → 422 (`reason="FRAMING"`)
+5. `framing_score < F_MIN` → 422 (`reason="FRAMING"`), `pose_similarity < THRESHOLD` → 422 (`reason="POSE"`)
+6. 통과 시에만 저장 → `photo(kind='USER')` → `job(kind='SEG_USER')` 큐잉
+
+**프론트가 계산해야 하는 값**
+- `F = Jaccard(레퍼런스 인물 bbox, 사용자 인물 bbox)` → `framing_score`
+- `P = 관절 각도 유사도` (`TOL` 허용 오차) → `pose_similarity`
+- 최종 판정은 서버가 하지만, 실시간 화면에서는 프론트가 같은 식으로 미리 보여줍니다
 
 **주의**
-- ⚠️ `THRESHOLD` / `F_MIN` / `TOL`은 `.env`로. 코드에 박지 마세요 (튜닝 대상 잠정값).
-- ⚠️ **레퍼런스가 `HIP_KNEE` 기준이면 사용자도 `HIP_KNEE`로 재야 합니다.** 서버가 레퍼런스 값을 강제하고, 못 재면 422(`reason="FRAMING"`).
-- ⚠️ 프론트가 90%로 촬영했는데 서버가 422를 주는 경우가 생깁니다. **`client_*` 값과 서버 값을 함께 로그에 남기세요.** 차이가 크면 임계값이 아니라 구현이 어긋난 것입니다.
+- ⚠️ 프레이밍을 포즈보다 **먼저** 봅니다. 몸이 잘린 상태의 포즈 점수는 신뢰할 수 없고, 안내 문구도 달라야 합니다.
+- ⚠️ `THRESHOLD` / `F_MIN` / `TOL`은 서버 `.env`에 있습니다. **프론트에 임계값을 하드코딩하지 마세요** — 튜닝하면 두 곳이 어긋납니다. 판정 결과는 422의 `detail.threshold` / `detail.f_min`으로 함께 내려갑니다.
+- ⚠️ **레퍼런스가 `HIP_KNEE` 기준이면 사용자도 `HIP_KNEE`로 재야 합니다.** 각자 다른 기준으로 정규화한 점수는 비교가 무의미합니다. 서버가 레퍼런스 값을 강제하고, 다르면 422(`reason="FRAMING"`).
+- ⚠️ 판정에 실패한 사진은 **저장하지 않습니다.** Storage에 고아 파일이 쌓이지 않게 하기 위함입니다.
 
 ---
 
@@ -775,7 +825,7 @@ workout_log(feedback_text) → ROUTINE_PATCH → 새 month_routine 버전
 | 4 | 유사도 산출 방식 | F09 `score_source` | `VLM` 고정 |
 | 5 | 루틴 진행 기준 | F11 `day_source` | `COUNT` |
 | 6 | 루틴 생성 분할 | F10 `status` 전환 | 일괄. 분할하면 4주차까지 끝나야 `DONE` |
-| 7 | **VLM 입력 형식** | F08 `vlm_input_type`, `crop_path` | `CROP`. **맵이 있으므로 나중에 바꿔도 재추론 불필요** |
+| 7 | ~~VLM 입력 형식~~ | — | ✅ **확정 (2026-08-13): `HIGHLIGHT`** — 아래 참조 |
 | 8 | 3방향 촬영 | F04/F05 `photo.kind` | 1장 |
 | 9 | 레퍼런스 프리셋 | F18 | `USER_UPLOAD` 고정 |
 | 10 | 맵 저장 해상도 | F06 전송량 | 긴 변 1024px 권장 |

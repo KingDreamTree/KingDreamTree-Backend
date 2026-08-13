@@ -139,6 +139,22 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 이미 목표에 도달한 부위입니다. "조금 더 늘리면 좋습니다" 같은 말을 붙이면
 사용자는 모든 부위가 부족하다고 읽습니다. **유지하라고만** 하세요.
 
+### 어떤 두 부위도 같은 문장이면 안 됩니다
+
+아홉 항목이 화면에 나란히 놓입니다. 복사한 듯한 문장 두 개는 성의 없는
+진단으로 읽힙니다. 부위마다 그 부위만의 근거로 구분하세요.
+
+- **좌우 쌍** (왼/오른 같은 부위): 아래 "좌우 쌍 비교"의 방향을 문장에
+  넣으세요. 좌측 항목과 우측 항목은 서로를 언급하는 순간 달라집니다.
+  (예: "우측 허벅지는 좌측보다 소폭 더 발달해 있습니다")
+  ⚠️ 좌우 비교는 **문장을 구분하는 용도일 뿐**입니다. gap_level 은 언제나
+  **레퍼런스와의 격차**로만 매기세요 — 레퍼런스보다 큰 부위는 좌우 어느 쪽이
+  뒤처졌든 NONE 입니다.
+- **같은 팔다리의 이웃 부위** (허벅지↔종아리, 상완↔전완): 처방을 부위의
+  역할에 붙이세요 — 허벅지는 하체 힘의 중심, 종아리는 발목 안정과 보행 추진,
+  전완은 그립과 팔 라인의 마무리. 일반 상식 수준의 역할만 쓰고 지어내지 마세요.
+- 그래도 내용이 겹치면 문장 구조라도 바꾸세요.
+
 ## 문체 — assessment 는 설명이 아니라 처방입니다
 
 `[근거] → [무엇을 위해] → [무엇을 하라]` 순서로 한 문장씩 씁니다.
@@ -172,9 +188,13 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
   "gap_level": "SLIGHT", "priority": 4, ...
 }
 
-목표 도달 부위 (인용 강제 없음, 유지만):
+목표 도달 부위 (인용 강제 없음 — 좌우 방향으로 쌍과 구분):
 {
-  "assessment": "우측 허벅지는 이미 레퍼런스 수준을 넘어서 있습니다. 현재 운동량을 유지하세요.",
+  "assessment": "우측 허벅지는 레퍼런스 수준을 넘어섰고 좌측보다도 소폭 앞서 있습니다. 현재 운동량을 유지하세요.",
+  "gap_level": "NONE", "priority": 5, ...
+}
+{
+  "assessment": "좌측 허벅지도 목표에 도달해 있으나 우측과의 미세한 차이를 좁히려면 편측 운동을 섞어주세요.",
   "gap_level": "NONE", "priority": 5, ...
 }
 
@@ -255,16 +275,27 @@ def _metrics_block(metrics: dict[str, Any], parts: list[dict[str, Any]]) -> str:
     return "\n".join(out)
 
 
-def _symmetry_block(ref_sym: dict[str, float], user_sym: dict[str, float]) -> str:
+_SIDE_KO = {"LEFT": "좌측", "RIGHT": "우측"}
+
+
+def _symmetry_block(
+    ref_sym: dict[str, dict[str, Any]],
+    user_sym: dict[str, dict[str, Any]],
+) -> str:
     if not user_sym:
         return ""
-    lines = ["", "## 좌우 대칭 (같은 사람 안에서의 면적 차이)"]
+    lines = ["", "## 좌우 쌍 비교 (같은 사람 안에서)"]
     for key, value in user_sym.items():
+        side = _SIDE_KO.get(value.get("larger"))
+        direction = f"**{side}이 더 큼**" if side else "좌우 동일"
         ref_value = ref_sym.get(key)
-        base = f" (레퍼런스 {ref_value:.1f}%)" if ref_value is not None else ""
-        lines.append(f"- {key}: 사용자 {value:.1f}%{base}")
+        ref_txt = f" · 레퍼런스는 {ref_value['diff_pct']:.1f}%" if ref_value else ""
+        lines.append(f"- {key}: 좌우 차이 {value['diff_pct']:.1f}%, {direction}{ref_txt}")
     lines.append(
-        "※ 자세와 각도만으로도 10~20%는 흔합니다. 참고값으로만 쓰고 "
+        "🔴 좌우 쌍 부위의 문장은 **이 방향으로 서로 구분**하세요.\n"
+        '   (예: 좌측이 작으면 좌측 항목에 "우측보다 뒤처져 있다", '
+        '우측 항목에 "좌측보다 앞서 있다")\n'
+        "※ 차이 10~20%는 자세·각도만으로도 흔합니다. 방향 언급은 하되 "
         "이것만으로 비대칭이라 단정하지 마세요."
     )
     return "\n".join(lines)

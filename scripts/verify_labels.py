@@ -84,25 +84,81 @@ def analyze(labels: np.ndarray, names: tuple[str, ...]) -> dict[str, dict]:
     return out
 
 
-def run_checks(stats: dict[str, dict], height: int) -> list[tuple[str, bool | None, str]]:
-    """해부학적으로 말이 되는지 점검. (설명, 통과여부, 비고)
+#: 얼굴 세부 클래스 — 사람 픽셀의 몇 %를 넘을 수 없다.
+#  입술이 몸의 3%를 차지하는 사진은 존재하지 않는다.
+TINY_CLASSES = ("Lower_Lip", "Upper_Lip", "Lower_Teeth", "Upper_Teeth", "Tongue", "Eyeglasses")
+TINY_MAX_RATIO = 0.03
+
+#: 좌우 대칭 쌍 — 정면 사진에서 픽셀 수가 이 배수를 넘게 차이나면 이상하다.
+SYMMETRIC_PAIRS = (
+    ("Left_Hand", "Right_Hand"),
+    ("Left_Foot", "Right_Foot"),
+    ("Left_Shoe", "Right_Shoe"),
+    ("Left_Upper_Arm", "Right_Upper_Arm"),
+    ("Left_Lower_Arm", "Right_Lower_Arm"),
+    ("Left_Upper_Leg", "Right_Upper_Leg"),
+    ("Left_Lower_Leg", "Right_Lower_Leg"),
+)
+SYMMETRY_MAX_RATIO = 3.0
+
+
+def run_checks(
+    stats: dict[str, dict], height: int, person_pixels: int
+) -> list[tuple[str, bool | None, str, int]]:
+    """해부학적으로 말이 되는지 점검. (설명, 통과여부, 비고, 가중치)
 
     통과여부 None = 해당 클래스가 사진에 없어서 판정 불가.
+    가중치가 큰 항목은 "물리적으로 불가능한" 것들이라 위반 시 후보가 탈락한다.
     """
-    checks: list[tuple[str, bool | None, str]] = []
+    checks: list[tuple[str, bool | None, str, int]] = []
 
     def get(name: str) -> dict | None:
         s = stats.get(name)
         # 너무 작은 영역은 노이즈로 보고 판정에서 제외
         return s if s and s["pixels"] > 200 else None
 
-    def vertical(upper: str, lower: str, label: str) -> None:
+    # ── 크기 상식 (가중치 큼) — 사진에 팔다리가 안 나와도 판정 가능 ──────────
+    for name in TINY_CLASSES:
+        s = stats.get(name)
+        if not s or not person_pixels:
+            continue
+        ratio = s["pixels"] / person_pixels
+        ok = ratio <= TINY_MAX_RATIO
+        checks.append(
+            (
+                f"{name}가 충분히 작은가",
+                ok,
+                f"사람 픽셀의 {ratio * 100:.1f}% (상한 {TINY_MAX_RATIO * 100:.0f}%)",
+                5,
+            )
+        )
+
+    # ── 좌우 대칭 (가중치 중간) ────────────────────────────────────────────
+    for left, right in SYMMETRIC_PAIRS:
+        a, b = get(left), get(right)
+        if not a or not b:
+            continue
+        big, small = max(a["pixels"], b["pixels"]), min(a["pixels"], b["pixels"])
+        ratio = big / small if small else float("inf")
+        ok = ratio <= SYMMETRY_MAX_RATIO
+        checks.append(
+            (
+                f"{left}/{right} 크기 대칭",
+                ok,
+                f"{a['pixels']:,} vs {b['pixels']:,} ({ratio:.1f}배)",
+                3,
+            )
+        )
+
+    def vertical(upper: str, lower: str, label: str, weight: int = 1) -> None:
         a, b = get(upper), get(lower)
         if not a or not b:
-            checks.append((label, None, f"{upper} 또는 {lower} 없음"))
+            checks.append((label, None, f"{upper} 또는 {lower} 없음", weight))
             return
         ok = a["cy"] < b["cy"]
-        checks.append((label, ok, f"{upper} y={a['cy']:.0f} vs {lower} y={b['cy']:.0f}"))
+        checks.append((label, ok, f"{upper} y={a['cy']:.0f} vs {lower} y={b['cy']:.0f}", weight))
+
+    vertical("Upper_Clothing", "Lower_Clothing", "상의가 하의보다 위", 3)
 
     vertical("Hair", "Torso", "머리가 몸통보다 위")
     vertical("Face_Neck", "Torso", "얼굴·목이 몸통보다 위")
@@ -119,17 +175,24 @@ def run_checks(stats: dict[str, dict], height: int) -> list[tuple[str, bool | No
     ):
         a, b = get(left), get(right)
         if not a or not b:
-            checks.append((label, None, f"{left} 또는 {right} 없음"))
+            checks.append((label, None, f"{left} 또는 {right} 없음", 1))
             continue
         ok = a["cx"] > b["cx"]
-        checks.append((label, ok, f"{left} x={a['cx']:.0f} vs {right} x={b['cx']:.0f}"))
+        checks.append((label, ok, f"{left} x={a['cx']:.0f} vs {right} x={b['cx']:.0f}", 1))
 
-    # 발/신발은 화면 아래쪽
-    for name in ("Left_Foot", "Right_Foot", "Left_Shoe", "Right_Shoe"):
+    # 발/신발/양말은 화면 아래쪽 (가중치 큼 — 발이 화면 한가운데 있을 수 없다)
+    for name in ("Left_Foot", "Right_Foot", "Left_Shoe", "Right_Shoe", "Left_Sock", "Right_Sock"):
         s = get(name)
         if s:
             ok = s["cy"] > height * 0.6
-            checks.append((f"{name}가 화면 아래쪽", ok, f"y={s['cy']:.0f} / 높이 {height}"))
+            checks.append((f"{name}가 화면 아래쪽", ok, f"y={s['cy']:.0f} / 높이 {height}", 4))
+
+    # 머리카락·얼굴은 화면 위쪽
+    for name in ("Hair", "Face_Neck"):
+        s = get(name)
+        if s:
+            ok = s["cy"] < height * 0.6
+            checks.append((f"{name}가 화면 위쪽", ok, f"y={s['cy']:.0f} / 높이 {height}", 3))
 
     return checks
 
@@ -242,18 +305,25 @@ def main() -> int:
                 f"중심 ({s['cx']:.0f}, {s['cy']:.0f})"
             )
 
-        checks = run_checks(stats, h)
-        passed = sum(1 for _, ok, _ in checks if ok is True)
-        failed = sum(1 for _, ok, _ in checks if ok is False)
-        skipped = sum(1 for _, ok, _ in checks if ok is None)
+        person_pixels = int(np.count_nonzero(labels != 0))
+        checks = run_checks(stats, h, person_pixels)
+        passed = sum(1 for _, ok, _, _ in checks if ok is True)
+        failed = sum(1 for _, ok, _, _ in checks if ok is False)
+        skipped = sum(1 for _, ok, _, _ in checks if ok is None)
 
         print()
         print("  해부학 점검:")
-        for label, ok, note in checks:
+        for label, ok, note, weight in checks:
             mark = "O" if ok is True else ("X" if ok is False else "-")
-            print(f"    [{mark}] {label:<28} {note}")
+            heavy = " ←결정적" if ok is False and weight >= 4 else ""
+            print(f"    [{mark}] {label:<32} {note}{heavy}")
         print(f"  → 통과 {passed} / 실패 {failed} / 판정불가 {skipped}")
-        results[cand] = passed - failed * 2  # 실패에 가중치
+
+        # 가중치를 반영한 점수. 실패는 두 배로 깎는다.
+        results[cand] = sum(
+            weight if ok is True else (-weight * 2 if ok is False else 0)
+            for _, ok, _, weight in checks
+        )
 
         overlay = render_overlay(image, labels, names)
         path = out_dir / f"overlay_{cand}.png"
@@ -273,17 +343,22 @@ def main() -> int:
     for cand, score in ordered:
         print(f"  {cand:<10} 점수 {score}")
 
-    if len(ordered) > 1 and ordered[0][1] == ordered[1][1]:
-        print()
-        print("  ⚠️ 점수가 같습니다. 오버레이 이미지를 직접 보고 판단하세요.")
-        print("     특히 팔다리 색이 좌우로 뒤바뀌지 않았는지 확인할 것.")
-        return 1
+    if len(ordered) > 1:
+        gap = ordered[0][1] - ordered[1][1]
+        if gap <= 0:
+            print()
+            print("  ⚠️ 판정 불가 — 점수가 같거나 뒤집혔습니다.")
+            print("     전신 + 팔다리 드러난 사진으로 다시 돌려보세요.")
+            return 1
+        if gap < 5:
+            print()
+            print(f"  ⚠️ 점수 차이가 작습니다 (gap {gap}). 근거가 약합니다.")
+            print("     전신 + 팔다리 드러난 사진으로 한 번 더 확인하는 걸 권합니다.")
 
     print()
-    print(f"  → '{best}' 가 유력합니다.")
+    print(f"  → '{best}' 로 판정했습니다.")
     print()
-    print("  ⚠️ 점수만 믿지 말고 오버레이를 눈으로 확인하세요.")
-    print("     확인되면 app/services/sapiens_labels.py 에 반영:")
+    print("  app/services/sapiens_labels.py 에 반영:")
     print(f'       VERIFIED_ORDER = "{best}"')
     print(f'       VERIFIED_WITH = "{segmenter.model_version(args.size)}"')
     return 0

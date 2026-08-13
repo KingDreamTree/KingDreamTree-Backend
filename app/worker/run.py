@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import signal
 import sys
@@ -56,20 +57,30 @@ def _preflight() -> bool:
     return ok
 
 
+#: LLM 계열 핸들러 모듈 — 아직 없는 것이 섞여 있어도 된다.
+LLM_HANDLER_MODULES: tuple[str, ...] = ("ocr", "vlm", "routine")
+
+
 def _load_handlers(kinds: list[JobKind]) -> None:
     """필요한 핸들러만 import 한다.
 
     ⚠️ 세그 핸들러를 import하면 torch/transformers가 딸려 온다.
        LLM 워커에서까지 그걸 로드할 이유가 없으므로 필요할 때만 가져온다.
+
+    ⚠️ **LLM 핸들러는 하나씩 따로 import 한다.**
+       `from app.worker.handlers import ocr, routine, vlm` 처럼 한 문장으로 묶으면,
+       셋 중 하나만 없어도 ImportError 로 문장 전체가 실패해 **이미 만들어진 것까지
+       등록이 안 된다.** 담당 B가 순서대로 만들어 나가는 동안 계속 밟게 되는 함정이다.
     """
     if any(k in SEG_KINDS for k in kinds):
         from app.worker.handlers import seg  # noqa: F401
 
     if any(k in LLM_KINDS for k in kinds):
-        try:
-            from app.worker.handlers import ocr, routine, vlm  # noqa: F401
-        except ImportError as e:
-            log.warning("LLM 핸들러 일부가 아직 없습니다 (담당 B 작업): %s", e)
+        for name in LLM_HANDLER_MODULES:
+            try:
+                importlib.import_module(f"app.worker.handlers.{name}")
+            except ImportError as e:
+                log.warning("핸들러 %s 없음 (아직 작업 중일 수 있습니다): %s", name, e)
 
 
 _stop = False

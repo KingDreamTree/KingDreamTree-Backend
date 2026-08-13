@@ -37,6 +37,8 @@ models/*
 uploads/
 overlays/
 tmp/
+# scripts/verify_labels.py 산출물 (사람 사진이 들어간 오버레이 — 절대 커밋 금지)
+out/
 
 # IDE
 .idea/

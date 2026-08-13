@@ -124,6 +124,34 @@ def list_body_parts() -> list[dict[str, Any]]:
     return get_client().table("body_part").select("*").order("display_order").execute().data
 
 
+def master_class_names() -> set[str]:
+    """라벨 맵 검증용 — body_part 전체 class_name."""
+    rows = get_client().table("body_part").select("class_name").execute().data
+    return {r["class_name"] for r in rows}
+
+
+def replace_segmentation(
+    photo_id: UUID, segmentation: dict[str, Any], parts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """세그멘테이션 결과를 통째로 교체한다.
+
+    ⚠️ UNIQUE(photo_id) 때문에 재추론 시 기존 행이 있으면 INSERT가 실패한다.
+       Storage 파일 삭제는 호출부(핸들러) 책임 — 여기서는 DB만 다룬다.
+    """
+    client = get_client()
+    client.table("segmentation").delete().eq("photo_id", str(photo_id)).execute()
+
+    row = client.table("segmentation").insert({**segmentation, "photo_id": str(photo_id)})
+    created = row.execute().data[0]
+
+    if parts:
+        client.table("body_part_segment").insert(
+            [{**p, "segmentation_id": created["segmentation_id"]} for p in parts]
+        ).execute()
+
+    return created
+
+
 def comparable_class_names() -> list[str]:
     rows = (
         get_client()

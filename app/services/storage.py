@@ -1,17 +1,173 @@
-"""Supabase Storage 업로드 래퍼 + mock 분기."""
+"""Supabase Storage 래퍼.
+
+설계 규약
+  * 버킷은 전부 private. 조회는 signed URL로만.
+  * ⚠️ **전체 URL을 반환하지 않는다.** DB에는 bucket + path만 저장하고
+    URL은 조회 시점에 조립한다. 버킷을 옮겨도 기존 행이 안 깨지게 하기 위함.
+  * ⚠️ FK CASCADE는 Storage 파일을 지우지 않는다. 삭제는 여기서 명시적으로.
+"""
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import UUID
 
 from app.config import settings
+from app.services.db import get_client
+
+#: 유저 데이터가 들어가는 버킷 전부 — 유저 삭제 시 이 목록을 훑는다.
+USER_BUCKETS: tuple[str, ...] = (
+    settings.bucket_photos,
+    settings.bucket_segmentations,
+    settings.bucket_body_parts,
+    settings.bucket_inbody_temp,
+)
 
 
-async def upload_image(
-    bucket: str, path: str, data: bytes, content_type: str = "image/jpeg"
+# --------------------------------------------------------------------------- #
+# 업로드 / 삭제
+# --------------------------------------------------------------------------- #
+
+
+def upload(
+    bucket: str,
+    path: str,
+    data: bytes,
+    content_type: str = "image/jpeg",
+    upsert: bool = True,
 ) -> str:
-    """이미지를 Supabase Storage에 업로드하고 공개 URL을 반환한다."""
-    if settings.use_mock:
-        return f"https://mock.supabase.co/storage/v1/object/public/{bucket}/{path}"
+    """파일을 올리고 **path를 반환한다** (URL 아님).
 
-    from supabase import create_client
+    ⚠️ segmentations / body-parts 버킷은 image/png 만 허용하도록 버킷 설정이
+       걸려 있다. 라벨 맵을 JPEG로 올리면 여기서 거부된다. 의도된 방어선이다.
+    """
+    get_client().storage.from_(bucket).upload(
+        path,
+        data,
+        {"content-type": content_type, "upsert": "true" if upsert else "false"},
+    )
+    return path
 
-    client = create_client(settings.supabase_url, settings.supabase_service_role_key)
-    client.storage.from_(bucket).upload(path, data, {"content-type": content_type})
-    return client.storage.from_(bucket).get_public_url(path)
+
+def remove(bucket: str, paths: list[str]) -> None:
+    """파일 삭제. 없는 경로가 섞여 있어도 에러로 보지 않는다."""
+    if not paths:
+        return
+    get_client().storage.from_(bucket).remove(paths)
+
+
+def list_prefix(bucket: str, prefix: str) -> list[str]:
+    """prefix 아래 모든 파일 경로를 재귀적으로 모은다."""
+    client = get_client()
+    found: list[str] = []
+    stack = [prefix.rstrip("/")]
+
+    while stack:
+        current = stack.pop()
+        try:
+            entries: list[dict[str, Any]] = client.storage.from_(bucket).list(current)
+        except Exception:  # noqa: BLE001 — 없는 폴더는 조용히 건너뛴다
+            continue
+        for e in entries or []:
+            name = e.get("name")
+            if not name:
+                continue
+            child = f"{current}/{name}" if current else name
+            # id가 None이면 파일이 아니라 폴더다 (Supabase Storage 규약)
+            if e.get("id") is None:
+                stack.append(child)
+            else:
+                found.append(child)
+
+    return found
+
+
+def delete_prefix(bucket: str, prefix: str) -> int:
+    """prefix 아래를 통째로 지우고 삭제한 개수를 반환한다."""
+    paths = list_prefix(bucket, prefix)
+    if paths:
+        remove(bucket, paths)
+    return len(paths)
+
+
+def delete_user_files(user_id: UUID) -> dict[str, int]:
+    """⚠️ 유저 삭제 시 **DB보다 먼저** 호출할 것.
+
+    DB를 먼저 지우면 어느 경로를 지워야 하는지 알 수 없게 된다.
+    경로 최상위를 {user_id}/ 로 나눈 이유가 이것이다.
+    """
+    return {bucket: delete_prefix(bucket, str(user_id)) for bucket in USER_BUCKETS}
+
+
+# --------------------------------------------------------------------------- #
+# signed URL
+# --------------------------------------------------------------------------- #
+
+
+def _expires(expires_in: int | None) -> int:
+    limit = settings.signed_url_expires_sec
+    if expires_in is None:
+        return limit
+    return max(1, min(expires_in, limit))
+
+
+def signed_url(bucket: str, path: str, expires_in: int | None = None) -> tuple[str, datetime]:
+    """단건 발급. (url, 만료시각)을 반환한다."""
+    ttl = _expires(expires_in)
+    res = get_client().storage.from_(bucket).create_signed_url(path, ttl)
+    url = res.get("signedURL") or res.get("signedUrl") or res.get("signed_url")
+    if not url:
+        raise RuntimeError(f"signed URL 발급 실패: {bucket}/{path}")
+    return url, datetime.now(timezone.utc) + timedelta(seconds=ttl)
+
+
+def signed_urls(bucket: str, paths: list[str], expires_in: int | None = None) -> dict[str, str]:
+    """같은 버킷의 여러 경로를 한 번에. {path: url} 반환."""
+    if not paths:
+        return {}
+    ttl = _expires(expires_in)
+    res = get_client().storage.from_(bucket).create_signed_urls(paths, ttl)
+
+    out: dict[str, str] = {}
+    for item, requested in zip(res or [], paths):
+        url = item.get("signedURL") or item.get("signedUrl") or item.get("signed_url")
+        # 응답의 path는 앞에 버킷명이 붙어 오는 경우가 있어 요청 순서로 매칭한다
+        if url:
+            out[requested] = url
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# 경로 규칙 — docs/db-design-v4.md §19
+# --------------------------------------------------------------------------- #
+
+
+def photo_path(user_id: UUID, session_id: UUID, kind: str) -> str:
+    """photos/{user_id}/{session_id}/reference.jpg"""
+    return f"{user_id}/{session_id}/{kind.lower()}.jpg"
+
+
+def map_path(user_id: UUID, session_id: UUID, kind: str) -> str:
+    """segmentations/{user_id}/{session_id}/reference/map.png"""
+    return f"{user_id}/{session_id}/{kind.lower()}/map.png"
+
+
+def crop_path(user_id: UUID, session_id: UUID, kind: str, class_name: str) -> str:
+    """body-parts/{user_id}/{session_id}/reference/{class_name}.png
+
+    ⚠️ class_id(정수)는 경로에 넣지 않는다. 모델 버전에 따라 재배열된다.
+    """
+    return f"{user_id}/{session_id}/{kind.lower()}/{class_name}.png"
+
+
+def inbody_temp_path(user_id: UUID, inbody_id: UUID, n: int) -> str:
+    """inbody-temp/{user_id}/{inbody_id}_{n}.jpg"""
+    return f"{user_id}/{inbody_id}_{n}.jpg"
+
+
+def owns_path(user_id: UUID, path: str) -> bool:
+    """⚠️ 이것만으로는 부족하다.
+
+    prefix가 맞아도 DB에 실제로 존재하는 경로인지 별도 확인이 필요하다.
+    prefix 검증만 하면 임의 경로 탐색이 가능하다.
+    """
+    return path.startswith(f"{user_id}/")

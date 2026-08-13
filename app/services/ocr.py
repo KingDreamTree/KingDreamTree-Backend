@@ -15,10 +15,14 @@ import base64
 import json
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.config import settings
 from app.prompts.inbody_ocr import SYSTEM_PROMPT, USER_PROMPT
+
+# ⚠️ openai 는 모듈 최상단에서 import 하지 않는다.
+#    routes/inbody → services/ocr 경로라, 여기서 최상단 import 를 하면
+#    배포 서버에 openai 가 없을 때 **API 전체가 기동 실패**한다.
+#    (인바디는 선택 기능인데 그것 때문에 앱이 안 뜨면 안 된다)
+#    실제 호출 시점에만 가져온다 — services/vlm.py 와 같은 규약.
 
 # ── 검증 임계값 ───────────────────────────────────────────────────────────────
 # config.py는 공유 파일(A 리뷰 필요)이라 B 전용 임계값은 여기 둔다.
@@ -117,6 +121,8 @@ async def extract_inbody(
 
     if settings.use_mock:
         return dict(_MOCK_RAW)
+
+    from openai import AsyncOpenAI  # 지연 import — 모듈 상단 주석 참고
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     image_blocks = [

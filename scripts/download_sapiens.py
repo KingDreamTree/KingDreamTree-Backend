@@ -2,19 +2,26 @@
 
 사용법:
     pip install huggingface-hub
-    python scripts/download_sapiens.py            # 기본: 1b
-    python scripts/download_sapiens.py --size 0.4b
-    python scripts/download_sapiens.py --list     # 받지 않고 파일 목록만 확인
+    python scripts/download_sapiens.py               # 기본: 0.4b
+    python scripts/download_sapiens.py --size 1b
+    python scripts/download_sapiens.py --list        # 받지 않고 파일 목록만 확인
+
+    # gated 모델이라 토큰이 필요한 경우
+    huggingface-cli login
 
 모델 출처
     https://huggingface.co/facebook/sapiens2
     Meta AI. body-part segmentation 29클래스 (Sapiens 28 + Eyeglasses).
 
-⚠️ 라이선스는 "Sapiens2 License"입니다 (CC BY 4.0 아님 — 그건 논문 라이선스).
-   상업적 이용 조건을 반드시 직접 확인하세요:
+⚠️ 기본값이 0.4b인 이유 — EC2 t3.large는 GPU가 없다. CPU 추론이라 백본이 커질수록
+   사용자가 로딩 화면에서 기다리는 시간이 그대로 늘어난다. 0.4b로 시작해 품질을 보고
+   올리는 편이 안전하다. (0.4b mIoU 79.5 / 5b 82.5)
+
+⚠️ 라이선스는 "Sapiens2 License"다. 논문의 CC BY 4.0과 다르므로 혼동하지 말 것.
+   상업적 이용 조건은 직접 확인해야 한다:
    https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md
 
-⚠️ 가중치는 절대 커밋하지 마세요. .gitignore에 *.safetensors / models/* 가 있습니다.
+⚠️ 가중치는 절대 커밋하지 말 것. .gitignore에 *.safetensors / *.pth / models/* 가 있다.
 """
 
 import argparse
@@ -29,7 +36,10 @@ REPOS = {
     "5b": "facebook/sapiens2-seg-5b",
 }
 
-#: ⚠️ 반드시 좁혀서 받는다. 패턴 없이 snapshot_download를 부르면 레포 전체를 받는다.
+#: ⚠️ 반드시 좁혀서 받는다.
+#   패턴을 지정하지 않으면 snapshot_download가 레포 전체를 받는다.
+#   ignore_patterns만으로는 부족하다 — 무엇이 들어 있는지 모르기 때문이다.
+#   실제 파일 구성은 --list 로 먼저 확인할 것.
 ALLOW_PATTERNS = ["*.safetensors", "*.json", "*.txt"]
 
 
@@ -37,9 +47,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sapiens2 세그멘테이션 가중치 다운로드")
     parser.add_argument(
         "--size",
-        default="1b",
+        default="0.4b",
         choices=sorted(REPOS),
-        help="백본 크기 (기본 1b). t3.large CPU 추론이면 0.4b도 검토할 것",
+        help="백본 크기 (기본 0.4b — t3.large CPU 추론 기준)",
     )
     parser.add_argument("--list", action="store_true", help="받지 않고 파일 목록만 출력")
     args = parser.parse_args()
@@ -60,7 +70,7 @@ def main() -> None:
         return
 
     model_dir = os.environ.get("MODEL_DIR", "models")
-    target = os.path.join(model_dir, "sapiens2", args.size)
+    target = os.path.join(model_dir, f"sapiens2-seg-{args.size}")
     os.makedirs(target, exist_ok=True)
 
     print(f"레포     : {repo_id}")
@@ -83,7 +93,7 @@ def main() -> None:
     print("  1. 출력 클래스 개수가 29인지")
     print("  2. 각 픽셀 값 ↔ 클래스명 매핑 (segmentation.label_map 에 저장할 값)")
     print("  3. Eyeglasses 클래스의 정확한 철자")
-    print("     → scripts/seed_body_parts.py --check 로 마스터와 대조")
+    print("     → python scripts/seed_body_parts.py --check 로 마스터와 대조")
 
 
 if __name__ == "__main__":

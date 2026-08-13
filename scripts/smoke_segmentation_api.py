@@ -66,8 +66,8 @@ def label_map_png(values: list[int], width: int = 120, height: int = 200) -> byt
 
 
 def label_value_of(class_name: str) -> int:
-    """확정된 alpha 매핑에서 클래스명의 픽셀 값."""
-    return sapiens_labels.label_names("alpha").index(class_name)
+    """공식 라벨 목록에서 이 클래스명의 픽셀 값."""
+    return sapiens_labels.LABEL_NAMES.index(class_name)
 
 
 def insert_segmentation(user_id: UUID, session_id: UUID, photo: dict, parts_spec: list[dict]):
@@ -80,7 +80,7 @@ def insert_segmentation(user_id: UUID, session_id: UUID, photo: dict, parts_spec
     storage.upload(settings.bucket_segmentations, path, png, "image/png")
 
     person_pixels = sum(p["pixel_count"] for p in parts_spec)
-    label_map = sapiens_labels.build_label_map(29, "alpha")
+    label_map = sapiens_labels.build_label_map(29)
 
     db.replace_segmentation(
         UUID(str(photo["photo_id"])),
@@ -219,7 +219,7 @@ def main() -> int:
         )
         check("한글 이름 포함", palette["Torso"]["name_ko"] == "몸통")
         check(
-            "label_value가 alpha 매핑과 일치",
+            "label_value가 공식 매핑과 일치",
             palette["Torso"]["label_value"] == label_value_of("Torso"),
             f"Torso={palette['Torso']['label_value']}",
         )

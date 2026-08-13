@@ -313,7 +313,6 @@ def segment(
     comparable: set[str],
     master_class_names: set[str],
     size: str | None = None,
-    label_order: str | None = None,
 ) -> SegmentationResult:
     """이미지 바이트 → 라벨 맵 PNG + 부위별 통계.
 
@@ -321,8 +320,9 @@ def segment(
     master_class_names  : body_part 전체 class_name 집합 (라벨 검증용)
     """
     size = size or settings.sapiens_size
-    # ⚠️ 지금 쓰는 백본이 라벨 검증에 쓴 그 백본인지까지 확인한다.
-    order = label_order or sapiens_labels.ensure_verified(model_version(size))
+    # ⚠️ 이 라벨 목록이 적용되는 모델인지 확인한다. 다른 체크포인트는
+    #    클래스 순서가 다를 수 있고, 틀려도 에러 없이 진행된다.
+    sapiens_labels.ensure_supported(model_version(size))
 
     image = load_rgb(image_bytes)
     labels, num_classes, elapsed_ms = infer_labels(image, size)
@@ -335,7 +335,7 @@ def segment(
         scale = settings.map_max_side / max(h, w)
         labels = resize_labels(labels, max(1, round(w * scale)), max(1, round(h * scale)))
 
-    label_map = sapiens_labels.build_label_map(num_classes, order)
+    label_map = sapiens_labels.build_label_map(num_classes)
 
     # ⚠️ 조용히 넘어가면 seed 불일치를 못 잡는다.
     unknown = sapiens_labels.check_against_master(label_map, master_class_names)
@@ -373,7 +373,7 @@ def describe_environment() -> dict[str, Any]:
         "device": device,
         "dtype": str(resolve_dtype(device)),
         "torch": torch.__version__,
-        "label_order": sapiens_labels.VERIFIED_ORDER or "(미검증)",
+        "labels": f"{len(sapiens_labels.LABEL_NAMES)}클래스",
     }
     if device == "cuda" and torch.cuda.is_available():
         p = torch.cuda.get_device_properties(0)

@@ -463,17 +463,19 @@ ALTER TABLE job                  ENABLE ROW LEVEL SECURITY;
 -- ============================================================================
 -- body_part seed — Sapiens2 body-part segmentation 29개 클래스
 --
--- 출처: Sapiens(1세대) goliath 28클래스 + Eyeglasses = 29
+-- 출처: https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md (29클래스)
 --   https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md
 --   https://huggingface.co/facebook/sapiens2
 --
--- ⚠️ 클래스 "이름"은 위 출처로 확인했지만, **픽셀 값(인덱스)은 확인하지 않았습니다.**
---    Eyeglasses가 어디에 삽입되며 나머지가 밀리는지 알 수 없기 때문입니다.
---    → 인덱스는 이 테이블에 저장하지 않습니다. 추론 시점의 매핑을
---      segmentation.label_map 에 행마다 박제하는 설계라 문제가 되지 않습니다.
+-- ✅ 클래스 이름과 인덱스 모두 공식 문서(SEG.md)로 확인했습니다. 실측과도 일치합니다.
+--    Eyeglass 가 2번에 삽입되어 그 뒤가 한 칸씩 밀린 배열입니다.
 --
--- ⚠️ Eyeglasses 만은 정확한 철자를 원문에서 확인하지 못했습니다.
---    첫 추론 후 label_map을 마스터와 대조해 불일치가 나오면 이 행만 고치면 됩니다.
+-- ⚠️ `Eyeglass` 는 **단수형**입니다. 한때 Eyeglasses 로 적어둔 적이 있는데,
+--    복수형이면 워커의 label_map 대조에서 "마스터에 없는 클래스"로 걸립니다.
+--
+--    인덱스는 이 테이블에 저장하지 않습니다. 추론 시점의 매핑을
+--    segmentation.label_map 에 행마다 박제하는 설계라, 모델이 바뀌어도
+--    과거 데이터가 안전합니다.
 --
 -- body_part_segment가 이 테이블을 FK로 참조하므로 seed 없이는 아무 데이터도 못 넣습니다.
 -- 재적용은 scripts/seed_body_parts.py (멱등) 를 쓰세요.
@@ -512,7 +514,7 @@ INSERT INTO body_part (class_name, name_ko, part_group, is_comparable, display_o
     ('Right_Foot',     '오른발',    'OTHER', false, 101),
     ('Hair',           '머리카락',  'OTHER', false, 102),
     ('Face_Neck',      '얼굴·목',   'OTHER', false, 103),
-    ('Eyeglasses',     '안경',      'OTHER', false, 104),
+    ('Eyeglass',       '안경',      'OTHER', false, 104),
     ('Upper_Lip',      '윗입술',    'OTHER', false, 105),
     ('Lower_Lip',      '아랫입술',  'OTHER', false, 106),
     ('Upper_Teeth',    '윗니',      'OTHER', false, 107),

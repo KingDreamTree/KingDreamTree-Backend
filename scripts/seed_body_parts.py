@@ -43,13 +43,12 @@ def get_client():
                 env[k.strip()] = v.strip()
 
     url = os.environ.get("SUPABASE_URL") or env.get("SUPABASE_URL", "")
-    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or env.get(
-        "SUPABASE_SERVICE_ROLE_KEY", ""
-    )
+    key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or env.get("SUPABASE_SERVICE_ROLE_KEY", "")
     if not url or not key:
         print("[X] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY 가 없습니다. .env를 확인하세요.")
         sys.exit(1)
     return create_client(url, key)
+
 
 # (class_name, name_ko, part_group, inbody_segment, is_comparable, color_hex, display_order)
 BODY_PARTS: list[tuple[str, str, str, str | None, bool, str | None, int]] = [

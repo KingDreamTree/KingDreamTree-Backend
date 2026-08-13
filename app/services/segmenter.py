@@ -24,6 +24,12 @@ from app.config import settings
 from app.schemas.enums import InvalidReason
 from app.services import sapiens_labels
 
+# ⚠️ 사진 유틸(load_rgb / encode_photo)은 app/services/images.py 에 있다.
+#    API 프로세스가 사진 처리 때문에 이 모듈(=torch를 끌어오는 워커 전용 모듈)을
+#    import 하게 두면 안 되기 때문이다. 여기서는 재수출만 한다 —
+#    scripts/verify_labels.py 처럼 segmenter.load_rgb 를 쓰던 곳은 그대로 동작한다.
+from app.services.images import encode_photo, load_rgb  # noqa: F401
+
 MODEL_NAME = "sapiens2"
 
 # --------------------------------------------------------------------------- #
@@ -346,41 +352,6 @@ def segment(
         inference_ms=elapsed_ms,
         parts=compute_parts(labels, label_map, person_pixel_count, comparable),
     )
-
-
-# --------------------------------------------------------------------------- #
-# 이미지 전처리 (원본 사진용 — ⚠️ 라벨 맵에는 쓰지 말 것)
-# --------------------------------------------------------------------------- #
-
-
-def load_rgb(raw_bytes: bytes) -> Image.Image:
-    """업로드 바이트 → RGB PIL 이미지. HEIC도 처리."""
-    try:
-        import pillow_heif
-
-        pillow_heif.register_heif_opener()
-    except ImportError:
-        pass
-    return Image.open(io.BytesIO(raw_bytes)).convert("RGB")
-
-
-def preprocess_photo(raw_bytes: bytes, max_side: int | None = None) -> tuple[bytes, int, int]:
-    """원본 사진 저장용 — HEIC 변환 + 긴 변 제한 + JPEG 인코딩.
-
-    ⚠️ **라벨 맵에는 절대 쓰지 마세요.** LANCZOS 보간과 JPEG 손실 압축이
-       라벨 값을 섞습니다. 맵은 encode_map_png / resize_labels 를 쓸 것.
-    """
-    max_side = max_side or settings.max_image_side
-    img = load_rgb(raw_bytes)
-    w, h = img.size
-    if max(w, h) > max_side:
-        scale = max_side / max(w, h)
-        w, h = int(w * scale), int(h * scale)
-        img = img.resize((w, h), Image.LANCZOS)
-
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
-    return buf.getvalue(), w, h
 
 
 def describe_environment() -> dict[str, Any]:

@@ -23,11 +23,12 @@ from app.errors import (
     file_too_large,
     not_found,
     precondition_not_met,
+    unsuitable_photo,
     unsupported_media_type,
 )
 from app.schemas.enums import CaptureSource, JobKind, PhotoKind, PoseScaleBasis
 from app.schemas.photo import ReferencePhotoResponse, UserPhotoResponse
-from app.services import db, images, pose, storage
+from app.services import db, images, photo_screening, pose, storage
 from app.worker import queue
 
 router = APIRouter(tags=["photos"])
@@ -246,6 +247,7 @@ async def upload_user_photo(
     img = await _read_upload(file)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
+    # ── 1차 관문: 자세 ────────────────────────────────────────────────────
     # ⚠️ 판정을 통과하지 못하면 **저장하지 않는다.** 실패한 사진이 Storage에 쌓이면
     #    유저 삭제 시 고아 파일이 되고, 무료 티어 용량도 먹는다.
     pose.judge_user_photo(
@@ -255,6 +257,18 @@ async def upload_user_photo(
         reference_scale_basis=reference.get("pose_scale_basis"),
         multi_person=multi_person,
     )
+
+    # ── 2차 관문: 이 사진으로 실루엣 비교가 되는가 ────────────────────────
+    # ⚠️ 자세가 맞아도 헐렁한 옷이면 부위 굵기를 가늠할 수 없어 진단이 무의미하다.
+    #    VLM 에 이미지를 직접(base64) 보내므로 **거부될 사진은 Storage 에 안 올라간다.**
+    #    ⚠️ 판정 실패·타임아웃은 통과로 처리한다 (photo_screening 모듈 주석 참조).
+    jpeg_for_screening, _, _ = images.encode_photo(img, mirrored=is_mirrored)
+    screening = await photo_screening.screen(jpeg_for_screening)
+    if not screening.suitable:
+        raise unsuitable_photo(
+            screening.message,
+            {"reason": screening.reason, "confidence": screening.confidence},
+        )
 
     _discard_existing(user_id, session_id, PhotoKind.USER)
     photo, job = _store(

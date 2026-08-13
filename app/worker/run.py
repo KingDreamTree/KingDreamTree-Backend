@@ -171,6 +171,12 @@ def main() -> int:
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
     )
 
+    # ⚠️ 워커는 1초마다 Supabase에 폴링한다. httpx가 요청마다 INFO 로그를 남겨
+    #    실제 잡 로그가 파묻힌다. --verbose 를 준 게 아니면 조용히 시킨다.
+    if not args.verbose:
+        for noisy in ("httpx", "httpcore", "hpack", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
+
     if args.all:
         kinds = list(JobKind)
     elif args.kinds:

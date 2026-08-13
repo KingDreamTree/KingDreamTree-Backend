@@ -118,6 +118,11 @@ def _expires(expires_in: int | None) -> int:
     return max(1, min(expires_in, limit))
 
 
+def expires_at(expires_in: int | None = None) -> datetime:
+    """발급했을 때의 만료 시각. 배치 발급에서 URL마다 다시 계산하지 않기 위해 분리."""
+    return datetime.now(timezone.utc) + timedelta(seconds=_expires(expires_in))
+
+
 def signed_url(bucket: str, path: str, expires_in: int | None = None) -> tuple[str, datetime]:
     """단건 발급. (url, 만료시각)을 반환한다."""
     ttl = _expires(expires_in)

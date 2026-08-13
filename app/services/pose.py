@@ -26,31 +26,75 @@ from app.config import settings
 from app.errors import invalid_request, multi_person_error, pose_mismatch
 from app.schemas.enums import PoseScaleBasis
 
-#: MediaPipe Pose 랜드마크 개수. 33개가 아니면 다른 모델의 출력이다.
-LANDMARK_COUNT = 33
-
-#: MediaPipe Pose 의 좌/우 대칭 인덱스 쌍.
-#  0(코)만 중앙이고 나머지는 전부 짝이 있다.
-#  ⚠️ 좌우 반전을 되돌릴 때 x좌표만 뒤집으면 안 된다. "왼쪽 어깨"라는 이름표까지
-#     같이 바꿔야 한다 — 거울 사진에서 MediaPipe가 왼쪽이라고 부른 건 실제 오른쪽이다.
-LR_PAIRS: tuple[tuple[int, int], ...] = (
-    (1, 4),  # eye_inner
-    (2, 5),  # eye
-    (3, 6),  # eye_outer
-    (7, 8),  # ear
-    (9, 10),  # mouth
-    (11, 12),  # shoulder
-    (13, 14),  # elbow
-    (15, 16),  # wrist
-    (17, 18),  # pinky
-    (19, 20),  # index
-    (21, 22),  # thumb
-    (23, 24),  # hip
-    (25, 26),  # knee
-    (27, 28),  # ankle
-    (29, 30),  # heel
-    (31, 32),  # foot_index
+#: MediaPipe Pose Landmarker 의 33개 랜드마크. 인덱스 = 배열 위치.
+#: 출처 — 공식 문서
+#:   https://developers.google.com/edge/mediapipe/solutions/vision/pose_landmarker
+LANDMARK_NAMES: tuple[str, ...] = (
+    "nose",  # 0 — 유일하게 짝이 없는 중앙 지점
+    "left_eye_inner",  # 1
+    "left_eye",  # 2
+    "left_eye_outer",  # 3
+    "right_eye_inner",  # 4
+    "right_eye",  # 5
+    "right_eye_outer",  # 6
+    "left_ear",  # 7
+    "right_ear",  # 8
+    "mouth_left",  # 9
+    "mouth_right",  # 10
+    "left_shoulder",  # 11
+    "right_shoulder",  # 12
+    "left_elbow",  # 13
+    "right_elbow",  # 14
+    "left_wrist",  # 15
+    "right_wrist",  # 16
+    "left_pinky",  # 17
+    "right_pinky",  # 18
+    "left_index",  # 19
+    "right_index",  # 20
+    "left_thumb",  # 21
+    "right_thumb",  # 22
+    "left_hip",  # 23
+    "right_hip",  # 24
+    "left_knee",  # 25
+    "right_knee",  # 26
+    "left_ankle",  # 27
+    "right_ankle",  # 28
+    "left_heel",  # 29
+    "right_heel",  # 30
+    "left_foot_index",  # 31
+    "right_foot_index",  # 32
 )
+
+#: 랜드마크 개수. 33개가 아니면 다른 모델의 출력이다.
+LANDMARK_COUNT = len(LANDMARK_NAMES)
+
+
+def _left_right_pairs() -> tuple[tuple[int, int], ...]:
+    """이름에서 좌/우 짝을 뽑는다.
+
+    ⚠️ 번호쌍을 손으로 적으면 오타가 나도 아무 데서도 안 걸린다. 좌우가 한 쌍만
+       어긋나도 거울 사진 보정이 조용히 틀리므로, 공식 이름 목록에서 유도한다.
+    """
+    index_of = {name: i for i, name in enumerate(LANDMARK_NAMES)}
+    pairs: list[tuple[int, int]] = []
+
+    for name, i in index_of.items():
+        if name.startswith("left_"):
+            twin = "right_" + name[len("left_") :]
+        elif name.endswith("_left"):
+            twin = name[: -len("_left")] + "_right"
+        else:
+            continue  # nose 처럼 짝이 없는 중앙 지점
+        if twin in index_of:
+            pairs.append((i, index_of[twin]))
+
+    return tuple(sorted(pairs))
+
+
+#: 좌/우 대칭 쌍. 0(코)만 짝이 없고 나머지 32개가 16쌍을 이룬다.
+#: ⚠️ 좌우 반전을 되돌릴 때 x좌표만 뒤집으면 안 된다. "왼쪽 어깨"라는 이름표까지
+#:    같이 바꿔야 한다 — 거울 사진에서 MediaPipe가 왼쪽이라고 부른 건 실제 오른쪽이다.
+LR_PAIRS: tuple[tuple[int, int], ...] = _left_right_pairs()
 
 
 # --------------------------------------------------------------------------- #

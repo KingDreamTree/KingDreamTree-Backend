@@ -6,16 +6,16 @@ Sapiens2 body-part segmentation 29개 클래스.
     python scripts/seed_body_parts.py            # 적용
     python scripts/seed_body_parts.py --check    # 현재 DB와 대조만
 
-⚠️ 클래스 "이름"은 아래 출처로 확인했지만, **픽셀 값(인덱스)은 확인하지 않았다.**
-   Eyeglasses가 어느 인덱스에 삽입되며 나머지가 밀리는지 알 수 없기 때문이다.
+✅ 클래스 이름과 인덱스 모두 공식 문서로 확인됐다.
+   https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md
    인덱스는 저장하지 않는다 — 추론 시점의 매핑을 segmentation.label_map 에
    행마다 박제하는 설계라 문제가 되지 않는다.
 
 출처
   Sapiens(1세대) goliath 28클래스:
     https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md
-  Sapiens2 = 위 28 + Eyeglasses = 29:
-    https://huggingface.co/facebook/sapiens2
+  Sapiens2 = 위 28 + Eyeglass(2번에 삽입) = 29:
+    https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md
 """
 
 import os
@@ -79,9 +79,8 @@ BODY_PARTS: list[tuple[str, str, str, str | None, bool, str | None, int]] = [
     ("Right_Foot", "오른발", "OTHER", None, False, None, 101),
     ("Hair", "머리카락", "OTHER", None, False, None, 102),
     ("Face_Neck", "얼굴·목", "OTHER", None, False, None, 103),
-    # ⚠️ 정확한 철자를 원문에서 확인하지 못한 유일한 클래스.
-    #    첫 추론 후 label_map과 대조해 불일치하면 이 행만 고치면 된다.
-    ("Eyeglasses", "안경", "OTHER", None, False, None, 104),
+    # ⚠️ 단수형이다 (Eyeglasses 아님). 공식 문서 기준.
+    ("Eyeglass", "안경", "OTHER", None, False, None, 104),
     ("Upper_Lip", "윗입술", "OTHER", None, False, None, 105),
     ("Lower_Lip", "아랫입술", "OTHER", None, False, None, 106),
     ("Upper_Teeth", "윗니", "OTHER", None, False, None, 107),

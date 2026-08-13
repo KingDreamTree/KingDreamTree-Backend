@@ -147,7 +147,7 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 | 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행** |
 | 409 | `PRECONDITION_NOT_MET` | 선행 단계 미완료 (예: 레퍼런스 없이 사용자 사진) |
 | 413 | `FILE_TOO_LARGE` | 10MB 초과 |
-| 415 | `UNSUPPORTED_MEDIA_TYPE` | jpeg/png 외 |
+| 415 | `UNSUPPORTED_MEDIA_TYPE` | 이미지로 열리지 않는 파일 (해상도가 과도하게 큰 경우 포함) |
 | 422 | `POSE_MISMATCH` | **`detail.reason` 별로 문구를 나눌 것** (아래) |
 | 422 | `MULTI_PERSON` | "혼자 나오도록 촬영해주세요" |
 
@@ -167,7 +167,9 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 
 ## 이미지 규칙
 
-- **형식**: `jpeg` / `png`. 크기 10MB 이하
+- **형식**: `jpeg` / `png` / **`heic`(아이폰 원본)** / `webp` 등. 크기 10MB 이하
+  - 서버가 `Content-Type` 헤더를 보지 않고 **실제로 열리는지**로 판단합니다. 브라우저가 HEIC에 이상한 타입을 붙여 보내도 통과합니다
+  - **프론트에서 미리 JPEG로 변환할 필요 없습니다.** 원본 그대로 보내면 서버가 변환해 저장합니다
 - **EXIF 회전은 서버가 처리합니다.** 프론트에서 미리 돌릴 필요 없습니다
 - 긴 변 4096px 초과 시 서버가 축소해 저장합니다
 - **재업로드는 교체입니다.** 기존 세그멘테이션 결과도 함께 지워집니다

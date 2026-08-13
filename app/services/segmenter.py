@@ -31,11 +31,22 @@ _model = None  # 싱글턴 — main.py lifespan에서 로드
 
 
 def load_model() -> None:
-    """모델 가중치를 로드하여 싱글턴에 저장한다. USE_MOCK=true면 호출하지 않는다."""
+    """모델 가중치를 로드하여 싱글턴에 저장한다. USE_MOCK=true면 호출하지 않는다.
+
+    가중치 위치: {MODEL_DIR}/sapiens/  (scripts/download_sapiens.py 참고)
+    """
     global _model
-    # TODO: Sapiens2 모델 로드 구현
-    # 예: _model = SapiensModel.from_pretrained("models/sapiens2.pth")
-    raise NotImplementedError("Sapiens2 모델 로드 미구현 — USE_MOCK=true 사용")
+    import os
+
+    model_path = os.path.join(settings.model_dir, "sapiens")
+    if not os.path.isdir(model_path):
+        raise FileNotFoundError(
+            f"모델 가중치를 찾을 수 없습니다: {model_path}\n"
+            "scripts/download_sapiens.py 를 실행해 다운로드하세요."
+        )
+    # TODO: Sapiens2 실제 로드 구현
+    # 예: _model = ...load(model_path)
+    raise NotImplementedError("Sapiens2 추론 미구현 — USE_MOCK=true 사용")
 
 
 def _run_inference(image_bytes: bytes) -> dict[str, Any]:

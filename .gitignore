@@ -25,7 +25,8 @@ env/
 *.safetensors
 *.onnx
 *.task
-models/
+models/*
+!models/.gitkeep
 
 # Secrets / certs
 *.pem

@@ -48,6 +48,14 @@ def upload(
     return path
 
 
+def download(bucket: str, path: str) -> bytes:
+    """파일 내려받기. 워커가 원본 사진을 가져올 때 쓴다.
+
+    signed URL을 만들지 않고 service_role 키로 직접 받는다 — 워커는 서버 사이드다.
+    """
+    return get_client().storage.from_(bucket).download(path)
+
+
 def remove(bucket: str, paths: list[str]) -> None:
     """파일 삭제. 없는 경로가 섞여 있어도 에러로 보지 않는다."""
     if not paths:

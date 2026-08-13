@@ -1,0 +1,19 @@
+# ML 의존성 — 버전 단일 출처
+#
+# ⚠️ 이 파일을 직접 `pip install -r` 하지 마세요.
+#    torch는 환경마다 다른 인덱스에서 받아야 합니다. scripts/install_*.sh 를 쓰세요.
+#      scripts/install_local_gpu.sh   로컬 GPU (CUDA 12.8)
+#      scripts/install_cpu.sh         EC2 / CPU 전용
+#      scripts/install_runpod.sh      RunPod GPU 워커
+#
+# torch 버전 (인덱스는 스크립트가 지정)
+#   CUDA 12.8 : 2.11.0+cu128   ← RTX 50 시리즈(Blackwell, sm_120)는 cu128 이상 필수
+#   CPU       : 2.11.0+cpu     ← 같은 마이너 버전으로 맞춰 동작 차이를 줄인다
+TORCH_VERSION_CUDA=2.11.0+cu128
+TORCH_VERSION_CPU=2.11.0+cpu
+
+# 인덱스와 무관하게 동일한 것들
+transformers==5.15.0
+safetensors==0.7.0
+huggingface-hub==0.36.0
+accelerate==1.13.0

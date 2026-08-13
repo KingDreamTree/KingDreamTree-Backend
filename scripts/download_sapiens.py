@@ -37,10 +37,18 @@ REPOS = {
 }
 
 #: ⚠️ 반드시 좁혀서 받는다.
-#   패턴을 지정하지 않으면 snapshot_download가 레포 전체를 받는다.
-#   ignore_patterns만으로는 부족하다 — 무엇이 들어 있는지 모르기 때문이다.
+#
+#   레포에는 같은 가중치가 **두 이름으로** 들어 있다 (0.4b 기준 각 1551MB):
+#       model.safetensors               ← transformers가 로드하는 이름. 이것만 받는다
+#       sapiens2_0.4b_seg.safetensors   ← 원본 명명. 내용 동일
+#   `*.safetensors` 로 받으면 3.1GB, 즉 두 배를 받게 된다.
+#
 #   실제 파일 구성은 --list 로 먼저 확인할 것.
-ALLOW_PATTERNS = ["*.safetensors", "*.json", "*.txt"]
+ALLOW_PATTERNS = [
+    "model.safetensors",
+    "config.json",
+    "preprocessor_config.json",
+]
 
 
 def main() -> None:

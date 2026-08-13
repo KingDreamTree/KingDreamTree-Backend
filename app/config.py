@@ -70,9 +70,36 @@ class Settings(BaseSettings):
     vlm_worker_concurrency: int = 3
 
     # ------------------------------------------------------------------ #
-    # 모델 (세그멘테이션 워커 전용 — API 프로세스는 로드하지 않는다)
+    # Sapiens2 (세그멘테이션 워커 전용 — API 프로세스는 로드하지 않는다)
     # ------------------------------------------------------------------ #
     model_dir: str = "models"
+
+    #: 백본 크기. 0.4b | 0.8b | 1b | 5b
+    #  ⚠️ 코드는 크기와 무관하다. 바꿔도 재추론만 하면 되고 스키마는 그대로다.
+    #     5b는 fp16 가중치만 ~9.5GB라 VRAM 16GB 이상(24GB 권장)이 필요하다.
+    sapiens_size: str = "0.4b"
+
+    #: auto | cuda | cpu.  auto면 CUDA가 있으면 CUDA, 없으면 CPU
+    sapiens_device: str = "auto"
+
+    #: auto | float16 | bfloat16 | float32
+    #  auto면 CUDA에서 float16, CPU에서 float32.
+    #  ⚠️ CPU float16은 대부분 더 느리다. CPU에서는 float32를 쓸 것.
+    sapiens_dtype: str = "auto"
+
+    #: VRAM이 부족할 때 CPU로 레이어를 흘려보낼지 (accelerate device_map).
+    #  ⚠️ 켜면 VRAM보다 큰 모델도 돌아가지만 레이어가 CPU↔GPU를 오가 느려진다.
+    #     8GB VRAM에서 5b(fp16 ~9.5GB)를 보려는 경우가 이에 해당한다.
+    #     운영(RunPod 24GB)에서는 꺼둘 것 — 켜져 있어도 다 올라가면 성능 손해는 없다.
+    sapiens_offload: bool = False
+
+    #: 오프로딩 시 GPU에 최대 몇 GiB까지 올릴지. 0이면 자동(전체의 90%).
+    #  ⚠️ 전부 다 쓰면 활성값 자리가 없어 OOM이 난다. 여유를 남겨야 한다.
+    sapiens_gpu_max_gib: float = 0
+
+    #: 라벨 맵 검증 — label_map의 클래스명이 body_part 마스터에 다 있어야 통과.
+    #  ⚠️ false로 두면 인덱스 매핑이 틀려도 조용히 진행된다. 운영에서는 켜둘 것.
+    sapiens_require_verified_labels: bool = True
 
     # ------------------------------------------------------------------ #
     # VLM provider (담당 B 영역)

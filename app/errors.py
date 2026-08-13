@@ -74,3 +74,38 @@ def unsupported_media_type(got: str | None, allowed: list[str]) -> ApiError:
         "지원하지 않는 이미지 형식입니다.",
         {"got": got, "allowed": allowed},
     )
+
+
+def active_session_exists(session_id: str) -> ApiError:
+    """⚠️ detail.session_id 로 이어서 진행할 수 있게 알려준다.
+
+    UNIQUE (user_id) WHERE status='ACTIVE' 제약 때문에 발생한다.
+    """
+    return ApiError(
+        409,
+        "ACTIVE_SESSION_EXISTS",
+        "이미 진행 중인 분석이 있습니다.",
+        {"session_id": session_id},
+    )
+
+
+def pose_mismatch(
+    message: str,
+    reason: str,
+    detail: dict[str, Any] | None = None,
+) -> ApiError:
+    """포즈·프레이밍 미달.
+
+    ⚠️ reason 을 나누는 이유는 화면 안내 문구가 달라야 하기 때문이다.
+       POSE("포즈를 맞춰주세요") / FRAMING("몸이 다 나오게 서주세요") /
+       NO_PERSON("사람이 안 보입니다") 는 사용자가 취해야 할 행동이 각각 다르다.
+    """
+    return ApiError(422, "POSE_MISMATCH", message, {**(detail or {}), "reason": reason})
+
+
+def multi_person_error() -> ApiError:
+    return ApiError(
+        422,
+        "MULTI_PERSON",
+        "사진에 여러 사람이 있습니다. 혼자 나오도록 촬영해주세요.",
+    )

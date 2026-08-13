@@ -287,6 +287,61 @@ def test_prompts() -> None:
     check("종합 프롬프트에 이미지 없음", "data:image" not in overall_prompt)
 
 
+def test_citation_routing() -> None:
+    print("\n7. 인바디 인용 라우팅 (세그먼트당 대표 1부위)")
+
+    from app.prompts.part_diagnosis import _citation_targets
+
+    part_to_segment = {
+        "Left_Upper_Arm": "LEFT_ARM",
+        "Left_Lower_Arm": "LEFT_ARM",
+        "Torso": "TRUNK",
+    }
+
+    def m(diff: float) -> dict:
+        stats = {"area_share": 0.1, "width_share": 0.1, "height_share": 0.1, "aspect": 1.0}
+        return {
+            "reference": dict(stats),
+            "user": dict(stats),
+            "diff_pct": {"area_share": diff, "width_share": diff, "height_share": 0.0},
+            "user_truncated": False,
+        }
+
+    metrics = {
+        "parts": {
+            "Left_Upper_Arm": m(-23.5),
+            "Left_Lower_Arm": m(-6.7),
+            "Torso": m(-0.3),
+        }
+    }
+    targets = _citation_targets(part_to_segment, metrics)
+    check("격차 큰 부위가 대표", targets.get("LEFT_ARM") == "Left_Upper_Arm", str(targets))
+    check("세그먼트당 1개", len(targets) == 2)
+
+    # 프롬프트에 [인용] 이 대표 부위 줄에만 붙는지
+    parts = [
+        {"class_name": n, "name_ko": n, "color_hex": "#111111", "inbody_segment": s}
+        for n, s in part_to_segment.items()
+    ]
+    inbody = {
+        "body": {"weight": 63.5},
+        "segments": {
+            "LEFT_ARM": {"lean_mass": 2.42, "lean_percentage": 82.1},
+            "TRUNK": {"lean_mass": 22.8, "lean_percentage": 94.5},
+        },
+    }
+    prompt = build_part_prompt(
+        parts=parts, metrics=metrics, ref_symmetry={}, user_symmetry={}, inbody=inbody
+    )
+    marked = [ln for ln in prompt.splitlines() if "[인용]" in ln and ln.startswith("-")]
+    check("인용 표시 2줄 (세그먼트 수만큼)", len(marked) == 2, f"{len(marked)}줄")
+    check(
+        "대표 부위 줄에만 표시",
+        any("Left_Upper_Arm" in ln for ln in marked)
+        and not any("Left_Lower_Arm" in ln for ln in marked),
+    )
+
+
 def test_retry_policy() -> None:
     print("\n6. 재시도 정책 (결정론적 실패 3배 과금 방지)")
 
@@ -317,6 +372,7 @@ def main() -> int:
     test_overlay()
     test_partial_acceptance()
     test_prompts()
+    test_citation_routing()
     test_retry_policy()
 
     print()

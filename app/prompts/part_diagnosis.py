@@ -52,19 +52,28 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 당신이 판단할 것은 **수치로 드러나지 않는 것**입니다.
 근육의 윤곽과 선명도, 실루엣의 형태, 자세와 정렬, 좌우 균형의 시각적 인상.
 
-# 인바디 수치가 있으면 그것이 가장 강한 근거입니다
+# 근거 위계 — 부위마다 가장 강한 신호 하나로 문장을 시작하세요
 
-인바디는 **체내 실측값**입니다. 사진은 옷·조명·각도에 흔들리지만 인바디는 그렇지
-않습니다. 부위별 인바디가 주어졌다면:
+부위마다 쓸 수 있는 근거는 세 종류입니다.
 
-- 그 부위의 assessment 에 **인바디 수치를 반드시 근거로 인용**하세요.
-  ("제지방량이 표준의 82%로 부족합니다" 처럼 수치를 문장에 넣습니다)
-- 시각 정보와 인바디가 어긋나면 **인바디를 우선**하세요.
+1. **면적·너비 수치** — 모든 부위에 있음
+2. **인바디 실측** — 세그먼트 단위, 제출됐을 때만. 체내 실측이라 옷·조명에 안 흔들림
+3. **이미지 관찰** — 형태가 보일 때만
+
+부위마다 이 중 **가장 강한 신호 하나를 골라 그것으로 문장을 시작**하고,
+나머지는 보조로만 씁니다.
+
+- 인바디 표에 `[인용]` 표시가 붙은 부위 → 인바디 수치로 시작
+- 그 외 부위 → 면적 격차와 이미지 관찰 중 더 뚜렷한 쪽으로 시작
+- 시각 정보와 인바디가 어긋나면 인바디를 우선 (실측이 사진을 이깁니다)
 - 표준 대비 100% 미만이면 근육 부족, 130% 초과면 지방 과다 신호입니다.
 
-⚠️ 다만 인바디는 좌우 팔·다리와 몸통 5단위라 **상완과 전완을 구분하지 못합니다.**
-   같은 세그먼트를 공유하는 부위에는 같은 수치가 붙습니다. 그 안에서 어느 쪽이
-   더 부족한지는 이미지와 면적 수치로 나누세요.
+⚠️ 인바디는 좌우 팔·다리와 몸통 5단위라 **상완과 전완을 구분하지 못합니다.**
+   같은 세그먼트를 공유하는 부위들은 값이 똑같으므로, `[인용]` 부위에서 한 번만
+   수치를 쓰고 **나머지 부위에서 같은 숫자를 반복하지 마세요.** 그 안에서 어느
+   쪽이 더 부족한지는 면적 수치와 이미지로 나눕니다.
+
+⚠️ 아홉 문장이 같은 서두로 시작하면 안 됩니다. 근거가 다르면 서두도 달라집니다.
 
 # 옷에 가려도 인바디가 있으면 진단하세요
 
@@ -137,29 +146,41 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 (상완이두근·삼두근·광배근·대퇴사두근·비복근 등).
 확실하지 않은 근육명은 지어내지 말고 부위명을 그대로 쓰세요.
 
-### 예시 (형식만 참고하세요 — 내용은 실제 데이터로 채웁니다)
+서두와 종결을 다양하게 쓰세요 — 인바디 인용 / 면적 비교 / 이미지 관찰 / 유지
+안내는 각각 다른 문장 틀입니다.
+⚠️ 단, 다양성을 위해 **없는 사실을 만들지 마세요.** 근거가 정말 같은 부위들
+(예: 다리 네 부위가 전부 충분)은 표현만 달리하고 내용은 짧게 유지합니다.
 
-입력: Left_Upper_Arm · 면적 −23.5% · 인바디 LEFT_ARM 표준 대비 82%
+### 예시 — 근거 유형별로 서두가 다릅니다
+
+⚠️ **아래는 전부 가상의 다른 사용자입니다.** 지금 진단하는 사진·수치와 무관합니다.
+   문장의 틀(근거→목적→처방)만 따르고 **내용을 복사하지 마세요.**
+   특히 "옷에 가렸다", "라인이 흐릿하다" 같은 관찰은 예시 사용자의 것입니다 —
+   지금 이미지에서 직접 확인한 경우에만 쓰세요.
+
+인바디 `[인용]` 부위:
 {
-  "class_name": "Left_Upper_Arm",
-  "differences": ["삼두 라인의 경계가 흐릿함"],
-  "assessment": "좌측 상완 제지방량이 표준의 82%로 부족합니다. 균형 잡힌 상체 라인을 완성하기 위해 상완이두근 집중 강화 운동이 필요합니다.",
+  "class_name": "(범례의 부위명)",
+  "differences": ["(이 이미지에서 직접 본 것. 없으면 빈 배열)"],
+  "assessment": "좌측 팔 전체 제지방량이 표준의 82%로 부족합니다. 균형 잡힌 상체 라인을 완성하기 위해 상완이두근 집중 강화 운동이 필요합니다.",
   "gap_level": "SIGNIFICANT", "priority": 1, "confidence": "HIGH", "blocked_reason": null
 }
 
-입력: Right_Upper_Leg · 면적 +10.3% · 인바디 RIGHT_LEG 표준 대비 104%
+같은 세그먼트의 나머지 부위 (수치 반복 금지 — 면적·이미지로 서술):
 {
-  "class_name": "Right_Upper_Leg",
-  "differences": [],
-  "assessment": "우측 허벅지는 제지방량이 표준의 104%로 레퍼런스보다 발달해 있습니다. 현재 수준을 유지하세요.",
-  "gap_level": "NONE", "priority": 5, "confidence": "HIGH", "blocked_reason": null
+  "assessment": "좌측 전완은 레퍼런스 대비 둘레가 소폭 얇은 정도입니다. 팔 라인의 균형을 위해 전완 굴곡근을 보조 운동으로 더해주세요.",
+  "gap_level": "SLIGHT", "priority": 4, ...
 }
 
-입력: Torso · 상의에 가려 형태 확인 불가 · 인바디 TRUNK 표준 대비 94%
+목표 도달 부위 (인용 강제 없음, 유지만):
 {
-  "class_name": "Torso",
-  "differences": [],
-  "assessment": "상의에 가려 근육 윤곽은 확인하지 못했으나, 몸통 제지방량이 표준의 94%로 소폭 부족합니다. 코어 안정성 확보를 위해 복부·기립근 보강이 필요합니다.",
+  "assessment": "우측 허벅지는 이미 레퍼런스 수준을 넘어서 있습니다. 현재 운동량을 유지하세요.",
+  "gap_level": "NONE", "priority": 5, ...
+}
+
+옷에 가린 부위 — **지금 이미지에서 실제로 가려진 경우에만** (인바디가 유일한 근거이므로 반드시 인용):
+{
+  "assessment": "상의에 가려 근육 윤곽은 확인하지 못했으나, 몸통 전체 제지방량이 표준의 94%로 소폭 부족합니다. 코어 안정성 확보를 위해 복부·기립근 보강이 필요합니다.",
   "gap_level": "SLIGHT", "priority": 3, "confidence": "MEDIUM",
   "blocked_reason": "시각 확인 불가, 인바디 기준 판단"
 }
@@ -249,7 +270,35 @@ def _symmetry_block(ref_sym: dict[str, float], user_sym: dict[str, float]) -> st
     return "\n".join(lines)
 
 
-def _inbody_block(inbody: dict[str, Any] | None, part_to_segment: dict[str, str]) -> str:
+def _citation_targets(
+    part_to_segment: dict[str, str],
+    metrics: dict[str, Any],
+) -> dict[str, str]:
+    """세그먼트마다 인바디를 인용할 대표 부위 하나를 고른다 — 면적 격차가 가장 큰 부위.
+
+    ⚠️ **이 선택은 코드가 한다.** LLM에게 "세그먼트당 한 번만 인용하라"고 지시하면
+       9개 항목을 스스로 대조해야 하는 전역 제약이 되는데, 항목을 하나씩 생성하는
+       모델은 그런 제약을 자주 어긴다. 라우팅을 결정론적으로 만들면 어길 방법이
+       없고, 어느 부위가 인용했는지 테스트로 검증할 수 있다.
+
+    Returns:
+        {segment: 대표 class_name}
+    """
+    rows = metrics.get("parts") or {}
+    best: dict[str, tuple[str, float]] = {}
+    for part, segment in part_to_segment.items():
+        diff = ((rows.get(part) or {}).get("diff_pct") or {}).get("area_share")
+        magnitude = abs(diff) if diff is not None else -1.0
+        if segment not in best or magnitude > best[segment][1]:
+            best[segment] = (part, magnitude)
+    return {segment: part for segment, (part, _) in best.items()}
+
+
+def _inbody_block(
+    inbody: dict[str, Any] | None,
+    part_to_segment: dict[str, str],
+    citation_targets: dict[str, str],
+) -> str:
     """인바디 실측을 부위에 붙여 준다.
 
     ⚠️ 인바디는 선택 입력이다. 없으면 이 블록만 빠지고 진단은 그대로 진행된다
@@ -284,22 +333,23 @@ def _inbody_block(inbody: dict[str, Any] | None, part_to_segment: dict[str, str]
         if parts_desc:
             # ⚠️ 한글 이름을 함께 준다. 이게 없으면 LEFT_ARM(팔 전체) 값을
             #    "전완 제지방량"처럼 세부 부위의 값인 양 인용한다 (실측 확인).
+            mark = " **[인용]**" if citation_targets.get(segment) == class_name else ""
             lines.append(
                 f"- {class_name} ← {_SEGMENT_KO.get(segment, segment)}"
-                f"({segment}): {' · '.join(parts_desc)}"
+                f"({segment}): {' · '.join(parts_desc)}{mark}"
             )
 
     lines.append("")
     lines.append(
-        "🔴 위 수치가 붙은 부위는 assessment 에 **그 수치를 반드시 인용**하세요.\n"
-        "   이때 **화살표 오른쪽의 한글 이름 그대로** 부릅니다.\n"
+        "🔴 `[인용]` 이 붙은 부위만 assessment 에 수치를 인용합니다. 같은 세그먼트의\n"
+        "   나머지 부위는 **같은 숫자를 반복하지 말고** 면적·이미지 근거로 서술하세요.\n"
+        "   인용할 때는 화살표 오른쪽의 한글 이름 그대로 부릅니다.\n"
         '   O "좌측 팔 전체 제지방량이 표준의 82%"\n'
         '   X "좌측 전완 제지방량이 표준의 82%"  ← 전완만 잰 값이 아닙니다\n'
+        "※ 옷에 가려 시각 판단이 불가한 부위는 예외 — `[인용]` 여부와 무관하게\n"
+        "   인바디가 유일한 근거이므로 수치를 인용합니다.\n"
         "※ 표준 대비 100% 미만이면 근육 부족, 130% 초과면 지방 과다 신호입니다.\n"
-        "※ 이 값은 체내 실측이라 **옷·조명·각도에 흔들리지 않습니다.** "
-        "시각 정보와 어긋나면 이쪽을 우선하세요.\n"
-        "※ 다만 좌우/몸통 5단위라 상완과 전완을 구분하지 못합니다. 같은 세그먼트를 "
-        "공유하는 부위끼리 어느 쪽이 더 부족한지는 면적 수치와 이미지로 나누세요."
+        "※ 이 값은 체내 실측이라 시각 정보와 어긋나면 이쪽을 우선하세요."
     )
     return "\n".join(lines)
 
@@ -323,6 +373,7 @@ def build_part_prompt(
     part_to_segment = {
         p["class_name"]: p["inbody_segment"] for p in parts if p.get("inbody_segment")
     }
+    citation_targets = _citation_targets(part_to_segment, metrics)
 
     return f"""# 부위 범례 (색 → 부위)
 
@@ -334,7 +385,7 @@ def build_part_prompt(
 
 {_metrics_block(metrics, parts)}
 {_symmetry_block(ref_symmetry, user_symmetry)}
-{_inbody_block(inbody, part_to_segment)}
+{_inbody_block(inbody, part_to_segment, citation_targets)}
 
 # 요청
 

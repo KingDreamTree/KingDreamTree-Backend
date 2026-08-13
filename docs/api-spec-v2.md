@@ -539,11 +539,24 @@ ctx.putImageData(out, 0, 0);
 ### `POST .../analysis` → 202
 
 ```json
-{ "part_jobs": [ { "job_id": "...", "class_name": "Torso" } ],
-  "overall_job_id": "...", "part_count": 5 }
+{ "part_job_id": "...", "overall_job_id": null,
+  "part_count": 5, "class_names": ["Torso", "Left_Upper_Arm"],
+  "part_jobs": [ { "job_id": "...", "class_name": "Torso" } ],
+  "reused": false }
 ```
 
 **선행 조건** — `SEG_REFERENCE`, `SEG_USER` 모두 `DONE` (아니면 409 `PRECONDITION_NOT_MET`)
+
+**⚠️ 2026-08-14 변경 — 부위 진단은 잡 1개가 전 부위를 처리합니다.**
+
+- `part_jobs` 의 모든 항목이 **같은 `job_id`** 입니다. 부위별로 폴링해도 동작하도록
+  형태만 유지했습니다. 새로 붙이는 화면은 `part_job_id` 하나만 쓰세요.
+- `overall_job_id` 는 **항상 `null`** 입니다. 종합 진단은 부위 진단 결과가 입력이라
+  부위 진단이 끝난 뒤에 등록됩니다. 진행 상황은 `GET .../analysis/progress` 로 보세요.
+- `reused: true` 면 **이미 진행 중이거나 완료된 분석**이라 새 잡을 만들지 않았다는 뜻입니다.
+  이때 `part_job_id` 가 `null` 일 수 있습니다 (완료된 분석) — 바로 `GET .../analysis` 를 부르세요.
+- 완료된 분석을 다시 돌리려면 `?force=true`. 없으면 기존 결과를 그대로 씁니다.
+  (⚠️ `force=true` 는 VLM 을 다시 호출합니다. 요금이 다시 발생합니다.)
 
 **422 `INSUFFICIENT_PARTS`**
 ```json
@@ -554,9 +567,9 @@ ctx.putImageData(out, 0, 0);
 ```
 
 **주의**
-- ⚠️ **중복 호출 = 요금 2배.** 이미 `PENDING`/`PROCESSING` 잡이 있으면 **새로 만들지 말고 기존 `job_id`를 반환**하세요. 새로고침 한 번에 VLM이 두 배로 돕니다.
-- ⚠️ **인바디는 선행 조건이 아닙니다.** 아직 `PENDING`이면 **기다리지 말고 인바디 없이 진행**하고 그 사실을 `job.result`에 남기세요. 사용자를 로딩 화면에 무한정 세우면 안 됩니다.
-- ⚠️ VLM 입력은 `body_part_segment.crop_path`(있으면) 또는 맵 + 원본에서 즉석 생성합니다. 어느 쪽을 썼는지 `part_diagnosis.vlm_input_type`에 기록합니다.
+- ⚠️ **중복 호출 = 요금 2배.** 가드가 세 겹입니다 — ① 진행 중인 `VLM_PART` ② `VLM_PART`는 끝나고 `VLM_OVERALL`만 도는 중간 상태 ③ 이미 완료된 분석. 셋 중 하나라도 걸리면 `reused: true`로 기존 잡을 돌려주고 VLM을 호출하지 않습니다.
+- ⚠️ **인바디는 선행 조건이 아닙니다.** 아직 `PENDING`이면 **기다리지 말고 인바디 없이 진행**하고 그 사실을 `job.result.inbody`에 남깁니다 (`USED` / `SKIPPED_OCR_IN_PROGRESS` / `NONE`). 사용자를 로딩 화면에 무한정 세우면 안 됩니다.
+- ⚠️ VLM 입력은 **원본 사진 + 부위 컬러 오버레이**입니다 (크롭 아님, `crop_path`는 NULL). `part_diagnosis.vlm_input_type = 'HIGHLIGHT'`로 기록됩니다.
 
 ### `GET .../analysis/progress` → 200
 
@@ -595,13 +608,32 @@ ctx.putImageData(out, 0, 0);
       "differences": ["상완 둘레가 얇음", "삼두 라인이 흐림"],
       "assessment": "레퍼런스 대비 상완 볼륨이 부족합니다.",
       "gap_level": "MODERATE", "priority": 2, "confidence": "HIGH",
-      "vlm_input_type": "CROP", "status": "DONE",
-      "reference_crop_url": "https://...?token=...",
-      "user_crop_url": "https://...?token=..." },
+      "blocked_reason": null,
+      "vlm_input_type": "HIGHLIGHT", "status": "DONE" },
+    { "class_name": "Right_Upper_Arm", "gap_level": null, "confidence": "LOW",
+      "blocked_reason": "긴팔에 가려 판단 불가", "status": "DONE" },
     { "class_name": "Torso", "status": "FAILED" }
-  ]
+  ],
+  "excluded": [
+    { "class_name": "Left_Lower_Leg", "name_ko": "왼쪽 종아리",
+      "reason": "TOO_SMALL", "side": "USER" }
+  ],
+  "inbody_id": "...",
+  "disclaimer": "본 분석은 사진 기반 추정이며 의학적 조언이 아닙니다. ..."
 }
 ```
+
+**주의**
+
+- ⚠️ 부위 일부가 `FAILED` 여도 **200** 입니다. 화면은 실패 부위를 빼고 그리세요.
+- `gap_level: null` + `blocked_reason` 은 **실패가 아닙니다.** VLM이 "옷에 가려 모르겠다"고
+  스스로 보고한 것이고, 그 부위만 진단에서 빠질 뿐 루틴은 기본 볼륨으로 정상 생성됩니다.
+- `excluded` 는 애초에 비교 대상에 못 든 부위입니다 (세그멘테이션 단계에서 탈락).
+  "왼팔은 왜 결과가 없지?"에 답하기 위한 것이니 화면에 사유를 노출하세요.
+- `reference_crop_url` / `user_crop_url` 은 **없어졌습니다.** 입력이 크롭이 아니라
+  원본+오버레이라 크롭 파일 자체를 만들지 않습니다. 부위를 시각화하려면
+  `GET /sessions/{id}/segmentation` 의 라벨 맵 + 팔레트를 쓰세요.
+- `disclaimer` 는 **반드시 화면에 노출**하세요. 프론트 구현에 맡기면 빠집니다.
 
 **주의**
 - ⚠️ **부위 하나가 `FAILED`여도 200입니다.** 전체를 500으로 만들면 나머지 8개 결과가 버려집니다.

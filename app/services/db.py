@@ -180,6 +180,44 @@ def replace_segmentation(
     return created
 
 
+def list_part_segments(segmentation_id: UUID) -> list[dict[str, Any]]:
+    """맵에서 파생된 부위별 통계. 검출된 **모든** 클래스가 들어있다.
+
+    ⚠️ is_valid=false 행도 함께 온다. 그래야 "왼팔은 왜 빠졌지?"에 답할 수 있다.
+    """
+    return (
+        get_client()
+        .table("body_part_segment")
+        .select("*")
+        .eq("segmentation_id", str(segmentation_id))
+        .execute()
+        .data
+    )
+
+
+def storage_path_exists(bucket: str, path: str) -> bool:
+    """그 경로가 DB에 실제로 등록된 파일인지 확인한다.
+
+    ⚠️ signed URL 발급 시 `{user_id}/` prefix 검사만으로는 부족하다.
+       prefix만 보면 임의 경로를 넣어 탐색할 수 있다. 실재 여부까지 확인할 것.
+
+    ⚠️ inbody-temp 는 여기서 확인할 수 없다(경로가 job.payload 안에만 있다).
+       그 버킷은 서버 내부용이라 발급 대상에서 제외한다 — 호출부 책임.
+    """
+    client = get_client()
+    table, column = {
+        settings.bucket_photos: ("photo", "storage_path"),
+        settings.bucket_segmentations: ("segmentation", "map_path"),
+        settings.bucket_body_parts: ("body_part_segment", "crop_path"),
+    }.get(bucket, (None, None))
+
+    if table is None:
+        return False
+
+    rows = client.table(table).select(column).eq(column, path).limit(1).execute().data
+    return bool(rows)
+
+
 def comparable_class_names() -> list[str]:
     rows = (
         get_client()

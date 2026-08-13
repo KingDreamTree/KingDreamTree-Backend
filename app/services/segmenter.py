@@ -320,8 +320,9 @@ def segment(
     comparable          : body_part 에서 is_comparable=true 인 class_name 집합
     master_class_names  : body_part 전체 class_name 집합 (라벨 검증용)
     """
-    order = label_order or sapiens_labels.ensure_verified()
     size = size or settings.sapiens_size
+    # ⚠️ 지금 쓰는 백본이 라벨 검증에 쓴 그 백본인지까지 확인한다.
+    order = label_order or sapiens_labels.ensure_verified(model_version(size))
 
     image = load_rgb(image_bytes)
     labels, num_classes, elapsed_ms = infer_labels(image, size)

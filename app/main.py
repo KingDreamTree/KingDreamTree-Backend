@@ -14,7 +14,9 @@ from app.errors import ApiError
 from app.routes.body_parts import router as body_parts_router
 from app.routes.jobs import router as jobs_router
 from app.routes.photos import router as photos_router
+from app.routes.segmentation import router as segmentation_router
 from app.routes.sessions import router as sessions_router
+from app.routes.storage import router as storage_router
 from app.routes.users import router as users_router
 
 app = FastAPI(
@@ -69,10 +71,10 @@ for _router in (
     users_router,
     sessions_router,
     photos_router,
+    segmentation_router,
+    storage_router,
 ):
     app.include_router(_router, prefix=API_PREFIX)
-
-# TODO(A): segmentation 조회, storage(signed-urls), DELETE /users/me 라우터 (Phase 3)
 # TODO(B): inbody, analysis, routines, workout_logs 라우터
 
 # ⚠️ 구 스캐폴드 라우터(/analyze, /compare, /routine)는 등록하지 않는다.

@@ -8,8 +8,8 @@
 |---|---|
 | **최종 수정일** | 2026-08-13 |
 | **Base URL** | `/api/v1` |
-| **구현 완료** | F02 사용자 · F03 세션 · F04 레퍼런스 · F05 사용자 사진 · F13 잡 폴링 · 부위 마스터 |
-| **미구현** | 세그멘테이션 조회(F06) · 인바디(F07) · 진단(F08·F09) · 루틴(F10~F12) · signed URL 배치(F14) · 삭제(F15) |
+| **구현 완료** | F02 사용자 · F03 세션 · F04 레퍼런스 · F05 사용자 사진 · **F06 세그멘테이션 조회** · F13 잡 폴링 · **F14 signed URL** · **F15 삭제** · 부위 마스터 |
+| **미구현** | 인바디(F07) · 진단(F08·F09) · 루틴(F10~F12) |
 
 ---
 
@@ -221,16 +221,123 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 
 ---
 
+## 부위별 색칠 오버레이 — `GET /api/v1/photos/{photo_id}/segmentation`
+
+세그멘테이션 결과는 **부위별 이미지 N장이 아니라 라벨 맵 PNG 1장**입니다. 8-bit 그레이스케일이고 **픽셀 값이 곧 부위 번호**입니다.
+
+응답에 `palette` 가 함께 옵니다. **번호 ↔ 부위명 ↔ 색 ↔ 유효성 ↔ 통계를 서버가 합쳐서 내려주므로 따로 조회할 필요가 없습니다.**
+
+```json
+{
+  "map_url": "https://.../map.png?token=...",
+  "map_width": 768, "map_height": 1024,
+  "photo_url": "https://.../user.jpg?token=...",
+  "photo_width": 1080, "photo_height": 1440,
+  "model": { "name": "sapiens2", "version": "sapiens2-seg-5b" },
+  "person_area_ratio": 0.28,
+  "palette": [
+    { "label_value": 22, "class_name": "Torso", "name_ko": "몸통",
+      "color_hex": "#4C6EF5", "is_comparable": true, "is_valid": true,
+      "pixel_count": 48210, "area_ratio": 0.212,
+      "bbox": { "x": 210, "y": 180, "w": 340, "h": 420 } }
+  ],
+  "signed_url_expires_at": "..."
+}
+```
+
+세그가 아직 안 끝났으면 **404**입니다. `GET /jobs/{job_id}` 로 완료를 확인하고 부르세요.
+
+### ⚠️ 오버레이 그릴 때 꼭 지킬 것 3가지
+
+**1. `crossOrigin = "anonymous"` 없으면 픽셀을 못 읽습니다.**
+signed URL은 다른 오리진이라, 이게 없으면 캔버스가 오염돼서 `getImageData()`가 `SecurityError`를 던집니다. **여기서 제일 먼저 막힙니다.**
+
+**2. 맵을 JS로 리샘플하지 마세요.**
+보간이 라벨 값을 섞어서 **존재하지 않는 부위를 만들어냅니다.** 크기 조정은 CSS로만 하고 `image-rendering: pixelated` 를 함께 주세요.
+
+**3. `palette` 를 하드코딩하지 마세요.**
+모델 버전이 바뀌면 `label_value` 가 재배열됩니다. 응답의 `palette` 를 그대로 쓰세요. `color_hex` 가 `null` 인 항목(배경·옷·머리)은 **칠하지 않습니다.**
+
+```js
+const map = new Image();
+map.crossOrigin = "anonymous";          // ⚠️ 필수
+map.src = seg.map_url;
+await map.decode();
+
+const c = document.createElement("canvas");
+c.width = seg.map_width; c.height = seg.map_height;
+const ctx = c.getContext("2d", { willReadFrequently: true });
+ctx.drawImage(map, 0, 0);
+
+const src = ctx.getImageData(0, 0, c.width, c.height);
+const out = ctx.createImageData(c.width, c.height);
+const lut = {};
+for (const p of seg.palette) {
+  if (!p.color_hex) continue;           // 배경·옷은 투명
+  lut[p.label_value] = [1, 3, 5].map(i => parseInt(p.color_hex.substr(i, 2), 16));
+}
+for (let i = 0; i < src.data.length; i += 4) {
+  const rgb = lut[src.data[i]];         // 그레이스케일이라 R 채널 = 라벨 값
+  if (!rgb) continue;
+  out.data[i] = rgb[0]; out.data[i+1] = rgb[1]; out.data[i+2] = rgb[2]; out.data[i+3] = 140;
+}
+ctx.putImageData(out, 0, 0);
+// 원본 위에 CSS로 겹치기. 맵 크기 ≠ 원본 크기일 수 있으니 늘려서 맞춤
+```
+
+**`bbox` 는 맵 좌표계입니다.** 원본 위에 박스를 그리려면 `photo_width / map_width` 배율로 스케일하세요.
+
+---
+
+## 좌우 비교 화면 — `GET /api/v1/sessions/{session_id}/segmentation`
+
+레퍼런스·사용자 두 장을 한 번에 받습니다. 아직 세그가 안 끝난 쪽은 `null` 입니다 (404가 아닙니다 — 한쪽만 끝나도 화면을 그릴 수 있게).
+
+```json
+{
+  "reference": { "...위와 동일..." },
+  "user": { "...동일..." },
+  "comparable": {
+    "class_names": ["Left_Upper_Arm", "Torso"],
+    "count": 2, "sufficient": false, "min_required": 3,
+    "reference_only": ["Right_Upper_Arm"], "user_only": [],
+    "excluded": [
+      { "class_name": "Right_Upper_Arm", "name_ko": "오른팔 상완", "side": "USER",
+        "reason": "TOO_SMALL",
+        "message": "오른팔 상완이 거의 보이지 않습니다. 옷에 가려졌을 수 있어요." }
+    ]
+  }
+}
+```
+
+**`excluded` 가 재촬영 안내의 재료입니다.** `message` 는 그대로 보여줘도 되게 쓰여 있습니다. `side` 로 어느 사진이 문제인지 알 수 있습니다 (`REFERENCE` / `USER` / `BOTH`).
+
+**`sufficient: false`** 면 비교 가능한 부위가 부족한 상태입니다. 분석을 시작해도 422로 막히니, 이 단계에서 `excluded` 를 보여주고 재촬영을 유도하세요.
+
+---
+
+## signed URL 재발급 — `POST /api/v1/storage/signed-urls`
+
+URL은 1시간 뒤 만료됩니다. 화면을 오래 열어두면 이미지가 깨지므로 다시 발급받으세요.
+
+```json
+{ "items": [ { "bucket": "segmentations", "path": "8f14.../3c9a.../user/map.png" } ],
+  "expires_in": 3600 }
+```
+
+한 번에 최대 30개. `photos` / `segmentations` / `body-parts` 버킷만 발급됩니다.
+
+---
+
+## 계정 삭제 — `DELETE /api/v1/users/me`
+
+204를 반환합니다. **사진·세그멘테이션 결과·세션·기록이 전부 실제로 지워집니다.** 되돌릴 수 없으니 확인 다이얼로그가 필요합니다.
+
+---
+
 ## 아직 없는 것
 
-아래는 서버에 구현되기 전이라 호출하면 404입니다. 순서대로 붙습니다.
-
-- `GET /photos/{id}/segmentation` · `GET /sessions/{id}/segmentation` — 라벨 맵 + 팔레트 (부위별 색칠 오버레이)
-- `POST /storage/signed-urls` — signed URL 배치 발급
-- `DELETE /users/me` — 계정·데이터 삭제
-- 인바디 · 진단 · 루틴 (담당 B)
-
-**부위별 오버레이(F06)를 붙일 때 미리 알아두실 것** — 맵은 8-bit 그레이스케일 PNG이고 픽셀 값이 곧 부위 번호입니다. 캔버스로 픽셀을 읽어야 해서 `img.crossOrigin = "anonymous"` 가 필수이고, 맵을 JS로 리샘플하면 안 됩니다(보간이 없는 부위를 만들어냅니다). 자세한 절차는 `docs/api-spec-v2.md` F06.
+인바디(F07) · 진단(F08·F09) · 루틴(F10~F12) — 담당 B가 작업 중입니다. 호출하면 404입니다.
 
 ---
 

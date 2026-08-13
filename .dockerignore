@@ -1,0 +1,33 @@
+.git/
+.github/
+.venv/
+venv/
+env/
+
+# Model weights — mount as volume instead
+models/
+
+# Cache
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+.mypy_cache/
+
+# Local scratch (never needed in image)
+uploads/
+overlays/
+tmp/
+
+# Dev / docs / tests
+docs/
+*.md
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

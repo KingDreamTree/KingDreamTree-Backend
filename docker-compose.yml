@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - USE_MOCK=${USE_MOCK:-true}
+    volumes:
+      # 모델 가중치는 이미지에 굽지 않고 볼륨으로 마운트
+      - ./models:/app/models:ro
+    restart: unless-stopped

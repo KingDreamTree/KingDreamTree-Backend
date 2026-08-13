@@ -78,7 +78,7 @@ B가 읽음  →  DB SELECT + signed URL 만
 
 | # | 작업 | 완료 기준 |
 |---|---|---|
-| 1-1 | ~~Sapiens2 클래스명 확인~~ ✅ | **29개 확정** (Sapiens 28 + Eyeglasses). seed 적용 완료 |
+| 1-1 | ~~Sapiens2 클래스명 확인~~ ✅ | **29개 확정** — 공식 문서(SEG.md) + 실측 교차 확인. `Eyeglass`(단수)가 2번 |
 | 1-2 | ~~`seed_body_parts.py` 작성·실행~~ ✅ | 멱등 스크립트. `--check`로 DB 대조 |
 | 1-3 | `segmenter.py` — 라벨 맵 PNG 생성 | §6 포맷 규칙 준수 |
 | 1-4 | `segmenter.py` — 부위별 통계 | 검출된 **모든** 클래스에 행 생성, `is_valid` 판정 |
@@ -86,7 +86,7 @@ B가 읽음  →  DB SELECT + signed URL 만
 
 > ✅ **1-1은 해결됐습니다.** B의 프롬프트 부위 목록도 이제 확정입니다 (비교 대상 9개).
 > 남은 확인은 **첫 추론 시 `label_map`을 마스터와 대조**하는 것 하나뿐입니다 —
-> `Eyeglasses` 철자와 픽셀 인덱스는 실물로만 확인 가능합니다.
+> 순서의 출처는 https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md 입니다. 좌우 배치는 문서에 없어 실측으로 확인했습니다.
 
 ### Phase 2 — 사진 파이프라인
 

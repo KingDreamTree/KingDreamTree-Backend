@@ -97,17 +97,38 @@ _MOCK_RAW: dict[str, Any] = {
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
-async def extract_inbody(image_bytes: bytes, mime_type: str = "image/jpeg") -> dict[str, Any]:
+async def extract_inbody(
+    pages: bytes | list[bytes], mime_type: str = "image/jpeg"
+) -> dict[str, Any]:
     """인바디 결과지 이미지에서 수치를 추출한다.
+
+    Args:
+        pages: 결과지 이미지. **한 건의 여러 페이지**면 리스트로 — 한 요청에
+               전부 넣어 한 번만 호출한다 (api-spec F07: 요청 1건 = 결과지 1건).
 
     Returns:
         raw_ocr 원본 dict. ⚠️ 사용자 수정 시에도 이 값은 덮어쓰지 않는다.
+
+    ⚠️ SMI는 추출하지 않는다 — VLM에게 계산을 시키지 않는다는 원칙.
+       결과지의 SMI 칸도 비어 있는 경우가 있어, 백엔드가 calc_smi()로 직접 계산한다.
     """
+    if isinstance(pages, bytes):
+        pages = [pages]
+
     if settings.use_mock:
         return dict(_MOCK_RAW)
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
-    b64 = base64.b64encode(image_bytes).decode()
+    image_blocks = [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:{mime_type};base64,{base64.b64encode(p).decode()}",
+                "detail": "high",
+            },
+        }
+        for p in pages
+    ]
 
     response = await client.chat.completions.create(
         model="gpt-4o",
@@ -115,16 +136,7 @@ async def extract_inbody(image_bytes: bytes, mime_type: str = "image/jpeg") -> d
         temperature=0,  # 수치 추출은 결정론적으로
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{mime_type};base64,{b64}", "detail": "high"},
-                    },
-                    {"type": "text", "text": USER_PROMPT},
-                ],
-            },
+            {"role": "user", "content": [*image_blocks, {"type": "text", "text": USER_PROMPT}]},
         ],
     )
     return json.loads(response.choices[0].message.content)
@@ -208,6 +220,97 @@ def calc_smi(raw: dict[str, Any]) -> float | None:
     if not smm or not height:
         return None
     return round(smm / ((height / 100) ** 2), 2)
+
+
+# ── DB CHECK 가드 ─────────────────────────────────────────────────────────────
+
+#: inbody 테이블의 CHECK 제약과 동일한 범위 (db/schema.sql §7).
+#  ⚠️ OCR이 범위 밖 값을 뽑으면 그 컬럼만 None으로 빼고 WARN을 남긴다.
+#     이게 없으면 CHECK 위반으로 UPDATE 전체가 터져 "검증 실패가 INSERT를
+#     막지 않는다" 원칙이 깨진다. 원본 값은 raw_ocr에 그대로 남아 있다.
+_COLUMN_RANGE: dict[str, tuple[float, float]] = {
+    "age": (1, 120),
+    "height": (120, 220),
+    "weight": (25, 250),
+    "bmi": (10, 60),
+    "body_fat_mass": (0, 150),
+    "body_fat_percentage": (1, 70),
+    "skeletal_muscle_mass": (10, 60),
+    "fat_free_mass": (10, 150),
+    "bmr_kcal": (500, 5000),
+}
+
+
+def sanitize_columns(cols: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """DB CHECK를 위반할 값을 None으로 바꾸고, 그 사실을 WARN 체크로 돌려준다."""
+    out = dict(cols)
+    warns: list[dict[str, Any]] = []
+
+    for col, (low, high) in _COLUMN_RANGE.items():
+        value = out.get(col)
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or not (low <= value <= high):
+            warns.append(
+                {
+                    "rule": f"DB_RANGE_{col.upper()}",
+                    "level": "WARN",
+                    "actual": value,
+                    "expected_range": [low, high],
+                    "message": f"{col} 추출값 {value} 이 저장 가능 범위({low}~{high})를 벗어나 비움 — 확인 화면에서 수정 필요",
+                }
+            )
+            out[col] = None
+
+    if out.get("gender") not in ("MALE", "FEMALE", None):
+        warns.append(
+            {
+                "rule": "DB_RANGE_GENDER",
+                "level": "WARN",
+                "actual": out["gender"],
+                "message": "성별 추출값이 MALE/FEMALE이 아니어서 비움",
+            }
+        )
+        out["gender"] = None
+
+    return out, warns
+
+
+# ── 프론트 응답용 변환 ────────────────────────────────────────────────────────
+
+#: 검증 rule → 확인 화면의 필드 키 (api-spec F07 응답 형식)
+_RULE_TO_FIELD = {
+    "WEIGHT_IDENTITY": "weight",
+    "BMI_IDENTITY": "bmi",
+    "FAT_FREE_MASS": "fat_free_mass",
+    "BODY_FAT_PCT": "body_fat_percentage",
+    "SYMMETRY_팔": "segments.LEFT_ARM",
+    "SYMMETRY_다리": "segments.LEFT_LEG",
+}
+
+
+def to_field_validation(validation: dict[str, Any] | None) -> dict[str, Any]:
+    """validation JSONB(checks 배열) → 확인 화면용 {필드: {level, message}}.
+
+    ⚠️ WARN만 내려보낸다. PASS/SKIP까지 다 주면 프론트가 전부 똑같이 강조하고,
+       사용자는 대충 넘긴다 (api-spec F07 주의사항).
+    """
+    if not validation:
+        return {}
+
+    out: dict[str, Any] = {}
+    for check in validation.get("checks", []):
+        if check.get("level") != "WARN":
+            continue
+        rule = check.get("rule", "")
+        if rule.startswith("RANGE_"):
+            field = f"segments.{rule.removeprefix('RANGE_')}"
+        elif rule.startswith("DB_RANGE_"):
+            field = rule.removeprefix("DB_RANGE_").lower()
+        else:
+            field = _RULE_TO_FIELD.get(rule, rule.lower())
+        out[field] = {"level": "warn", "message": check.get("message", "")}
+    return out
 
 
 # ── 검증 규칙 ─────────────────────────────────────────────────────────────────

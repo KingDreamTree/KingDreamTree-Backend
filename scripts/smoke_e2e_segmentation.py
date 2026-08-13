@@ -233,10 +233,25 @@ def main() -> int:
         if args.out:
             out_dir = Path(args.out)
             out_dir.mkdir(parents=True, exist_ok=True)
+
             overlay = render(image_path, img, seg["palette"])
-            path = out_dir / "e2e_overlay.png"
-            overlay.save(path)
-            print(f"\n      오버레이 저장: {path}  ← 좌우가 안 뒤집혔는지 눈으로 확인하세요")
+            overlay.save(out_dir / "e2e_overlay.png")
+            print(
+                f"\n      오버레이: {out_dir / 'e2e_overlay.png'}"
+                "  ← 좌우가 안 뒤집혔는지 눈으로 확인하세요"
+            )
+
+            # ⚠️ 담당 B에게 넘길 실물 샘플. 하이라이트 생성 로직을 이걸로 검증한다.
+            #    맵은 **원본 그대로** 저장한다 — 다시 인코딩하면 검증 의미가 없다.
+            (out_dir / "map.png").write_bytes(map_bytes)
+            (out_dir / "label_map.json").write_text(
+                json.dumps(seg_row["label_map"], ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (out_dir / "segmentation.json").write_text(
+                json.dumps(seg, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"      B 전달용: {out_dir / 'map.png'} · label_map.json · segmentation.json")
 
     finally:
         if args.keep:

@@ -457,39 +457,60 @@ ALTER TABLE job                  ENABLE ROW LEVEL SECURITY;
 
 
 -- ============================================================================
--- body_part seed
+-- body_part seed — Sapiens2 body-part segmentation 29개 클래스
 --
--- ⚠️ class_name 값은 아직 확정이 아닙니다 (미확정 #2).
---    Sapiens2 실제 추론 라벨을 확인한 뒤 이 블록을 갈아엎어야 합니다.
---    body_part_segment가 이 테이블을 FK로 참조하므로 seed 없이는 아무 데이터도 못 넣습니다.
+-- 출처: Sapiens(1세대) goliath 28클래스 + Eyeglasses = 29
+--   https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md
+--   https://huggingface.co/facebook/sapiens2
+--
+-- ⚠️ 클래스 "이름"은 위 출처로 확인했지만, **픽셀 값(인덱스)은 확인하지 않았습니다.**
+--    Eyeglasses가 어디에 삽입되며 나머지가 밀리는지 알 수 없기 때문입니다.
+--    → 인덱스는 이 테이블에 저장하지 않습니다. 추론 시점의 매핑을
+--      segmentation.label_map 에 행마다 박제하는 설계라 문제가 되지 않습니다.
+--
+-- ⚠️ Eyeglasses 만은 정확한 철자를 원문에서 확인하지 못했습니다.
+--    첫 추론 후 label_map을 마스터와 대조해 불일치가 나오면 이 행만 고치면 됩니다.
+--
+-- body_part_segment가 이 테이블을 FK로 참조하므로 seed 없이는 아무 데이터도 못 넣습니다.
+-- 재적용은 scripts/seed_body_parts.py (멱등) 를 쓰세요.
 -- ============================================================================
 
--- 비교 대상 9개 (is_comparable = true)
+-- 비교 대상 9개 (is_comparable = true) — 맨살이 드러나는 부위만
+-- ⚠️ 좌/우를 비슷한 색 계열로 잡은 이유: 좌우 반전 사고를 눈으로 잡기 위해서.
+--    오버레이가 좌우 대칭으로 뒤집혀 보이면 반전 규칙이 깨진 것이다.
 INSERT INTO body_part (class_name, name_ko, part_group, inbody_segment,
                        is_comparable, color_hex, display_order) VALUES
-    ('Torso',           '몸통',          'CORE',  'TRUNK',     true, '#4C6EF5', 1),
-    ('Left_Upper_Arm',  '왼팔 상완',      'UPPER', 'LEFT_ARM',  true, '#F76707', 2),
-    ('Left_Lower_Arm',  '왼팔 전완',      'UPPER', 'LEFT_ARM',  true, '#FFA94D', 3),
-    ('Right_Upper_Arm', '오른팔 상완',    'UPPER', 'RIGHT_ARM', true, '#2F9E44', 4),
-    ('Right_Lower_Arm', '오른팔 전완',    'UPPER', 'RIGHT_ARM', true, '#69DB7C', 5),
-    ('Left_Upper_Leg',  '왼쪽 허벅지',    'LOWER', 'LEFT_LEG',  true, '#AE3EC9', 6),
-    ('Left_Lower_Leg',  '왼쪽 종아리',    'LOWER', 'LEFT_LEG',  true, '#DA77F2', 7),
-    ('Right_Upper_Leg', '오른쪽 허벅지',  'LOWER', 'RIGHT_LEG', true, '#E03131', 8),
-    ('Right_Lower_Leg', '오른쪽 종아리',  'LOWER', 'RIGHT_LEG', true, '#FF8787', 9);
+    ('Torso',           '몸통',         'CORE',  'TRUNK',     true, '#4C6EF5', 1),
+    ('Left_Upper_Arm',  '왼팔 상완',     'UPPER', 'LEFT_ARM',  true, '#F76707', 2),
+    ('Left_Lower_Arm',  '왼팔 전완',     'UPPER', 'LEFT_ARM',  true, '#FFA94D', 3),
+    ('Right_Upper_Arm', '오른팔 상완',   'UPPER', 'RIGHT_ARM', true, '#2F9E44', 4),
+    ('Right_Lower_Arm', '오른팔 전완',   'UPPER', 'RIGHT_ARM', true, '#69DB7C', 5),
+    ('Left_Upper_Leg',  '왼쪽 허벅지',   'LOWER', 'LEFT_LEG',  true, '#AE3EC9', 6),
+    ('Left_Lower_Leg',  '왼쪽 종아리',   'LOWER', 'LEFT_LEG',  true, '#DA77F2', 7),
+    ('Right_Upper_Leg', '오른쪽 허벅지', 'LOWER', 'RIGHT_LEG', true, '#E03131', 8),
+    ('Right_Lower_Leg', '오른쪽 종아리', 'LOWER', 'RIGHT_LEG', true, '#FF8787', 9);
 
--- 비교 대상 아님 (맵에는 들어가지만 색칠하지 않음)
+-- 비교 대상 아님 20개 — 맵에는 들어가지만 색칠하지 않는다 (color_hex NULL)
+-- ⚠️ 손·발·신발·양말은 좌우가 별도 클래스다. 옷도 상/하의가 나뉜다.
+--    Apparel은 상/하의로 분류되지 않는 나머지 착용물이다.
 INSERT INTO body_part (class_name, name_ko, part_group, is_comparable, display_order) VALUES
-    ('Background',      '배경',    'OTHER', false, 90),
-    ('Apparel',         '의류',    'OTHER', false, 91),
-    ('Upper_Clothing',  '상의',    'OTHER', false, 92),
-    ('Lower_Clothing',  '하의',    'OTHER', false, 93),
-    ('Shoe',            '신발',    'OTHER', false, 94),
-    ('Sock',            '양말',    'OTHER', false, 95),
-    ('Eyeglasses',      '안경',    'OTHER', false, 96),
-    ('Hair',            '머리카락', 'OTHER', false, 97),
-    ('Face_Neck',       '얼굴·목', 'OTHER', false, 98),
-    ('Lip',             '입술',    'OTHER', false, 99),
-    ('Teeth',           '치아',    'OTHER', false, 100),
-    ('Tongue',          '혀',      'OTHER', false, 101),
-    ('Hand',            '손',      'OTHER', false, 102),
-    ('Foot',            '발',      'OTHER', false, 103);
+    ('Background',     '배경',      'OTHER', false, 90),
+    ('Apparel',        '착용물',    'OTHER', false, 91),
+    ('Upper_Clothing', '상의',      'OTHER', false, 92),
+    ('Lower_Clothing', '하의',      'OTHER', false, 93),
+    ('Left_Shoe',      '왼쪽 신발', 'OTHER', false, 94),
+    ('Right_Shoe',     '오른쪽 신발', 'OTHER', false, 95),
+    ('Left_Sock',      '왼쪽 양말', 'OTHER', false, 96),
+    ('Right_Sock',     '오른쪽 양말', 'OTHER', false, 97),
+    ('Left_Hand',      '왼손',      'OTHER', false, 98),
+    ('Right_Hand',     '오른손',    'OTHER', false, 99),
+    ('Left_Foot',      '왼발',      'OTHER', false, 100),
+    ('Right_Foot',     '오른발',    'OTHER', false, 101),
+    ('Hair',           '머리카락',  'OTHER', false, 102),
+    ('Face_Neck',      '얼굴·목',   'OTHER', false, 103),
+    ('Eyeglasses',     '안경',      'OTHER', false, 104),
+    ('Upper_Lip',      '윗입술',    'OTHER', false, 105),
+    ('Lower_Lip',      '아랫입술',  'OTHER', false, 106),
+    ('Upper_Teeth',    '윗니',      'OTHER', false, 107),
+    ('Lower_Teeth',    '아랫니',    'OTHER', false, 108),
+    ('Tongue',         '혀',        'OTHER', false, 109);

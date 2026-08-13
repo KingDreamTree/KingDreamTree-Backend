@@ -98,7 +98,7 @@ HAVING COUNT(DISTINCT p.kind) = 2;   -- REFERENCE, USER 둘 다 유효
 | 1-4 | 더미 `inbody` + `inbody_segment` 행 |
 
 - ⚠️ **A에게 실제 맵 PNG 샘플 1장 + `label_map` JSON을 받아서 형식을 맞추세요.** 여기서 어긋나면 통합할 때 터집니다.
-- ⚠️ `body_part` seed는 A가 만듭니다. 부위 목록이 아직 없으면 임시로 9개를 넣고, **A가 실제 클래스명을 확인하면 갈아엎으세요.** 프롬프트에 부위명을 하드코딩하지 말고 DB에서 읽으세요.
+- ✅ `body_part` seed는 이미 적용돼 있습니다 (29개, 비교 대상 9개). **프롬프트에 부위명을 하드코딩하지 말고 DB에서 읽으세요** — `Eyeglasses` 철자가 첫 추론에서 바뀔 수 있고, 그때 코드를 고칠 일이 없어야 합니다.
 
 ### Phase 2 — 인바디
 
@@ -249,4 +249,7 @@ HAVING COUNT(DISTINCT p.kind) = 2;   -- REFERENCE, USER 둘 다 유효
 | 7 | 루틴 진행 기준 (수행 횟수/날짜) | 둘이 합의 |
 | 8 | 시연 후 데이터 삭제 정책 | 둘이 합의 |
 
-**A에게서 받아야 할 것** — Sapiens2 실제 클래스 목록, 맵 PNG 샘플 1장 + `label_map` JSON. **이게 오기 전까지는 §5 Phase 1의 더미 데이터로 진행합니다.**
+**A에게서 받아야 할 것**
+
+- ✅ **Sapiens2 클래스 목록은 확정됐습니다** — 29개(28 + Eyeglasses), 그중 **비교 대상 9개**. `body_part` 테이블에 seed 적용 완료이므로 프롬프트 부위 목록은 DB에서 읽으면 됩니다. (`GET /body-parts` 또는 `db.comparable_class_names()`)
+- ⏳ 맵 PNG 샘플 1장 + `label_map` JSON — 아직 대기. **이게 오기 전까지는 §5 Phase 1의 더미 데이터로 진행합니다.**

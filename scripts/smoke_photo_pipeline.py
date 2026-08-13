@@ -196,13 +196,34 @@ def main() -> int:
             f"{SP}/user",
             headers=H,
             data=ok,
-            files={"file": ("p.gif", b"GIF89a", "image/gif")},
+            files={"file": ("not-an-image.txt", b"hello world", "image/jpeg")},
         )
-        check("gif → 415", r.status_code == 415, f"status={r.status_code}")
+        check(
+            "이미지가 아니면 415 (Content-Type이 jpeg여도)",
+            r.status_code == 415,
+            f"status={r.status_code}",
+        )
 
         check(
             "거부된 사진은 저장되지 않음",
             db.get_photo(UUID(session_id), "USER") is None,
+        )
+
+        # ⚠️ 형식 판별을 Content-Type 헤더가 아니라 실제 디코딩으로 하는지.
+        #    아이폰 HEIC는 브라우저가 빈 값이나 octet-stream 을 붙여 보내는 경우가 있어,
+        #    헤더로 거르면 멀쩡한 사진이 막힌다.
+        webp = io.BytesIO()
+        Image.open(io.BytesIO(jpeg())).save(webp, format="WEBP")
+        r = client.post(
+            f"{SP}/user",
+            headers=H,
+            data=ok,
+            files={"file": ("photo", webp.getvalue(), "application/octet-stream")},
+        )
+        check(
+            "Content-Type이 octet-stream이어도 열리면 통과",
+            r.status_code == 201,
+            f"status={r.status_code}",
         )
 
         # ── F05 통과 경로 ─────────────────────────────────────────────────

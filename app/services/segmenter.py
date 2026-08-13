@@ -24,11 +24,11 @@ from app.config import settings
 from app.schemas.enums import InvalidReason
 from app.services import sapiens_labels
 
-# ⚠️ 사진 유틸(load_rgb / prepare_photo)은 app/services/images.py 에 있다.
+# ⚠️ 사진 유틸(load_rgb / encode_photo)은 app/services/images.py 에 있다.
 #    API 프로세스가 사진 처리 때문에 이 모듈(=torch를 끌어오는 워커 전용 모듈)을
 #    import 하게 두면 안 되기 때문이다. 여기서는 재수출만 한다 —
 #    scripts/verify_labels.py 처럼 segmenter.load_rgb 를 쓰던 곳은 그대로 동작한다.
-from app.services.images import load_rgb, prepare_photo  # noqa: F401
+from app.services.images import encode_photo, load_rgb  # noqa: F401
 
 MODEL_NAME = "sapiens2"
 

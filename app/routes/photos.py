@@ -15,6 +15,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, UploadFile, status
+from PIL import Image
 
 from app.config import settings
 from app.deps import OwnedSession, UserId
@@ -37,17 +38,22 @@ router = APIRouter(tags=["photos"])
 # --------------------------------------------------------------------------- #
 
 
-async def _read_upload(file: UploadFile) -> bytes:
-    """업로드 파일을 검사하고 바이트로 읽는다."""
-    if file.content_type not in images.ALLOWED_CONTENT_TYPES:
-        raise unsupported_media_type(file.content_type, list(images.ALLOWED_CONTENT_TYPES))
+async def _read_upload(file: UploadFile) -> Image.Image:
+    """업로드 파일을 검사하고 디코딩한다.
 
+    ⚠️ **Content-Type 헤더로 형식을 거르지 않는다.** 브라우저가 아이폰 HEIC에
+       빈 값이나 application/octet-stream 을 붙여 보내는 경우가 있어, 헤더로
+       거르면 멀쩡한 사진이 415로 막힌다. **실제로 열리는지**가 유일한 기준이다.
+       저장은 어차피 JPEG로 다시 인코딩하므로 입력 형식은 남지 않는다.
+    """
     raw = await file.read()
     if len(raw) > settings.max_upload_bytes:
         raise file_too_large(settings.max_upload_bytes)
-    if not raw:
-        raise unsupported_media_type(file.content_type, list(images.ALLOWED_CONTENT_TYPES))
-    return raw
+
+    try:
+        return images.load_rgb(raw)
+    except images.UnsupportedImageError as e:
+        raise unsupported_media_type(file.content_type, ["jpeg", "png", "heic", "webp"]) from e
 
 
 def _discard_existing(user_id: UUID, session_id: UUID, kind: PhotoKind) -> None:
@@ -77,12 +83,12 @@ def _store(
     user_id: UUID,
     session_id: UUID,
     kind: PhotoKind,
-    raw: bytes,
+    img: Image.Image,
     is_mirrored: bool,
     extra: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """사진을 저장하고 세그 잡을 건다. (photo 행, job 행) 반환."""
-    jpeg, width, height = images.prepare_photo(raw, mirrored=is_mirrored)
+    jpeg, width, height = images.encode_photo(img, mirrored=is_mirrored)
 
     path = storage.photo_path(user_id, session_id, str(kind))
     storage.upload(settings.bucket_photos, path, jpeg, "image/jpeg")
@@ -129,7 +135,7 @@ def _landmarks_for_storage(raw_json: str | None, is_mirrored: bool) -> list[dict
 async def upload_reference(
     user_id: UserId,
     session: OwnedSession,
-    file: Annotated[UploadFile, File(description="jpeg/png, 10MB 이하")],
+    file: Annotated[UploadFile, File(description="jpeg/png/heic/webp 등, 10MB 이하")],
     pose_landmarks: Annotated[str, Form(description="MediaPipe 33개 랜드마크 JSON 배열")],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
@@ -140,7 +146,7 @@ async def upload_reference(
 ) -> ReferencePhotoResponse:
     session_id = UUID(str(session["session_id"]))
 
-    raw = await _read_upload(file)
+    img = await _read_upload(file)
     pose.ensure_single_person(multi_person)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
@@ -149,7 +155,7 @@ async def upload_reference(
         user_id,
         session_id,
         PhotoKind.REFERENCE,
-        raw,
+        img,
         is_mirrored,
         {
             "pose_landmarks": landmarks,
@@ -237,7 +243,7 @@ async def upload_user_photo(
     if reference is None:
         raise precondition_not_met("레퍼런스 사진을 먼저 등록해주세요.")
 
-    raw = await _read_upload(file)
+    img = await _read_upload(file)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
     # ⚠️ 판정을 통과하지 못하면 **저장하지 않는다.** 실패한 사진이 Storage에 쌓이면
@@ -255,7 +261,7 @@ async def upload_user_photo(
         user_id,
         session_id,
         PhotoKind.USER,
-        raw,
+        img,
         is_mirrored,
         {
             "capture_source": str(capture_source),

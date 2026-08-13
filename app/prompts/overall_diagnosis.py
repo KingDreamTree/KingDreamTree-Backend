@@ -62,18 +62,41 @@ JSON 하나만 반환합니다.
                      없으면 빈 배열.
 
 ⚠️ priority_parts / strengths / cautions 는 전부 배열입니다. 문자열 하나로
-   이어붙이지 마세요 — 화면에서 항목별로 나열됩니다."""
+   이어붙이지 마세요 — 화면에서 항목별로 나열됩니다.
+
+# 문체 — 운동 초보자에게 말하듯
+
+읽는 사람은 운동을 처음 하는 사람입니다. 헬스장 용어·해부학 용어를 모릅니다.
+제지방량→근육량, 레퍼런스→목표 체형, 대퇴사두근→허벅지 앞쪽 근육처럼
+쉬운 말로 바꾸고, 부위는 «왼쪽/오른쪽»으로 부르세요.
+
+summary 는 설명이 아니라 **방향 제시**입니다. `[현재 상태] → [무엇을 먼저 할지]`
+순서로 씁니다.
+
+> "하체에 비해 상체 근육이 부족한 편입니다.
+>  4주 동안 왼쪽 팔을 시작으로 상체 운동에 집중해보세요."
+
+⚠️ 부위 범례에 없는 이름을 만들지 마세요. 어깨·복근처럼 비교 부위에 없는 단어를
+   쓰면 사용자가 화면에서 그 항목을 찾다가 못 찾습니다.
+⚠️ 인바디 수치가 주어졌다면 summary 나 score_rationale 에 한 번은 반영하세요."""
 
 
 def _part_line(p: dict[str, Any]) -> str:
-    if p.get("blocked_reason"):
-        return f"- {p['class_name']}: 판단 불가 — {p['blocked_reason']}"
+    # ⚠️ blocked_reason 이 있어도 gap_level 이 있으면 판단 불가가 아니다.
+    #    옷에 가렸지만 인바디로 등급을 매긴 경우가 이에 해당한다. 여기서 뭉뚱그리면
+    #    인바디로 건진 부위가 다시 "모름"으로 떨어져 점수에서 빠진다.
+    if not p.get("gap_level"):
+        reason = p.get("blocked_reason") or "사유 미기재"
+        return f"- {p['class_name']}: 판단 불가 — {reason}"
 
-    bits = [f"격차 {p.get('gap_level') or '?'}"]
+    bits = [f"격차 {p['gap_level']}"]
     if p.get("priority") is not None:
         bits.append(f"우선순위 {p['priority']}")
     if p.get("confidence"):
         bits.append(f"확신도 {p['confidence']}")
+    if p.get("blocked_reason"):
+        # 시각은 막혔지만 인바디로 등급이 나온 부위 — 근거가 다르다는 걸 알려준다.
+        bits.append("시각 확인 불가 · 인바디 기준")
 
     line = f"- {p['class_name']} ({' · '.join(bits)})"
     if p.get("assessment"):

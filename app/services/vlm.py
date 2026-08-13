@@ -239,7 +239,16 @@ def parse_part_response(parsed: dict[str, Any], class_names: list[str]) -> dict[
     allowed = set(class_names)
     results: dict[str, dict[str, Any]] = {}
 
-    for item in parsed.get("parts") or []:
+    # ⚠️ `parts` 자체가 없으면 "전 부위 실패"가 아니라 **응답 형식 오류**다.
+    #    구분하지 않으면 프롬프트에서 구조 명세가 빠진 사고가 조용히 FAILED 9건으로
+    #    기록되고, 화면에는 "진단 실패"만 뜬 채 원인이 안 보인다. (실제로 겪었다)
+    items = parsed.get("parts")
+    if not isinstance(items, list):
+        raise VlmResponseError(
+            "응답에 parts 배열이 없습니다. 프롬프트의 출력 구조 명세를 확인하세요."
+        )
+
+    for item in items:
         part = _coerce_part(item, allowed)
         if part is None:
             log.warning("부위 항목을 검증하지 못했습니다: %.200s", item)

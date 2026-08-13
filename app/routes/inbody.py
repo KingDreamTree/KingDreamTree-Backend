@@ -86,7 +86,9 @@ OwnedInbody = Annotated[dict[str, Any], Depends(get_owned_inbody)]
 async def upload_inbody(
     user_id: UserId,
     session: OwnedSession,
-    files: Annotated[list[UploadFile], File(description="결과지 이미지 1~5장 (한 건의 여러 페이지)")],
+    files: Annotated[
+        list[UploadFile], File(description="결과지 이미지 1~5장 (한 건의 여러 페이지)")
+    ],
     device_type: Annotated[str | None, Form()] = None,
 ) -> InbodyCreateResponse:
     if not 1 <= len(files) <= settings.inbody_max_files:
@@ -246,7 +248,8 @@ async def delete_inbody(user_id: UserId, row: OwnedInbody) -> None:
     inbody_id = UUID(str(row["inbody_id"]))
     marker = f"{user_id}/{inbody_id}_"
     leftovers = [
-        p for p in storage.list_prefix(settings.bucket_inbody_temp, str(user_id))
+        p
+        for p in storage.list_prefix(settings.bucket_inbody_temp, str(user_id))
         if p.startswith(marker)
     ]
     storage.remove(settings.bucket_inbody_temp, leftovers)

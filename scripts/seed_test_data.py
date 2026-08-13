@@ -31,38 +31,39 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # 이 UUID 로 test user 를 식별한다. --clean 시 이 user 만 지운다.
 TEST_USER_ID = uuid.UUID("00000000-dead-beef-cafe-000000000001")
 
-MAP_W, MAP_H = 400, 600      # seg_map PNG 해상도
+MAP_W, MAP_H = 400, 600  # seg_map PNG 해상도
 PHOTO_W, PHOTO_H = 400, 600  # 더미 사진 해상도
 
 # (class_name, pixel_value, bbox_x, bbox_y, bbox_w, bbox_h)
 # ⚠️ pixel_value 는 임시값. A 실측 후 교체 예정.
 COMPARABLE_PARTS = [
-    ("Torso",           1, 160, 150,  80, 200),
-    ("Left_Upper_Arm",  2,  95, 155,  60, 100),
-    ("Left_Lower_Arm",  3,  85, 260,  50,  90),
-    ("Right_Upper_Arm", 4, 245, 155,  60, 100),
-    ("Right_Lower_Arm", 5, 265, 260,  50,  90),
-    ("Left_Upper_Leg",  6, 145, 355,  55, 120),
-    ("Left_Lower_Leg",  7, 140, 480,  50, 100),
-    ("Right_Upper_Leg", 8, 200, 355,  55, 120),
-    ("Right_Lower_Leg", 9, 210, 480,  50, 100),
+    ("Torso", 1, 160, 150, 80, 200),
+    ("Left_Upper_Arm", 2, 95, 155, 60, 100),
+    ("Left_Lower_Arm", 3, 85, 260, 50, 90),
+    ("Right_Upper_Arm", 4, 245, 155, 60, 100),
+    ("Right_Lower_Arm", 5, 265, 260, 50, 90),
+    ("Left_Upper_Leg", 6, 145, 355, 55, 120),
+    ("Left_Lower_Leg", 7, 140, 480, 50, 100),
+    ("Right_Upper_Leg", 8, 200, 355, 55, 120),
+    ("Right_Lower_Leg", 9, 210, 480, 50, 100),
 ]
 
 INBODY_SEGMENTS = [
-    ("LEFT_ARM",   3.1, 0.9),
-    ("RIGHT_ARM",  3.0, 0.8),
-    ("TRUNK",     28.4, 5.2),
-    ("LEFT_LEG",   9.2, 2.1),
-    ("RIGHT_LEG",  9.0, 2.0),
+    ("LEFT_ARM", 3.1, 0.9),
+    ("RIGHT_ARM", 3.0, 0.8),
+    ("TRUNK", 28.4, 5.2),
+    ("LEFT_LEG", 9.2, 2.1),
+    ("RIGHT_LEG", 9.0, 2.0),
 ]
 
-MODEL_NAME    = "sapiens2"
+MODEL_NAME = "sapiens2"
 MODEL_VERSION = "dummy-seed-v1"  # 실측 후 A가 실제 체크포인트명으로 교체
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Supabase 클라이언트 (앱 패키지 import 없이 독립 실행)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _get_client():
     from supabase import create_client
@@ -87,6 +88,7 @@ def _get_client():
 # ─────────────────────────────────────────────────────────────────────────────
 # 이미지 생성
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _make_photo(bg_color: tuple[int, int, int]) -> bytes:
     """단색 JPEG. 실제 VLM 품질 테스트는 A 완성 후, 지금은 플로우 테스트용."""
@@ -117,6 +119,7 @@ def _make_seg_map() -> tuple[bytes, dict[str, int]]:
 # Storage 경로 (docs/db-design-v4.md §19)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _photo_path(session_id: uuid.UUID, kind: str) -> str:
     return f"{TEST_USER_ID}/{session_id}/{kind.lower()}.jpg"
 
@@ -134,6 +137,7 @@ def _upload(client, bucket: str, path: str, data: bytes, content_type: str) -> N
 # ─────────────────────────────────────────────────────────────────────────────
 # 재귀 Storage 삭제 (storage.py 의 delete_prefix 와 동일 로직)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def _delete_prefix(client, bucket: str, prefix: str) -> int:
     paths: list[str] = []
@@ -162,6 +166,7 @@ def _delete_prefix(client, bucket: str, prefix: str) -> int:
 # 생성
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def seed() -> None:
     client = _get_client()
 
@@ -172,7 +177,9 @@ def seed() -> None:
         sys.exit(1)
 
     # ── 0. test user (이미 있으면 재사용)
-    existing = client.table("users").select("user_id").eq("user_id", str(TEST_USER_ID)).execute().data
+    existing = (
+        client.table("users").select("user_id").eq("user_id", str(TEST_USER_ID)).execute().data
+    )
     if not existing:
         client.table("users").insert({"user_id": str(TEST_USER_ID)}).execute()
         print(f"[+] user 생성: {TEST_USER_ID}")
@@ -194,10 +201,17 @@ def seed() -> None:
         return
 
     # ── 1. analysis_session
-    session = client.table("analysis_session").insert({
-        "user_id": str(TEST_USER_ID),
-        "contraindications": ["__test_seed__"],  # --check / --clean 식별 마커
-    }).execute().data[0]
+    session = (
+        client.table("analysis_session")
+        .insert(
+            {
+                "user_id": str(TEST_USER_ID),
+                "contraindications": ["__test_seed__"],  # --check / --clean 식별 마커
+            }
+        )
+        .execute()
+        .data[0]
+    )
     session_id = uuid.UUID(session["session_id"])
     print(f"[+] session: {session_id}")
 
@@ -212,33 +226,47 @@ def seed() -> None:
         # ── 2. photo 업로드 + 행 삽입
         p_path = _photo_path(session_id, kind)
         _upload(client, "photos", p_path, _make_photo(photo_color), "image/jpeg")
-        photo_row = client.table("photo").insert({
-            "session_id": str(session_id),
-            "kind": kind,
-            "storage_bucket": "photos",
-            "storage_path": p_path,
-            "width": PHOTO_W,
-            "height": PHOTO_H,
-        }).execute().data[0]
+        photo_row = (
+            client.table("photo")
+            .insert(
+                {
+                    "session_id": str(session_id),
+                    "kind": kind,
+                    "storage_bucket": "photos",
+                    "storage_path": p_path,
+                    "width": PHOTO_W,
+                    "height": PHOTO_H,
+                }
+            )
+            .execute()
+            .data[0]
+        )
         photo_id = photo_row["photo_id"]
         print(f"    [+] photo: {photo_id}")
 
         # ── 3. segmentation 업로드 + 행 삽입
         m_path = _map_path(session_id, kind)
         _upload(client, "segmentations", m_path, seg_bytes, "image/png")
-        seg_row = client.table("segmentation").insert({
-            "photo_id": photo_id,
-            "storage_bucket": "segmentations",
-            "map_path": m_path,
-            "map_width": MAP_W,
-            "map_height": MAP_H,
-            "label_map": label_map,
-            "model_name": MODEL_NAME,
-            "model_version": MODEL_VERSION,
-            "person_pixel_count": person_pixel_count,
-            "person_area_ratio": round(person_pixel_count / (MAP_W * MAP_H), 4),
-            "detected_class_count": len(COMPARABLE_PARTS),
-        }).execute().data[0]
+        seg_row = (
+            client.table("segmentation")
+            .insert(
+                {
+                    "photo_id": photo_id,
+                    "storage_bucket": "segmentations",
+                    "map_path": m_path,
+                    "map_width": MAP_W,
+                    "map_height": MAP_H,
+                    "label_map": label_map,
+                    "model_name": MODEL_NAME,
+                    "model_version": MODEL_VERSION,
+                    "person_pixel_count": person_pixel_count,
+                    "person_area_ratio": round(person_pixel_count / (MAP_W * MAP_H), 4),
+                    "detected_class_count": len(COMPARABLE_PARTS),
+                }
+            )
+            .execute()
+            .data[0]
+        )
         seg_id = seg_row["segmentation_id"]
         print(f"    [+] segmentation: {seg_id}")
 
@@ -246,50 +274,61 @@ def seed() -> None:
         bps_rows = []
         for class_name, pv, bx, by, bw, bh in COMPARABLE_PARTS:
             pc = pixel_counts[class_name]
-            bps_rows.append({
-                "segmentation_id": seg_id,
-                "class_name": class_name,
-                "label_value": pv,
-                "pixel_count": pc,
-                "area_ratio": round(pc / person_pixel_count, 4),
-                "bbox_x": bx,
-                "bbox_y": by,
-                "bbox_w": bw,
-                "bbox_h": bh,
-                "is_truncated": False,
-                "is_valid": True,
-                "invalid_reason": None,
-                "crop_bucket": None,
-                "crop_path": None,
-            })
+            bps_rows.append(
+                {
+                    "segmentation_id": seg_id,
+                    "class_name": class_name,
+                    "label_value": pv,
+                    "pixel_count": pc,
+                    "area_ratio": round(pc / person_pixel_count, 4),
+                    "bbox_x": bx,
+                    "bbox_y": by,
+                    "bbox_w": bw,
+                    "bbox_h": bh,
+                    "is_truncated": False,
+                    "is_valid": True,
+                    "invalid_reason": None,
+                    "crop_bucket": None,
+                    "crop_path": None,
+                }
+            )
         client.table("body_part_segment").insert(bps_rows).execute()
         print(f"    [+] body_part_segment: {len(bps_rows)}개")
 
     # ── 5. inbody (OCR 건너뛰고 DONE 으로 직접 삽입)
-    inbody_row = client.table("inbody").insert({
-        "session_id": str(session_id),
-        "device_type": "InBody570",
-        "age": 27,
-        "gender": "MALE",
-        "height": 175.0,
-        "weight": 72.4,
-        "bmi": 23.6,
-        "body_fat_mass": 14.2,
-        "body_fat_percentage": 19.6,
-        "skeletal_muscle_mass": 33.1,
-        "fat_free_mass": 58.2,
-        "bmr_kcal": 1642,
-        "status": "DONE",
-        "validation": {"overall": {"level": "ok"}},
-    }).execute().data[0]
+    inbody_row = (
+        client.table("inbody")
+        .insert(
+            {
+                "session_id": str(session_id),
+                "device_type": "InBody570",
+                "age": 27,
+                "gender": "MALE",
+                "height": 175.0,
+                "weight": 72.4,
+                "bmi": 23.6,
+                "body_fat_mass": 14.2,
+                "body_fat_percentage": 19.6,
+                "skeletal_muscle_mass": 33.1,
+                "fat_free_mass": 58.2,
+                "bmr_kcal": 1642,
+                "status": "DONE",
+                "validation": {"overall": {"level": "ok"}},
+            }
+        )
+        .execute()
+        .data[0]
+    )
     inbody_id = inbody_row["inbody_id"]
     print(f"\n[+] inbody: {inbody_id}")
 
     # ── 6. inbody_segment (5개)
-    client.table("inbody_segment").insert([
-        {"inbody_id": inbody_id, "segment": seg, "lean_mass": lm, "fat_mass": fm}
-        for seg, lm, fm in INBODY_SEGMENTS
-    ]).execute()
+    client.table("inbody_segment").insert(
+        [
+            {"inbody_id": inbody_id, "segment": seg, "lean_mass": lm, "fat_mass": fm}
+            for seg, lm, fm in INBODY_SEGMENTS
+        ]
+    ).execute()
     print(f"[+] inbody_segment: {len(INBODY_SEGMENTS)}개")
 
     print(f"""
@@ -306,6 +345,7 @@ def seed() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # 삭제
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def clean() -> None:
     client = _get_client()
@@ -325,6 +365,7 @@ def clean() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # 상태 확인
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 def check() -> int:
     client = _get_client()
@@ -346,13 +387,27 @@ def check() -> int:
     for s in sessions:
         sid = s["session_id"]
         photos = client.table("photo").select("photo_id,kind").eq("session_id", sid).execute().data
-        segs   = client.table("segmentation").select("segmentation_id").in_(
-            "photo_id", [p["photo_id"] for p in photos]
-        ).execute().data if photos else []
-        bps    = client.table("body_part_segment").select("segment_id").in_(
-            "segmentation_id", [s["segmentation_id"] for s in segs]
-        ).execute().data if segs else []
-        inbody = client.table("inbody").select("inbody_id,status").eq("session_id", sid).execute().data
+        segs = (
+            client.table("segmentation")
+            .select("segmentation_id")
+            .in_("photo_id", [p["photo_id"] for p in photos])
+            .execute()
+            .data
+            if photos
+            else []
+        )
+        bps = (
+            client.table("body_part_segment")
+            .select("segment_id")
+            .in_("segmentation_id", [s["segmentation_id"] for s in segs])
+            .execute()
+            .data
+            if segs
+            else []
+        )
+        inbody = (
+            client.table("inbody").select("inbody_id,status").eq("session_id", sid).execute().data
+        )
 
         print(
             f"    session {sid} ({s['status']})"

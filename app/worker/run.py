@@ -19,24 +19,46 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import logging
 import signal
 import sys
 import time
-from typing import Callable
 
 from app.config import settings
 from app.schemas.enums import LLM_KINDS, SEG_KINDS, JobKind
 from app.worker import queue
 
+# ⚠️ 핸들러 등록소는 app/worker/registry.py 에 있다. 여기 두면 안 된다 —
+#    `python -m app.worker.run` 은 이 파일을 __main__ 으로 로드하는데,
+#    핸들러가 `from app.worker.run import register` 를 하면 같은 파일이
+#    app.worker.run 이라는 **별개 모듈로 한 번 더** 로드된다. 그러면 등록이
+#    사본 쪽 딕셔너리로 들어가고 __main__ 쪽은 빈 채로 남는다.
+#    (재수출은 유지한다 — 기존 `from app.worker.run import register` 도 이제
+#     같은 딕셔너리를 가리키므로 안전하다)
+from app.worker.registry import HANDLERS, PREFLIGHTS, register  # noqa: F401
+
 log = logging.getLogger("worker")
 
-#: kind → 핸들러. 담당별로 여기에 등록한다.
-HANDLERS: dict[JobKind, Callable[[dict], dict | None]] = {}
+
+def _preflight() -> bool:
+    """기동 전 점검. 하나라도 실패하면 워커를 띄우지 않는다.
+
+    ⚠️ 설정이 틀렸는데 워커가 뜨면, 들어오는 잡을 재시도 한도까지 말아먹은 뒤에야
+       원인을 알게 된다. 사용자는 그동안 로딩 화면을 본다. 여기서 먼저 죽는 게 낫다.
+    """
+    ok = True
+    for check in PREFLIGHTS:
+        try:
+            check()
+        except Exception as e:  # noqa: BLE001
+            log.error("기동 점검 실패 — %s", e)
+            ok = False
+    return ok
 
 
-def register(kind: JobKind, fn: Callable[[dict], dict | None]) -> None:
-    HANDLERS[kind] = fn
+#: LLM 계열 핸들러 모듈 — 아직 없는 것이 섞여 있어도 된다.
+LLM_HANDLER_MODULES: tuple[str, ...] = ("ocr", "vlm", "routine")
 
 
 def _load_handlers(kinds: list[JobKind]) -> None:
@@ -44,15 +66,21 @@ def _load_handlers(kinds: list[JobKind]) -> None:
 
     ⚠️ 세그 핸들러를 import하면 torch/transformers가 딸려 온다.
        LLM 워커에서까지 그걸 로드할 이유가 없으므로 필요할 때만 가져온다.
+
+    ⚠️ **LLM 핸들러는 하나씩 따로 import 한다.**
+       `from app.worker.handlers import ocr, routine, vlm` 처럼 한 문장으로 묶으면,
+       셋 중 하나만 없어도 ImportError 로 문장 전체가 실패해 **이미 만들어진 것까지
+       등록이 안 된다.** 담당 B가 순서대로 만들어 나가는 동안 계속 밟게 되는 함정이다.
     """
     if any(k in SEG_KINDS for k in kinds):
         from app.worker.handlers import seg  # noqa: F401
 
     if any(k in LLM_KINDS for k in kinds):
-        try:
-            from app.worker.handlers import ocr, routine, vlm  # noqa: F401
-        except ImportError as e:
-            log.warning("LLM 핸들러 일부가 아직 없습니다 (담당 B 작업): %s", e)
+        for name in LLM_HANDLER_MODULES:
+            try:
+                importlib.import_module(f"app.worker.handlers.{name}")
+            except ImportError as e:
+                log.warning("핸들러 %s 없음 (아직 작업 중일 수 있습니다): %s", name, e)
 
 
 _stop = False
@@ -64,6 +92,28 @@ def _handle_signal(signum, frame) -> None:  # noqa: ANN001
     _stop = True
 
 
+def _reclaim(kinds: list[JobKind]) -> None:
+    """죽은 워커가 남긴 PROCESSING 잡을 되살린다.
+
+    ⚠️ 자기가 처리하는 kind 만 본다. 남의 kind 를 건드리면 멀쩡히 돌고 있는
+       다른 워커의 잡을 빼앗는다.
+    """
+    try:
+        reclaimed = queue.reclaim_stale(kinds)
+    except Exception:  # noqa: BLE001 — 회수 실패로 워커가 죽으면 안 된다
+        log.exception("좀비 잡 회수 실패 — 계속 진행합니다")
+        return
+
+    for job in reclaimed:
+        log.warning(
+            "[%s] %s 좀비 회수 → %s (시도 %d)",
+            job["job_id"],
+            job["kind"],
+            job["status"],
+            job["attempts"],
+        )
+
+
 def run(kinds: list[JobKind], poll_interval: float) -> int:
     _load_handlers(kinds)
 
@@ -72,13 +122,30 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
         log.error("핸들러가 없는 kind: %s", ", ".join(missing))
         return 1
 
-    log.info("워커 기동 — kinds=%s poll=%.1fs", ",".join(kinds), poll_interval)
+    if not _preflight():
+        return 1
+
+    log.info(
+        "워커 기동 — kinds=%s poll=%.1fs 좀비판정=%ds",
+        ",".join(kinds),
+        poll_interval,
+        settings.job_stale_after_sec,
+    )
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    # ⚠️ 기동 직후 한 번 — 팟을 껐다 켜는 게 좀비가 생기는 제일 흔한 경로다.
+    #    여기서 바로 회수해야 사용자가 로딩 화면에서 무한정 기다리지 않는다.
+    _reclaim(kinds)
+    last_reclaim = time.monotonic()
+
     idle_logged = False
     while not _stop:
+        if time.monotonic() - last_reclaim >= settings.job_reclaim_interval_sec:
+            _reclaim(kinds)
+            last_reclaim = time.monotonic()
+
         job = queue.claim(kinds)
         if job is None:
             if not idle_logged:
@@ -133,6 +200,12 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
     )
+
+    # ⚠️ 워커는 1초마다 Supabase에 폴링한다. httpx가 요청마다 INFO 로그를 남겨
+    #    실제 잡 로그가 파묻힌다. --verbose 를 준 게 아니면 조용히 시킨다.
+    if not args.verbose:
+        for noisy in ("httpx", "httpcore", "hpack", "urllib3"):
+            logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if args.all:
         kinds = list(JobKind)

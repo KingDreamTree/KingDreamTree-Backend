@@ -80,7 +80,10 @@ def list_prefix(bucket: str, prefix: str) -> list[str]:
             if not name:
                 continue
             child = f"{current}/{name}" if current else name
-            # id가 None이면 파일이 아니라 폴더다 (Supabase Storage 규약)
+            # ⚠️ 폴더와 파일을 id 로 가른다. 실제 응답을 찍어 확인한 것이다:
+            #     {"name": "sub",     "id": null}                    ← 폴더
+            #     {"name": "top.png", "id": "fa2baf0d-6a17-..."}     ← 파일
+            #    여기가 틀리면 유저 삭제에서 하위 폴더를 안 훑어 사람 사진이 남는다.
             if e.get("id") is None:
                 stack.append(child)
             else:

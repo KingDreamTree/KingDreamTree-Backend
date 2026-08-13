@@ -96,6 +96,31 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 
 **응답 201** — `photo_id` / `job_id` / `width` / `height` / `pose_scale_basis` / `was_mirrored` / `pose_landmarks` / `signed_url` / `signed_url_expires_at` / `segmented`
 
+### ⚠️ 레퍼런스 복장 안내가 꼭 필요합니다
+
+**레퍼런스에서 안 잡힌 부위는 사용자 사진이 아무리 잘 나와도 비교가 안 됩니다.** 두 사진의 교집합만 비교하기 때문입니다.
+
+실측 — 같은 서버 설정인데 사진만 다릅니다.
+
+| 레퍼런스 | 비교 가능 부위 |
+|---|---|
+| 긴팔·긴바지, 팔이 몸에 붙은 자세 | **0개** |
+| 반팔·반바지, 정면 전신 | **9개 전부** |
+
+**두 가지를 해주세요.**
+
+1. 레퍼런스 업로드 화면에 안내 — **"반팔·반바지, 정면 전신 사진을 올려주세요"**
+2. `SEG_REFERENCE` 잡이 `DONE`이 되면 `job.result` 를 확인하고, `valid_comparable` 이 3 미만이면 **그 자리에서 다른 사진을 권해주세요.** `invalid` 에 어떤 부위가 왜 빠졌는지 들어 있습니다
+
+```json
+{ "detected": 12, "valid_comparable": 2,
+  "invalid": [ { "class_name": "Left_Upper_Arm", "reason": "TOO_SMALL" } ] }
+```
+
+사용자 사진까지 다 찍게 한 다음에 "비교할 게 없습니다"라고 하면 두 번 일하게 됩니다.
+
+(사용자 사진 업로드 화면에도 같은 자리에 **"몸에 붙는 옷을 입어주세요"** 안내가 필요합니다 — 담당 B 요청)
+
 ### `POST /api/v1/sessions/{session_id}/photos/user`
 
 위 필드에 더해:

@@ -243,9 +243,7 @@ def render_overlay(image: Image.Image, labels: np.ndarray, names: tuple[str, ...
         cx, cy = centroid(labels == value)
         text = f"{value} {names[value]}"
         box = draw.textbbox((cx, cy), text, font=font, anchor="mm")
-        draw.rectangle(
-            (box[0] - 4, box[1] - 3, box[2] + 4, box[3] + 3), fill=(0, 0, 0)
-        )
+        draw.rectangle((box[0] - 4, box[1] - 3, box[2] + 4, box[3] + 3), fill=(0, 0, 0))
         draw.text((cx, cy), text, font=font, fill=(255, 255, 255), anchor="mm")
 
     return blended
@@ -358,9 +356,12 @@ def main() -> int:
     print()
     print(f"  → '{best}' 로 판정했습니다.")
     print()
+    version = segmenter.model_version(args.size)
     print("  app/services/sapiens_labels.py 에 반영:")
     print(f'       VERIFIED_ORDER = "{best}"')
-    print(f'       VERIFIED_WITH = "{segmenter.model_version(args.size)}"')
+    print(f'       VERIFIED_WITH  = (..., "{version}")   ← 튜플에 추가')
+    print()
+    print(f"  ⚠️ VERIFIED_WITH 에 {version} 이 없으면 워커가 이 모델로 실행을 거부합니다.")
     return 0
 
 

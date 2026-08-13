@@ -23,20 +23,21 @@ import logging
 import signal
 import sys
 import time
-from typing import Callable
 
 from app.config import settings
 from app.schemas.enums import LLM_KINDS, SEG_KINDS, JobKind
 from app.worker import queue
 
+# ⚠️ 핸들러 등록소는 app/worker/registry.py 에 있다. 여기 두면 안 된다 —
+#    `python -m app.worker.run` 은 이 파일을 __main__ 으로 로드하는데,
+#    핸들러가 `from app.worker.run import register` 를 하면 같은 파일이
+#    app.worker.run 이라는 **별개 모듈로 한 번 더** 로드된다. 그러면 등록이
+#    사본 쪽 딕셔너리로 들어가고 __main__ 쪽은 빈 채로 남는다.
+#    (재수출은 유지한다 — 기존 `from app.worker.run import register` 도 이제
+#     같은 딕셔너리를 가리키므로 안전하다)
+from app.worker.registry import HANDLERS, register  # noqa: F401
+
 log = logging.getLogger("worker")
-
-#: kind → 핸들러. 담당별로 여기에 등록한다.
-HANDLERS: dict[JobKind, Callable[[dict], dict | None]] = {}
-
-
-def register(kind: JobKind, fn: Callable[[dict], dict | None]) -> None:
-    HANDLERS[kind] = fn
 
 
 def _load_handlers(kinds: list[JobKind]) -> None:

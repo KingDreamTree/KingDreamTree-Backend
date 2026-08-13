@@ -56,7 +56,10 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     seg_min_pixels: int = 1500  # MIN_PIXELS: 유효 부위 최소 픽셀
     seg_min_ratio: float = 0.005  # MIN_RATIO: 인물 면적 대비 최소 비율 (0.5%)
-    map_max_side: int = 1024  # MAP_MAX_SIDE: 라벨 맵 긴 변 상한
+    #: MAP_MAX_SIDE: 라벨 맵 긴 변 상한. 넘으면 NEAREST로 줄인 뒤 통계를 낸다.
+    #  ⚠️ 지금 모델 출력이 768x1024라 실질 무동작이다. 모델을 바꿔 출력이 커질 때
+    #     전송량과 저장량을 묶어두는 안전장치다.
+    map_max_side: int = 1024
     min_comparable_parts: int = 3  # 비교 가능 부위가 이보다 적으면 재촬영 안내
 
     # ------------------------------------------------------------------ #

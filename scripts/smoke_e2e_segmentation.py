@@ -217,6 +217,14 @@ def main() -> int:
             f"파일 {img.size} vs DB ({seg['map_width']}, {seg['map_height']})",
         )
 
+        from app.config import settings as _s
+
+        check(
+            "맵 긴 변이 상한 이하",
+            max(img.size) <= _s.map_max_side,
+            f"{max(img.size)} / 상한 {_s.map_max_side}",
+        )
+
         values = {p["label_value"] for p in seg["palette"]}
         pixels = set(img.getdata())
         unexpected = pixels - values - {0}

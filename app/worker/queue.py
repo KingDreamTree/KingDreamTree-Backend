@@ -4,7 +4,7 @@
 핸들러는 app/worker/handlers/ 아래에 각자 추가하고, 여기는 건드리지 않는다.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import UUID
 
@@ -130,6 +130,74 @@ def claim(kinds: Iterable[JobKind]) -> dict[str, Any] | None:
         # 다른 워커가 먼저 가져갔다 — 다음 후보로
 
     return None
+
+
+# --------------------------------------------------------------------------- #
+# 좀비 회수
+# --------------------------------------------------------------------------- #
+
+
+def reclaim_stale(
+    kinds: Iterable[JobKind],
+    older_than_sec: int | None = None,
+) -> list[dict[str, Any]]:
+    """워커가 죽어 PROCESSING 인 채로 멈춘 잡을 되살린다.
+
+    ⚠️ 이게 없으면 팟을 끄거나 워커가 죽는 순간 그 잡은 **영영 안 끝난다.**
+       attempts 는 이미 올라갔고 status 는 PROCESSING 이라 claim() 이 다시 집지
+       않는다. 사용자는 로딩 화면에서 무한정 기다린다.
+
+    ⚠️ **attempts 가 한도에 닿은 잡을 PENDING 으로 되돌리면 안 된다.**
+       claim() 이 `attempts < job_max_attempts` 로 거르므로, 되돌려도 아무도
+       집지 않는 채 PENDING 으로 남는다. 좀비의 상태만 바뀔 뿐이다.
+       그런 잡은 FAILED 로 종결시켜 화면이 실패를 표시할 수 있게 한다.
+
+    ⚠️ 자기가 처리하는 kind 만 회수할 것. 남의 kind 까지 건드리면 멀쩡히 돌고
+       있는 다른 워커의 잡을 빼앗아 같은 일을 두 번 하게 된다.
+
+    반환: 실제로 회수한 잡들 (status 가 무엇으로 바뀌었는지 포함)
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(
+        seconds=older_than_sec if older_than_sec is not None else settings.job_stale_after_sec
+    )
+    client = get_client()
+
+    candidates = (
+        client.table("job")
+        .select("job_id,kind,attempts,started_at")
+        .eq("status", JobStatus.PROCESSING)
+        .in_("kind", [str(k) for k in kinds])
+        .lt("started_at", cutoff.isoformat())
+        .execute()
+        .data
+    )
+
+    reclaimed: list[dict[str, Any]] = []
+    for job in candidates:
+        exhausted = job["attempts"] >= settings.job_max_attempts
+        patch: dict[str, Any] = (
+            {
+                "status": JobStatus.FAILED,
+                "error": "처리 중 서버가 중단되어 실패로 정리했습니다. 다시 시도해주세요.",
+                "finished_at": _now(),
+            }
+            if exhausted
+            else {"status": JobStatus.PENDING}
+        )
+
+        # ⚠️ CAS. 그 사이 워커가 살아나 complete/fail 했을 수 있다.
+        updated = (
+            client.table("job")
+            .update(patch)
+            .eq("job_id", job["job_id"])
+            .eq("status", JobStatus.PROCESSING)
+            .execute()
+            .data
+        )
+        if updated:
+            reclaimed.append(updated[0])
+
+    return reclaimed
 
 
 # --------------------------------------------------------------------------- #

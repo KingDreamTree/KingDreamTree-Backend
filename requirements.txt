@@ -14,8 +14,22 @@ supabase==2.31.0
 # ── Image processing ────────────────────────────────────────────────────────
 pillow==12.3.0
 pillow-heif==1.5.0
+numpy==2.3.4
 
-# ── ML (실제 모델 붙일 때 주석 해제) ─────────────────────────────────────────
-# torch==2.3.0
-# torchvision==0.18.0
-# safetensors==0.4.3
+# ── 개발 도구 ───────────────────────────────────────────────────────────────
+black==25.9.0
+isort==7.0.0
+
+# ⚠️ ML 의존성(torch, transformers)은 여기 없습니다.
+#
+#    torch는 실행 환경마다 받아야 할 빌드가 다릅니다.
+#      로컬 GPU (RTX 50xx / Blackwell) → cu128 빌드. cu121 이하는 GPU를 인식조차 못 함
+#      EC2 (CPU만)                     → cpu 빌드. PyPI 기본은 Linux에서 CUDA 빌드(2GB+)를 받음
+#      RunPod                          → 팟 이미지의 CUDA 버전에 맞춰
+#
+#    한 파일에 고정하면 어느 한쪽이 반드시 깨집니다. 환경별 스크립트로 분리했습니다:
+#      scripts/install_local_gpu.sh   로컬 개발 (CUDA 12.8)
+#      scripts/install_cpu.sh         EC2 / CPU 전용
+#      scripts/install_runpod.sh      RunPod GPU 워커
+#
+#    버전은 requirements-ml.txt 에 한 곳으로 모아 관리합니다.

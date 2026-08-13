@@ -72,10 +72,18 @@ CANDIDATES: dict[str, tuple[str, ...]] = {
 
 #: ⚠️ 실측으로 확정한 뒤 여기에 후보 이름을 박는다. None이면 미검증.
 #:    scripts/verify_labels.py 를 돌려 확인한 값을 넣을 것.
-VERIFIED_ORDER: str | None = None
+#:
+#:    2026-08-13 확정 — 정면 전신 사진(팔다리 노출)으로 실측.
+#:      alpha  통과 26 / 실패 0   점수 72
+#:      append 통과 20 / 실패 3   점수 46
+#:    append로 읽으면 Left_Foot이 화면 맨 위(y=96, 머리카락 자리)에 온다.
+#:    alpha는 좌우 배치까지 통과했다:
+#:      Left_Upper_Arm x=520 vs Right_Upper_Arm x=245 (정면 기준 피사체의 왼쪽 = x가 큼)
+#:    fp16 / bfloat16 결과는 픽셀 수까지 0.5% 이내로 동일해 정밀도 영향은 없었다.
+VERIFIED_ORDER: str | None = "alpha"
 
 #: 검증에 쓴 모델. 크기가 달라도 29클래스 어휘는 같지만, 다른 모델로 넘어가면 재확인한다.
-VERIFIED_WITH: str | None = None
+VERIFIED_WITH: str | None = "sapiens2-seg-5b"
 
 
 class LabelsNotVerifiedError(RuntimeError):

@@ -66,7 +66,7 @@ Sapiens2 모델 버전이 바뀌면 클래스 ID가 재배열됩니다. `label_m
 | **8-bit 그레이스케일, 알파 채널 없음** | RGB로 저장하면 3배 커지고, 알파가 있으면 브라우저가 프리멀티플라이하며 값을 바꿉니다 |
 | **ICC 프로파일 넣지 않기** | 브라우저 색 관리가 픽셀 값을 보정해버립니다 |
 | **리사이즈는 nearest-neighbor만** | bilinear/bicubic 보간은 라벨을 섞어 **존재하지 않는 클래스를 만들어냅니다.** 가장 흔한 사고입니다 |
-| **클래스 수는 255개 이하** | 8-bit 한계. Sapiens2는 28개 수준이라 여유 있음 |
+| **클래스 수는 255개 이하** | 8-bit 한계. Sapiens2는 29개라 여유 있음 |
 
 > 팔레트 PNG(P 모드)는 쓰지 마세요. 브라우저가 캔버스에 그릴 때 팔레트를 RGB로 펼치므로 값을 되돌리는 과정이 하나 더 생깁니다. **그레이스케일이 가장 안전합니다.**
 
@@ -250,9 +250,17 @@ ctx.putImageData(out, 0, 0);
 | `Right_Upper_Leg` | 오른쪽 허벅지 | LOWER | RIGHT_LEG | `#E03131` |
 | `Right_Lower_Leg` | 오른쪽 종아리 | LOWER | RIGHT_LEG | `#FF8787` |
 
-**seed — 나머지 클래스 (`is_comparable = false`, `part_group = 'OTHER'`, `color_hex = NULL`)**
+**seed — 나머지 20개 (`is_comparable = false`, `part_group = 'OTHER'`, `color_hex = NULL`)**
 
-`Background` · `Apparel` · `Upper_Clothing` · `Lower_Clothing` · `Shoe` · `Sock` · `Eyeglasses` · `Hair` · `Face_Neck` · `Lip` · `Teeth` · `Tongue` · `Hand` · `Foot` (⚠️ 실제 목록은 확인 후 확정)
+`Background` · `Apparel` · `Upper_Clothing` · `Lower_Clothing` · `Left_Shoe` · `Right_Shoe` · `Left_Sock` · `Right_Sock` · `Left_Hand` · `Right_Hand` · `Left_Foot` · `Right_Foot` · `Hair` · `Face_Neck` · `Eyeglasses` · `Upper_Lip` · `Lower_Lip` · `Upper_Teeth` · `Lower_Teeth` · `Tongue`
+
+**합계 29개** = Sapiens(1세대) goliath 28클래스 + `Eyeglasses`
+
+> ⚠️ **손·발·신발·양말은 좌우가 별도 클래스이고, 입술·치아도 상/하가 나뉩니다.**
+> 초안에서 `Shoe` `Sock` `Hand` `Foot` `Lip` `Teeth` 로 뭉뚱그렸던 것을 바로잡았습니다.
+> 재적용은 `scripts/seed_body_parts.py` (멱등)로 합니다.
+
+출처 — [Sapiens SEG_README](https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md) (28클래스 정확한 철자), [facebook/sapiens2](https://huggingface.co/facebook/sapiens2) (29클래스로 확장)
 
 **설계 메모**
 
@@ -260,7 +268,8 @@ ctx.putImageData(out, 0, 0);
 - `is_comparable` — 비교 대상 판정은 이제 **`is_comparable AND is_valid`** 두 조건입니다. 워커의 `SKIN_CLASSES` 상수는 없애고 이 테이블을 기동 시 읽으세요.
 - `color_hex` — ⚠️ **프론트에 색을 하드코딩하게 두지 마세요.** 부위가 추가되거나 이름이 바뀌면 색과 라벨이 어긋납니다. 서버가 팔레트를 내려줍니다.
   - 좌/우가 비슷한 색 계열(주황↔초록, 보라↔빨강)인 이유는 **좌우 반전 사고를 눈으로 잡기 위해서**입니다. 색이 좌우 대칭으로 뒤집혀 보이면 §5의 반전 규칙이 깨진 것입니다.
-- ⚠️ **`class_name` 값은 여전히 확정이 아닙니다** (미확정 #2). 실제 추론 라벨을 찍어본 뒤 seed를 확정하세요.
+- ✅ **클래스 "이름"은 확정입니다** (공식 문서 확인). 다만 **픽셀 값(인덱스)은 확인하지 않았습니다** — `Eyeglasses`가 어느 인덱스에 삽입되며 나머지가 밀리는지 알 수 없기 때문입니다. **인덱스를 이 테이블에 저장하지 않는 설계라 문제가 되지 않습니다.** 추론 시점의 매핑은 `segmentation.label_map`에 행마다 박제됩니다.
+- ⚠️ `Eyeglasses` **철자만은 원문에서 확인하지 못했습니다.** 첫 추론 후 `label_map`을 마스터와 대조해 불일치가 나오면 그 행만 고치면 됩니다. (그래서 워커가 기동 시 대조하고 경고 로그를 남겨야 합니다 — §1.2)
 
 ---
 
@@ -518,7 +527,7 @@ users
 | # | 항목 | 영향 | 상태 |
 |---|---|---|---|
 | 1 | `users`에 들어갈 컬럼 | `users` 전체 | 미정 |
-| 2 | **Sapiens2 실제 클래스명·개수** | `body_part` seed 전체, `label_map` | **미확인. 최우선** |
+| 2 | ~~Sapiens2 실제 클래스명·개수~~ | `body_part` seed | ✅ **확정 — 29개** (28 + Eyeglasses). `Eyeglasses` 철자와 인덱스만 첫 추론에서 확인 |
 | 3 | WIM 3D 결과지 구조 | `inbody` 컬럼 | 실물 샘플 필요 |
 | 4 | 인바디 기종별 인쇄 항목 | `inbody` NULL 여부 | 샘플 5~10장 후 확정 |
 | 5 | 유사도 점수 산출 방식 | `overall_diagnosis.score_source` | 미정 |

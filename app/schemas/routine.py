@@ -1,4 +1,98 @@
+from typing import Any
+
 from pydantic import BaseModel, Field
+
+# ── F10 — 루틴 생성 ──────────────────────────────────────────────────────────
+
+
+class InbodySnapshot(BaseModel):
+    """루틴 생성에 쓰이는 인바디 수치 (선택). 전체 inbody 행이 아니라 필요한 필드만."""
+
+    weight_kg: float | None = None
+    skeletal_muscle_kg: float | None = None
+    body_fat_pct: float | None = None
+    bmi: float | None = None
+    visceral_fat_level: int | None = None
+    segmental_muscle: dict[str, float | None] | None = None
+
+
+class RoutineGenerateRequest(BaseModel):
+    """POST /routines 요청 — 4주 루틴 생성."""
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "exercise_days_per_week": 3,
+                "overall_diagnosis": {
+                    "body_type": "역삼각형",
+                    "overall_score": 72,
+                    "priority_improvements": ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"],
+                    "weak_points": ["어깨 전면 근력 부족", "코어 안정성"],
+                    "strong_points": ["하체 균형"],
+                    "summary": "어깨 너비가 레퍼런스 대비 좁고 코어 안정성이 부족합니다.",
+                },
+                "inbody": {
+                    "weight_kg": 72.5,
+                    "skeletal_muscle_kg": 33.2,
+                    "body_fat_pct": 18.4,
+                    "bmi": 22.1,
+                },
+            }
+        }
+    }
+
+    exercise_days_per_week: int = Field(ge=1, le=7, description="주당 운동 가능 일수 (1~7)")
+    overall_diagnosis: dict[str, Any] = Field(
+        description="F09 종합 진단 결과 (VLM_OVERALL job.result)"
+    )
+    inbody: InbodySnapshot | None = Field(
+        default=None, description="인바디 데이터. 없으면 세그 데이터만으로 루틴 생성"
+    )
+
+
+class RoutineGenerateResponse(BaseModel):
+    """POST /routines 응답."""
+
+    job_id: str = Field(description="ROUTINE_GEN 잡 ID. GET /jobs/{job_id}로 폴링")
+    month_routine_id: str | None = Field(
+        default=None, description="생성 완료 시 채워짐 (동기 처리 시)"
+    )
+
+
+# ── F10 일수 변경 ─────────────────────────────────────────────────────────────
+
+
+class RoutineDaysChangeRequest(BaseModel):
+    """POST /routines/{id}/change-days — 운동 일수 변경 → 새 버전 생성."""
+
+    exercise_days_per_week: int = Field(ge=1, le=7)
+
+
+# ── F11 오늘의 루틴 ───────────────────────────────────────────────────────────
+
+
+class DayRoutineExercise(BaseModel):
+    order_index: int
+    name: str
+    equipment: str | None
+    target_muscle: str | None
+    sets: int
+    reps: int | None
+    weight_kg: float | None
+    rest_sec: int | None
+    note: str | None
+
+
+class DayRoutineResponse(BaseModel):
+    day_number: int
+    is_rest: bool
+    title: str | None
+    estimated_duration_min: int | None
+    exercises: list[DayRoutineExercise]
+    disclaimer: str = "weight_kg는 LLM 추정치입니다. 본인의 체력에 맞게 조정하세요."
+
+
+# ── 구 스캐폴드 (참고용, 라우터 미등록) ───────────────────────────────────────
 
 
 class RoutineRequest(BaseModel):

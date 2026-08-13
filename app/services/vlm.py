@@ -70,20 +70,44 @@ async def _call_claude(prompt: str, max_tokens: int = 1024) -> str:
     return message.content[0].text
 
 
-async def _call_openai(prompt: str, max_tokens: int = 1024) -> str:
-    """OpenAI API 호출. VLM_PROVIDER=openai 일 때 사용."""
-    # TODO: openai 패키지 설치 후 구현
-    # requirements.txt의 openai 주석 해제 필요
-    raise NotImplementedError("VLM_PROVIDER=openai 미구현 — USE_MOCK=true 또는 다른 provider 사용")
+async def _call_openai(
+    prompt: str,
+    max_tokens: int = 1024,
+    image_urls: list[str] | None = None,
+) -> str:
+    """OpenAI GPT-4o API 호출. VLM_PROVIDER=openai 일 때 사용.
+
+    image_urls: signed URL 목록. 텍스트+이미지 멀티모달 호출.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+    content: list[dict] = []
+    if image_urls:
+        for url in image_urls:
+            content.append({"type": "image_url", "image_url": {"url": url}})
+    content.append({"type": "text", "text": prompt})
+
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        max_tokens=max_tokens,
+        messages=[{"role": "user", "content": content}],
+    )
+    return response.choices[0].message.content or ""
 
 
-async def _call_vlm(prompt: str, max_tokens: int = 1024) -> str:
+async def _call_vlm(
+    prompt: str,
+    max_tokens: int = 1024,
+    image_urls: list[str] | None = None,
+) -> str:
     """VLM_PROVIDER 설정에 따라 적절한 provider를 호출한다."""
     provider = settings.vlm_provider.lower()
     if provider == "claude":
         return await _call_claude(prompt, max_tokens)
     if provider == "openai":
-        return await _call_openai(prompt, max_tokens)
+        return await _call_openai(prompt, max_tokens, image_urls)
     raise ValueError(
         f"VLM_PROVIDER='{settings.vlm_provider}' 는 지원하지 않는 값입니다. "
         "'claude' | 'openai' 중 선택하거나 USE_MOCK=true로 우회하세요."

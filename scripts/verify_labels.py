@@ -1,8 +1,15 @@
-"""Sapiens2 라벨 인덱스 ↔ 부위 매핑 실측 검증.
+"""라벨 매핑 점검 — 사람 사진 한 장으로.
 
-config.json의 id2label이 "LABEL_0"..."LABEL_28" 플레이스홀더라, 어느 픽셀 값이
-어느 부위인지 모델 파일만으로는 알 수 없다. 사람 사진 한 장을 돌려서
-해부학적으로 말이 되는 후보를 고른다.
+클래스 목록 자체는 공식 문서에서 온다 (app/services/sapiens_labels.py).
+이 스크립트는 그 목록이 **실제 추론 결과와 맞물리는지** 확인한다.
+
+언제 쓰나
+    * 새 체크포인트로 갈아탈 때 — 그 모델의 클래스 순서가 같은지
+    * 결과가 이상할 때 — 부위가 뒤바뀐 건지 모델이 못 잡은 건지 가르기 위해
+
+⚠️ **좌우는 문서에 안 적혀 있다.** Left/Right 가 피사체 기준인지 화면 기준인지는
+   실제로 그려봐야 안다. 뒤집히면 진단이 통째로 반대가 되고 에러는 안 난다.
+   이 스크립트의 좌우 점검과 오버레이가 그걸 잡기 위한 것이다.
 
 사용법:
     python scripts/verify_labels.py --image path/to/person.jpg
@@ -11,11 +18,11 @@ config.json의 id2label이 "LABEL_0"..."LABEL_28" 플레이스홀더라, 어느 
 ⚠️ 사진 조건
     * 정면을 보고 서 있을 것  ← 좌우 판정이 여기에 의존한다
     * 상하체가 모두 나올 것
-    * 팔다리가 드러날 것 (긴팔·긴바지면 팔다리 클래스가 안 잡혀 검증이 약해진다)
+    * 팔다리가 드러날 것 (긴팔·긴바지면 팔다리 클래스가 안 잡혀 점검이 약해진다)
 
 산출물
-    <out>/overlay_<후보>.png   원본 위에 부위별 색칠 — 눈으로 확인용
-    콘솔 리포트                 후보별 해부학 점검 결과
+    <out>/overlay.png   원본 위에 부위별 색칠 + 이름 — 눈으로 확인용
+    콘솔 리포트          해부학 점검 결과
 """
 
 from __future__ import annotations
@@ -32,7 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.services import sapiens_labels, segmenter  # noqa: E402
 
-# 후보 구분용 색 (body_part.color_hex 와 별개 — 여기서는 전 클래스를 다 칠한다)
+# 부위 구분용 색 (body_part.color_hex 와 별개 — 여기서는 전 클래스를 다 칠한다)
 PALETTE = [
     (0, 0, 0),
     (76, 110, 245),
@@ -65,25 +72,6 @@ PALETTE = [
     (150, 150, 150),
 ]
 
-
-def centroid(mask: np.ndarray) -> tuple[float, float]:
-    ys, xs = np.nonzero(mask)
-    return float(xs.mean()), float(ys.mean())
-
-
-def analyze(labels: np.ndarray, names: tuple[str, ...]) -> dict[str, dict]:
-    """클래스별 픽셀 수 / 중심점."""
-    out: dict[str, dict] = {}
-    present, counts = np.unique(labels, return_counts=True)
-    for value, count in zip(present.tolist(), counts.tolist()):
-        if value >= len(names):
-            continue
-        name = names[value]
-        cx, cy = centroid(labels == value)
-        out[name] = {"index": value, "pixels": int(count), "cx": cx, "cy": cy}
-    return out
-
-
 #: 얼굴 세부 클래스 — 사람 픽셀의 몇 %를 넘을 수 없다.
 #  입술이 몸의 3%를 차지하는 사진은 존재하지 않는다.
 TINY_CLASSES = ("Lower_Lip", "Upper_Lip", "Lower_Teeth", "Upper_Teeth", "Tongue", "Eyeglass")
@@ -102,64 +90,78 @@ SYMMETRIC_PAIRS = (
 SYMMETRY_MAX_RATIO = 3.0
 
 
+def centroid(mask: np.ndarray) -> tuple[float, float]:
+    ys, xs = np.nonzero(mask)
+    return float(xs.mean()), float(ys.mean())
+
+
+def analyze(labels: np.ndarray, names: tuple[str, ...]) -> dict[str, dict]:
+    """클래스별 픽셀 수 / 중심점."""
+    out: dict[str, dict] = {}
+    present, counts = np.unique(labels, return_counts=True)
+    for value, count in zip(present.tolist(), counts.tolist()):
+        if value >= len(names):
+            continue
+        cx, cy = centroid(labels == value)
+        out[names[value]] = {"index": value, "pixels": int(count), "cx": cx, "cy": cy}
+    return out
+
+
 def run_checks(
     stats: dict[str, dict], height: int, person_pixels: int
-) -> list[tuple[str, bool | None, str, int]]:
-    """해부학적으로 말이 되는지 점검. (설명, 통과여부, 비고, 가중치)
+) -> list[tuple[str, bool | None, str, bool]]:
+    """해부학적으로 말이 되는지 점검. (설명, 통과여부, 비고, 결정적인가)
 
     통과여부 None = 해당 클래스가 사진에 없어서 판정 불가.
-    가중치가 큰 항목은 "물리적으로 불가능한" 것들이라 위반 시 후보가 탈락한다.
     """
-    checks: list[tuple[str, bool | None, str, int]] = []
+    checks: list[tuple[str, bool | None, str, bool]] = []
 
     def get(name: str) -> dict | None:
         s = stats.get(name)
         # 너무 작은 영역은 노이즈로 보고 판정에서 제외
         return s if s and s["pixels"] > 200 else None
 
-    # ── 크기 상식 (가중치 큼) — 사진에 팔다리가 안 나와도 판정 가능 ──────────
+    # ── 크기 상식 — 사진에 팔다리가 안 나와도 판정 가능 ────────────────────
     for name in TINY_CLASSES:
         s = stats.get(name)
         if not s or not person_pixels:
             continue
         ratio = s["pixels"] / person_pixels
-        ok = ratio <= TINY_MAX_RATIO
         checks.append(
             (
                 f"{name}가 충분히 작은가",
-                ok,
+                ratio <= TINY_MAX_RATIO,
                 f"사람 픽셀의 {ratio * 100:.1f}% (상한 {TINY_MAX_RATIO * 100:.0f}%)",
-                5,
+                True,
             )
         )
 
-    # ── 좌우 대칭 (가중치 중간) ────────────────────────────────────────────
+    # ── 좌우 대칭 ──────────────────────────────────────────────────────────
     for left, right in SYMMETRIC_PAIRS:
         a, b = get(left), get(right)
         if not a or not b:
             continue
         big, small = max(a["pixels"], b["pixels"]), min(a["pixels"], b["pixels"])
         ratio = big / small if small else float("inf")
-        ok = ratio <= SYMMETRY_MAX_RATIO
         checks.append(
             (
                 f"{left}/{right} 크기 대칭",
-                ok,
+                ratio <= SYMMETRY_MAX_RATIO,
                 f"{a['pixels']:,} vs {b['pixels']:,} ({ratio:.1f}배)",
-                3,
+                False,
             )
         )
 
-    def vertical(upper: str, lower: str, label: str, weight: int = 1) -> None:
+    def vertical(upper: str, lower: str, label: str) -> None:
         a, b = get(upper), get(lower)
         if not a or not b:
-            checks.append((label, None, f"{upper} 또는 {lower} 없음", weight))
+            checks.append((label, None, f"{upper} 또는 {lower} 없음", False))
             return
-        ok = a["cy"] < b["cy"]
-        checks.append((label, ok, f"{upper} y={a['cy']:.0f} vs {lower} y={b['cy']:.0f}", weight))
+        checks.append(
+            (label, a["cy"] < b["cy"], f"{upper} y={a['cy']:.0f} vs {lower} y={b['cy']:.0f}", False)
+        )
 
-    vertical("Upper_Clothing", "Lower_Clothing", "상의가 하의보다 위", 3)
-
+    vertical("Upper_Clothing", "Lower_Clothing", "상의가 하의보다 위")
     vertical("Hair", "Torso", "머리가 몸통보다 위")
     vertical("Face_Neck", "Torso", "얼굴·목이 몸통보다 위")
     vertical("Torso", "Left_Upper_Leg", "몸통이 허벅지보다 위")
@@ -168,31 +170,46 @@ def run_checks(
     vertical("Left_Upper_Leg", "Left_Lower_Leg", "왼쪽 허벅지가 종아리보다 위")
     vertical("Right_Upper_Leg", "Right_Lower_Leg", "오른쪽 허벅지가 종아리보다 위")
 
-    # ⚠️ 정면 기준. 피사체의 "왼쪽"은 이미지에서는 오른쪽(x가 큼)에 나온다.
+    # ⚠️ 여기가 이 스크립트의 핵심이다. Left/Right 는 **피사체 기준**이라
+    #    정면 사진에서 피사체의 왼쪽은 이미지의 오른쪽(x가 큼)에 나온다.
+    #    문서에 안 적힌 유일한 항목이고, 틀리면 진단이 통째로 좌우 반대가 된다.
     for left, right, label in (
-        ("Left_Upper_Arm", "Right_Upper_Arm", "좌우 상완 배치 (정면 기준)"),
-        ("Left_Upper_Leg", "Right_Upper_Leg", "좌우 허벅지 배치 (정면 기준)"),
+        ("Left_Upper_Arm", "Right_Upper_Arm", "좌우 상완 배치 (피사체 기준)"),
+        ("Left_Upper_Leg", "Right_Upper_Leg", "좌우 허벅지 배치 (피사체 기준)"),
     ):
         a, b = get(left), get(right)
         if not a or not b:
-            checks.append((label, None, f"{left} 또는 {right} 없음", 1))
+            checks.append((label, None, f"{left} 또는 {right} 없음", True))
             continue
-        ok = a["cx"] > b["cx"]
-        checks.append((label, ok, f"{left} x={a['cx']:.0f} vs {right} x={b['cx']:.0f}", 1))
+        checks.append(
+            (label, a["cx"] > b["cx"], f"{left} x={a['cx']:.0f} vs {right} x={b['cx']:.0f}", True)
+        )
 
-    # 발/신발/양말은 화면 아래쪽 (가중치 큼 — 발이 화면 한가운데 있을 수 없다)
+    # 발/신발/양말은 화면 아래쪽 — 발이 화면 한가운데 있을 수 없다
     for name in ("Left_Foot", "Right_Foot", "Left_Shoe", "Right_Shoe", "Left_Sock", "Right_Sock"):
         s = get(name)
         if s:
-            ok = s["cy"] > height * 0.6
-            checks.append((f"{name}가 화면 아래쪽", ok, f"y={s['cy']:.0f} / 높이 {height}", 4))
+            checks.append(
+                (
+                    f"{name}가 화면 아래쪽",
+                    s["cy"] > height * 0.6,
+                    f"y={s['cy']:.0f} / 높이 {height}",
+                    True,
+                )
+            )
 
     # 머리카락·얼굴은 화면 위쪽
     for name in ("Hair", "Face_Neck"):
         s = get(name)
         if s:
-            ok = s["cy"] < height * 0.6
-            checks.append((f"{name}가 화면 위쪽", ok, f"y={s['cy']:.0f} / 높이 {height}", 3))
+            checks.append(
+                (
+                    f"{name}가 화면 위쪽",
+                    s["cy"] < height * 0.6,
+                    f"y={s['cy']:.0f} / 높이 {height}",
+                    True,
+                )
+            )
 
     return checks
 
@@ -215,8 +232,8 @@ def _font(size: int):
 def render_overlay(image: Image.Image, labels: np.ndarray, names: tuple[str, ...]) -> Image.Image:
     """원본 위에 부위별 색칠 + **부위 이름을 직접 그린다**.
 
-    ⚠️ 색만 칠하면 후보끼리 이미지가 똑같아서 눈으로 구분할 수 없다.
-       "몸통 위치에 Torso 라고 적혀 있는가"를 볼 수 있어야 판정이 된다.
+    ⚠️ 색만 칠하면 좌우가 뒤집혔는지 알 수 없다. "왼팔 자리에 Left_Upper_Arm 이
+       적혀 있는가"를 볼 수 있어야 판정이 된다.
     """
     from PIL import ImageDraw
 
@@ -250,7 +267,7 @@ def render_overlay(image: Image.Image, labels: np.ndarray, names: tuple[str, ...
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Sapiens2 라벨 매핑 실측 검증")
+    ap = argparse.ArgumentParser(description="라벨 매핑 점검")
     ap.add_argument("--image", required=True, help="정면·전신 사람 사진")
     ap.add_argument("--size", default=None, help="백본 크기 (기본: .env의 SAPIENS_SIZE)")
     ap.add_argument("--out", default="out", help="오버레이 저장 폴더")
@@ -280,89 +297,64 @@ def main() -> int:
     print(f"  맵 {w}x{h}, 클래스 {num_classes}개, {ms}ms")
     print(f"  검출된 인덱스: {sorted(np.unique(labels).tolist())}")
 
-    if num_classes != 29:
-        print(f"  ⚠️ 29개가 아닙니다 ({num_classes}). 후보 매핑이 안 맞을 수 있습니다.")
-
-    results: dict[str, int] = {}
-
-    for cand, names in sapiens_labels.CANDIDATES.items():
-        if len(names) != num_classes:
-            print(f"\n[건너뜀] 후보 '{cand}' — 길이 {len(names)} ≠ 클래스 {num_classes}")
-            continue
-
+    names = sapiens_labels.LABEL_NAMES
+    if num_classes != len(names):
         print()
-        print("=" * 70)
-        print(f"후보: {cand}")
-        print("=" * 70)
-
-        stats = analyze(labels, names)
-        print("  검출된 클래스 (픽셀 많은 순):")
-        for name, s in sorted(stats.items(), key=lambda kv: -kv[1]["pixels"])[:12]:
-            print(
-                f"    {s['index']:>3}  {name:<18} {s['pixels']:>8,}px  "
-                f"중심 ({s['cx']:.0f}, {s['cy']:.0f})"
-            )
-
-        person_pixels = int(np.count_nonzero(labels != 0))
-        checks = run_checks(stats, h, person_pixels)
-        passed = sum(1 for _, ok, _, _ in checks if ok is True)
-        failed = sum(1 for _, ok, _, _ in checks if ok is False)
-        skipped = sum(1 for _, ok, _, _ in checks if ok is None)
-
-        print()
-        print("  해부학 점검:")
-        for label, ok, note, weight in checks:
-            mark = "O" if ok is True else ("X" if ok is False else "-")
-            heavy = " ←결정적" if ok is False and weight >= 4 else ""
-            print(f"    [{mark}] {label:<32} {note}{heavy}")
-        print(f"  → 통과 {passed} / 실패 {failed} / 판정불가 {skipped}")
-
-        # 가중치를 반영한 점수. 실패는 두 배로 깎는다.
-        results[cand] = sum(
-            weight if ok is True else (-weight * 2 if ok is False else 0)
-            for _, ok, _, weight in checks
-        )
-
-        overlay = render_overlay(image, labels, names)
-        path = out_dir / f"overlay_{cand}.png"
-        overlay.save(path)
-        print(f"  오버레이: {path}")
-
-    print()
-    print("=" * 70)
-    print("결론")
-    print("=" * 70)
-    if not results:
-        print("  판정 가능한 후보가 없습니다.")
+        print(f"  [X] 모델이 {num_classes}클래스인데 라벨 목록은 {len(names)}개입니다.")
+        print("      다른 모델일 수 있습니다 — 그 모델 문서에서 클래스 목록을 확인하세요.")
         return 1
 
-    best = max(results, key=lambda k: results[k])
-    ordered = sorted(results.items(), key=lambda kv: -kv[1])
-    for cand, score in ordered:
-        print(f"  {cand:<10} 점수 {score}")
-
-    if len(ordered) > 1:
-        gap = ordered[0][1] - ordered[1][1]
-        if gap <= 0:
-            print()
-            print("  ⚠️ 판정 불가 — 점수가 같거나 뒤집혔습니다.")
-            print("     전신 + 팔다리 드러난 사진으로 다시 돌려보세요.")
-            return 1
-        if gap < 5:
-            print()
-            print(f"  ⚠️ 점수 차이가 작습니다 (gap {gap}). 근거가 약합니다.")
-            print("     전신 + 팔다리 드러난 사진으로 한 번 더 확인하는 걸 권합니다.")
+    stats = analyze(labels, names)
+    person_pixels = int(np.count_nonzero(labels != 0))
 
     print()
-    print(f"  → '{best}' 로 판정했습니다.")
+    print("=" * 70)
+    print("검출된 클래스 (픽셀 많은 순)")
+    print("=" * 70)
+    for name, s in sorted(stats.items(), key=lambda kv: -kv[1]["pixels"])[:14]:
+        print(
+            f"  {s['index']:>3}  {name:<18} {s['pixels']:>8,}px  "
+            f"중심 ({s['cx']:.0f}, {s['cy']:.0f})"
+        )
+
+    checks = run_checks(stats, h, person_pixels)
+    passed = sum(1 for _, ok, _, _ in checks if ok is True)
+    failed = [c for c in checks if c[1] is False]
+    skipped = sum(1 for _, ok, _, _ in checks if ok is None)
+
     print()
-    version = segmenter.model_version(args.size)
-    print("  app/services/sapiens_labels.py 에 반영:")
-    print(f'       VERIFIED_ORDER = "{best}"')
-    print(f'       VERIFIED_WITH  = (..., "{version}")   ← 튜플에 추가')
+    print("=" * 70)
+    print("해부학 점검")
+    print("=" * 70)
+    for label, ok, note, decisive in checks:
+        mark = "O" if ok is True else ("X" if ok is False else "-")
+        heavy = " ←결정적" if ok is False and decisive else ""
+        print(f"  [{mark}] {label:<32} {note}{heavy}")
+    print(f"  → 통과 {passed} / 실패 {len(failed)} / 판정불가 {skipped}")
+
+    overlay = render_overlay(image, labels, names)
+    path = out_dir / "overlay.png"
+    overlay.save(path)
+
     print()
-    print(f"  ⚠️ VERIFIED_WITH 에 {version} 이 없으면 워커가 이 모델로 실행을 거부합니다.")
-    return 0
+    print("=" * 70)
+    if failed:
+        print("결론: 매핑이 이 모델과 안 맞는 것으로 보입니다")
+        print("=" * 70)
+        for label, _, note, decisive in failed:
+            print(f"  [X] {label} — {note}{' (결정적)' if decisive else ''}")
+        print()
+        print("  모델을 바꾼 게 아니라면 사진 조건을 먼저 의심하세요")
+        print("  (긴팔·긴바지, 비스듬한 자세, 잘린 프레임).")
+    else:
+        print("결론: 문제 없음")
+        print("=" * 70)
+
+    print()
+    print(f"  오버레이: {path}")
+    print("  ⚠️ 좌우는 눈으로 확인하세요 — 피사체의 왼팔에 Left_Upper_Arm 이 적혀 있어야 합니다.")
+    print("     (정면 사진에서 피사체의 왼팔은 이미지 오른쪽에 나옵니다)")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

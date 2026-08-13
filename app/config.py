@@ -88,9 +88,8 @@ class Settings(BaseSettings):
     #: 백본 크기. 0.4b | 0.8b | 1b | 5b
     #  ⚠️ 코드는 크기와 무관하다. 바꿔도 재추론만 하면 되고 스키마는 그대로다.
     #     5b는 fp16 가중치만 ~9.5GB라 VRAM 16GB 이상(24GB 권장)이 필요하다.
-    #  ⚠️ 기본값을 5b로 둔 이유 — 라벨 매핑을 이 크기로만 실측 검증했다
-    #     (sapiens_labels.VERIFIED_WITH). 기본값이 미검증 크기면 아무 설정 없이
-    #     돌렸을 때 검증 안 된 조합으로 도는 셈이 된다.
+    #  ⚠️ 기본값은 운영에서 쓰는 5b다. 아무 설정 없이 돌렸을 때 실제 배포와
+    #     같은 조합이 되도록.
     sapiens_size: str = "5b"
 
     #: auto | cuda | cpu.  auto면 CUDA가 있으면 CUDA, 없으면 CPU
@@ -111,9 +110,10 @@ class Settings(BaseSettings):
     #  ⚠️ 전부 다 쓰면 활성값 자리가 없어 OOM이 난다. 여유를 남겨야 한다.
     sapiens_gpu_max_gib: float = 0
 
-    #: 라벨 맵 검증 — label_map의 클래스명이 body_part 마스터에 다 있어야 통과.
-    #  ⚠️ false로 두면 인덱스 매핑이 틀려도 조용히 진행된다. 운영에서는 켜둘 것.
-    sapiens_require_verified_labels: bool = True
+    #: 라벨 목록이 확인되지 않은 모델이면 워커 기동을 거부할지.
+    #  ⚠️ false로 두면 클래스 순서가 다른 모델도 그냥 돈다. 부위가 통째로
+    #     어긋난 결과가 저장되고 에러는 안 난다. 운영에서는 켜둘 것.
+    sapiens_strict_labels: bool = True
 
     # ------------------------------------------------------------------ #
     # VLM provider (담당 B 영역)

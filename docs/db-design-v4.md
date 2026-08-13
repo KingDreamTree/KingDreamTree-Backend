@@ -263,9 +263,9 @@ ctx.putImageData(out, 0, 0);
 
 **seed — 나머지 20개 (`is_comparable = false`, `part_group = 'OTHER'`, `color_hex = NULL`)**
 
-`Background` · `Apparel` · `Upper_Clothing` · `Lower_Clothing` · `Left_Shoe` · `Right_Shoe` · `Left_Sock` · `Right_Sock` · `Left_Hand` · `Right_Hand` · `Left_Foot` · `Right_Foot` · `Hair` · `Face_Neck` · `Eyeglasses` · `Upper_Lip` · `Lower_Lip` · `Upper_Teeth` · `Lower_Teeth` · `Tongue`
+`Background` · `Apparel` · `Upper_Clothing` · `Lower_Clothing` · `Left_Shoe` · `Right_Shoe` · `Left_Sock` · `Right_Sock` · `Left_Hand` · `Right_Hand` · `Left_Foot` · `Right_Foot` · `Hair` · `Face_Neck` · `Eyeglass` · `Upper_Lip` · `Lower_Lip` · `Upper_Teeth` · `Lower_Teeth` · `Tongue`
 
-**합계 29개** = Sapiens(1세대) goliath 28클래스 + `Eyeglasses`
+**합계 29개** = Sapiens(1세대) goliath 28클래스 + `Eyeglass`(2번에 삽입)
 
 > ⚠️ **손·발·신발·양말은 좌우가 별도 클래스이고, 입술·치아도 상/하가 나뉩니다.**
 > 초안에서 `Shoe` `Sock` `Hand` `Foot` `Lip` `Teeth` 로 뭉뚱그렸던 것을 바로잡았습니다.
@@ -279,8 +279,8 @@ ctx.putImageData(out, 0, 0);
 - `is_comparable` — 비교 대상 판정은 이제 **`is_comparable AND is_valid`** 두 조건입니다. 워커의 `SKIN_CLASSES` 상수는 없애고 이 테이블을 기동 시 읽으세요.
 - `color_hex` — ⚠️ **프론트에 색을 하드코딩하게 두지 마세요.** 부위가 추가되거나 이름이 바뀌면 색과 라벨이 어긋납니다. 서버가 팔레트를 내려줍니다.
   - 좌/우가 비슷한 색 계열(주황↔초록, 보라↔빨강)인 이유는 **좌우 반전 사고를 눈으로 잡기 위해서**입니다. 색이 좌우 대칭으로 뒤집혀 보이면 §5의 반전 규칙이 깨진 것입니다.
-- ✅ **클래스 "이름"은 확정입니다** (공식 문서 확인). 다만 **픽셀 값(인덱스)은 확인하지 않았습니다** — `Eyeglasses`가 어느 인덱스에 삽입되며 나머지가 밀리는지 알 수 없기 때문입니다. **인덱스를 이 테이블에 저장하지 않는 설계라 문제가 되지 않습니다.** 추론 시점의 매핑은 `segmentation.label_map`에 행마다 박제됩니다.
-- ⚠️ `Eyeglasses` **철자만은 원문에서 확인하지 못했습니다.** 첫 추론 후 `label_map`을 마스터와 대조해 불일치가 나오면 그 행만 고치면 됩니다. (그래서 워커가 기동 시 대조하고 경고 로그를 남겨야 합니다 — §1.2)
+- ✅ **클래스 이름과 인덱스 모두 공식 문서로 확정됐습니다** — [sapiens2/docs/SEG.md](https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md). `Eyeglass`가 2번에 삽입되어 그 뒤가 한 칸씩 밀린 배열이고, 실측 검증 결과와도 일치합니다. 그래도 **인덱스는 이 테이블에 저장하지 않습니다** — 추론 시점의 매핑을 `segmentation.label_map`에 행마다 박제하는 설계라 모델이 바뀌어도 과거 데이터가 안전합니다.
+- ⚠️ **`Eyeglass`는 단수형입니다.** 한때 `Eyeglasses`로 seed 해둔 적이 있는데, 복수형이면 워커의 `label_map` 대조에서 "마스터에 없는 클래스"로 걸립니다. 이런 어긋남을 잡으려고 워커가 기동 시 대조하고 경고를 남깁니다 (§1.2).
 
 ---
 
@@ -538,7 +538,7 @@ users
 | # | 항목 | 영향 | 상태 |
 |---|---|---|---|
 | 1 | `users`에 들어갈 컬럼 | `users` 전체 | 미정 |
-| 2 | ~~Sapiens2 실제 클래스명·개수~~ | `body_part` seed | ✅ **확정 — 29개** (28 + Eyeglasses). `Eyeglasses` 철자와 인덱스만 첫 추론에서 확인 |
+| 2 | ~~Sapiens2 실제 클래스명·개수~~ | — | ✅ **확정 — 29개.** 공식 문서(SEG.md) + 실측 교차 확인. `Eyeglass`(단수)가 2번 |
 | 3 | WIM 3D 결과지 구조 | `inbody` 컬럼 | 실물 샘플 필요 |
 | 4 | 인바디 기종별 인쇄 항목 | `inbody` NULL 여부 | 샘플 5~10장 후 확정 |
 | 5 | 유사도 점수 산출 방식 | `overall_diagnosis.score_source` | 미정 |

@@ -11,7 +11,7 @@
 
 모델 출처
     https://huggingface.co/facebook/sapiens2
-    Meta AI. body-part segmentation 29클래스 (Sapiens 28 + Eyeglasses).
+    Meta AI. body-part segmentation 29클래스 (Sapiens 28 + Eyeglass).
 
 ⚠️ 기본값이 0.4b인 이유 — EC2 t3.large는 GPU가 없다. CPU 추론이라 백본이 커질수록
    사용자가 로딩 화면에서 기다리는 시간이 그대로 늘어난다. 0.4b로 시작해 품질을 보고
@@ -100,7 +100,6 @@ def main() -> None:
     print("다음 단계 — 첫 추론에서 반드시 확인할 것:")
     print("  1. 출력 클래스 개수가 29인지")
     print("  2. 각 픽셀 값 ↔ 클래스명 매핑 (segmentation.label_map 에 저장할 값)")
-    print("  3. Eyeglasses 클래스의 정확한 철자")
     print("     → python scripts/seed_body_parts.py --check 로 마스터와 대조")
 
 

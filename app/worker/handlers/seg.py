@@ -124,7 +124,7 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _preflight() -> None:
-    """기동 시 점검 — 가중치가 실제로 있는지, 라벨 매핑이 이 모델로 검증됐는지.
+    """기동 시 점검 — 가중치가 실제로 있는지, 라벨 목록이 이 모델에 맞는지.
 
     ⚠️ 둘 다 "없으면 어차피 모든 잡이 실패할" 조건이다. 잡을 재시도 한도까지
        말아먹은 뒤에 알게 되면 사용자는 그동안 로딩 화면을 본다.
@@ -146,8 +146,8 @@ def _preflight() -> None:
             "    echo 'MODEL_DIR=/workspace/models' >> .env"
         )
 
-    # 라벨 매핑이 이 백본으로 검증됐는지 — 아니면 부위가 통째로 어긋난 채 저장된다
-    sapiens_labels.ensure_verified(segmenter.model_version())
+    # 이 라벨 목록이 적용되는 모델인지 — 아니면 부위가 통째로 어긋난 채 저장된다
+    sapiens_labels.ensure_supported(segmenter.model_version())
 
 
 register_preflight(_preflight)

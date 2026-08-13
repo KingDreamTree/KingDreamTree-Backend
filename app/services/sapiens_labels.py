@@ -1,25 +1,19 @@
 """Sapiens2 라벨 인덱스 ↔ 클래스명 매핑.
 
-⚠️ 이 파일이 이 프로젝트에서 가장 조용히 망가지기 쉬운 지점이다.
+출처 — 공식 문서
+    https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md
+    (모델 카드 https://huggingface.co/facebook/sapiens2-seg-5b 가 이 문서로 안내한다)
 
-배경
-    config.json 의 id2label 은 "LABEL_0" ... "LABEL_28" 플레이스홀더다.
-    즉 **어느 픽셀 값이 어느 부위인지 모델 파일만으로는 알 수 없다.**
+⚠️ **모델 파일에서는 읽을 수 없다.** config.json 의 id2label 이
+   "LABEL_0" ... "LABEL_28" 플레이스홀더라, 어느 픽셀 값이 어느 부위인지
+   가중치만 받아서는 알 수 없다. 위 문서가 유일한 출처다.
 
-    Sapiens(1세대) goliath 28클래스의 순서는 공식 문서로 확인됐다:
-      0 = Background, 1~22 = 알파벳순, 23~27 = 나중에 추가된 얼굴 세부 클래스
-    Sapiens2는 여기에 Eyeglasses 하나가 늘어 29개다. 그런데 그게
-      (A) 맨 뒤 28번에 붙었는지
-      (B) 알파벳순으로 2번에 끼어들어 나머지가 한 칸씩 밀렸는지
-    문서에 없다. 그리고 이걸 틀리면 **전 부위가 어긋난 채 에러 없이** 돌아간다.
-
-그래서
-    후보를 상수로 두고, 실측으로 하나를 고른 뒤 VERIFIED_ORDER 에 박는다.
-    검증 전에는 워커가 실행을 거부한다 (settings.sapiens_require_verified_labels).
-    검증 절차: scripts/verify_labels.py
-
-    확정된 매핑은 추론할 때마다 segmentation.label_map 에 행 단위로 박제되므로,
-    나중에 모델을 바꿔도 과거 데이터는 안전하다.
+⚠️ **이 목록이 틀리면 전 부위가 어긋난 채 에러 없이 돌아간다.**
+   왼팔을 오른다리로 읽으면서 프로그램은 멀쩡히 끝난다. 그래서
+     * 모델이 뱉은 클래스 수와 이 목록의 길이가 다르면 즉시 실패시키고
+     * 이 목록에 없는 모델로 돌리려 하면 워커가 기동을 거부하고
+     * 추론할 때마다 그 시점의 매핑을 segmentation.label_map 에 박제한다
+   마지막 것 덕분에 나중에 모델을 바꿔도 과거 데이터는 안전하다.
 """
 
 import logging
@@ -28,108 +22,72 @@ from app.config import settings
 
 log = logging.getLogger("services.sapiens_labels")
 
-#: Sapiens(1세대) goliath 28클래스 — 공식 문서로 확인된 순서.
-#: https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md
-SAPIENS1_GOLIATH_28: tuple[str, ...] = (
+#: 이 목록이 적용되는 모델. 다른 체크포인트를 쓰려면 그 모델 문서에서
+#: 클래스 목록을 확인하고 여기에 추가할 것.
+SUPPORTED_MODELS: tuple[str, ...] = (
+    "sapiens2-seg-0.4b",
+    "sapiens2-seg-0.8b",
+    "sapiens2-seg-1b",
+    "sapiens2-seg-5b",
+)
+
+#: Sapiens2 body-part segmentation 29클래스. 인덱스 = 라벨 맵의 픽셀 값.
+#: ⚠️ `Eyeglass` 는 단수형이다. 복수형으로 적으면 body_part 마스터 대조에서 걸린다.
+LABEL_NAMES: tuple[str, ...] = (
     "Background",  # 0
     "Apparel",  # 1
-    "Face_Neck",  # 2
-    "Hair",  # 3
-    "Left_Foot",  # 4
-    "Left_Hand",  # 5
-    "Left_Lower_Arm",  # 6
-    "Left_Lower_Leg",  # 7
-    "Left_Shoe",  # 8
-    "Left_Sock",  # 9
-    "Left_Upper_Arm",  # 10
-    "Left_Upper_Leg",  # 11
-    "Lower_Clothing",  # 12
-    "Right_Foot",  # 13
-    "Right_Hand",  # 14
-    "Right_Lower_Arm",  # 15
-    "Right_Lower_Leg",  # 16
-    "Right_Shoe",  # 17
-    "Right_Sock",  # 18
-    "Right_Upper_Arm",  # 19
-    "Right_Upper_Leg",  # 20
-    "Torso",  # 21
-    "Upper_Clothing",  # 22
-    "Lower_Lip",  # 23
-    "Upper_Lip",  # 24
-    "Lower_Teeth",  # 25
-    "Upper_Teeth",  # 26
-    "Tongue",  # 27
+    "Eyeglass",  # 2
+    "Face_Neck",  # 3
+    "Hair",  # 4
+    "Left_Foot",  # 5
+    "Left_Hand",  # 6
+    "Left_Lower_Arm",  # 7
+    "Left_Lower_Leg",  # 8
+    "Left_Shoe",  # 9
+    "Left_Sock",  # 10
+    "Left_Upper_Arm",  # 11
+    "Left_Upper_Leg",  # 12
+    "Lower_Clothing",  # 13
+    "Right_Foot",  # 14
+    "Right_Hand",  # 15
+    "Right_Lower_Arm",  # 16
+    "Right_Lower_Leg",  # 17
+    "Right_Shoe",  # 18
+    "Right_Sock",  # 19
+    "Right_Upper_Arm",  # 20
+    "Right_Upper_Leg",  # 21
+    "Torso",  # 22
+    "Upper_Clothing",  # 23
+    "Lower_Lip",  # 24
+    "Upper_Lip",  # 25
+    "Lower_Teeth",  # 26
+    "Upper_Teeth",  # 27
+    "Tongue",  # 28
 )
 
-#: 후보 A — Eyeglasses가 맨 뒤에 append 됨
-_CANDIDATE_APPEND: tuple[str, ...] = SAPIENS1_GOLIATH_28 + ("Eyeglasses",)
-
-#: 후보 B — Eyeglasses가 알파벳순으로 Apparel과 Face_Neck 사이에 삽입됨
-_CANDIDATE_ALPHA: tuple[str, ...] = (
-    SAPIENS1_GOLIATH_28[:2] + ("Eyeglasses",) + SAPIENS1_GOLIATH_28[2:]
-)
-
-CANDIDATES: dict[str, tuple[str, ...]] = {
-    "append": _CANDIDATE_APPEND,
-    "alpha": _CANDIDATE_ALPHA,
-}
-
-#: ⚠️ 실측으로 확정한 뒤 여기에 후보 이름을 박는다. None이면 미검증.
-#:    scripts/verify_labels.py 를 돌려 확인한 값을 넣을 것.
-#:
-#:    2026-08-13 확정 — 정면 전신 사진(팔다리 노출)으로 실측.
-#:    아래 숫자는 **해부학 점검 항목 수**다 (클래스 수가 아니다).
-#:      alpha  점검 26개 통과 / 0개 실패 / 1개 판정불가   점수 72
-#:      append 점검 20개 통과 / 3개 실패 / 4개 판정불가   점수 46
-#:    append로 읽으면 Left_Foot이 화면 맨 위(y=96, 머리카락 자리)에 온다.
-#:    alpha는 좌우 배치까지 통과했다:
-#:      Left_Upper_Arm x=520 vs Right_Upper_Arm x=245 (정면 기준 피사체의 왼쪽 = x가 큼)
-#:    fp16 / bfloat16 결과는 픽셀 수까지 0.5% 이내로 동일해 정밀도 영향은 없었다.
-VERIFIED_ORDER: str | None = "alpha"
-
-#: ⚠️ **이 모델로만 검증됐다.** 다른 백본으로 돌리면 ensure_verified()가 실행을 거부한다.
-#:    크기가 달라도 29클래스 어휘는 같을 것으로 보이지만, "같을 것"은 검증이 아니다.
-#:    다른 크기를 쓰려면 그 크기로 verify_labels.py를 돌리고 여기에 추가할 것.
-VERIFIED_WITH: tuple[str, ...] = ("sapiens2-seg-5b",)
-
-#: VERIFIED_ORDER가 비었는데 검증 강제를 꺼둔 경우에 쓸 값.
-#: ⚠️ append를 쓰면 안 된다 — 실측에서 "발이 머리 자리에 온다"로 탈락한 후보다.
-#:    (Left_Foot y=96/1024, Torso가 허벅지보다 아래)
-_BEST_KNOWN = "alpha"
+#: ⚠️ Left / Right 는 **피사체 기준**이다. 정면 사진에서 피사체의 왼팔은
+#:    이미지의 오른쪽(x가 큰 쪽)에 나온다. 화면 기준으로 착각하면 진단이
+#:    통째로 좌우 반대가 되고, 그래도 에러는 안 난다.
+#:    확인 절차: scripts/verify_labels.py
 
 
 class LabelsNotVerifiedError(RuntimeError):
-    """라벨 매핑이 아직 실측 검증되지 않았다."""
+    """이 모델의 클래스 목록을 확인하지 않았다."""
 
 
-def label_names(order: str | None = None) -> tuple[str, ...]:
-    """인덱스 순서대로 정렬된 클래스명."""
-    key = order or VERIFIED_ORDER
-    if key is None:
-        raise LabelsNotVerifiedError(
-            "Sapiens2 라벨 매핑이 아직 검증되지 않았습니다.\n"
-            "  python scripts/verify_labels.py --image <사람 사진>\n"
-            "을 돌려 후보를 확정하고 app/services/sapiens_labels.py 의 "
-            "VERIFIED_ORDER 에 넣으세요."
-        )
-    if key not in CANDIDATES:
-        raise ValueError(f"알 수 없는 후보: {key}. 가능한 값: {sorted(CANDIDATES)}")
-    return CANDIDATES[key]
-
-
-def build_label_map(num_classes: int, order: str | None = None) -> dict[str, str]:
+def build_label_map(num_classes: int) -> dict[str, str]:
     """segmentation.label_map 에 저장할 {인덱스(str): 클래스명} 을 만든다.
 
-    ⚠️ 모델 출력 클래스 수와 매핑 길이가 다르면 즉시 실패시킨다.
+    ⚠️ 모델 출력 클래스 수와 목록 길이가 다르면 즉시 실패시킨다.
        길이가 안 맞는데 진행하면 어긋난 라벨로 전부 저장된다.
     """
-    names = label_names(order)
-    if len(names) != num_classes:
+    if len(LABEL_NAMES) != num_classes:
         raise ValueError(
-            f"모델 출력 클래스 수({num_classes})와 라벨 매핑 길이({len(names)})가 다릅니다. "
-            "모델이 바뀌었을 수 있습니다 — 라벨 매핑을 재검증하세요."
+            f"모델 출력 클래스 수({num_classes})와 라벨 목록 길이({len(LABEL_NAMES)})가 "
+            "다릅니다. 다른 모델일 수 있습니다 — 그 모델의 문서에서 클래스 목록을 "
+            "확인하세요."
         )
-    return {str(i): name for i, name in enumerate(names)}
+    return {str(i): name for i, name in enumerate(LABEL_NAMES)}
 
 
 def check_against_master(label_map: dict[str, str], master_class_names: set[str]) -> list[str]:
@@ -140,45 +98,21 @@ def check_against_master(label_map: dict[str, str], master_class_names: set[str]
     return sorted({name for name in label_map.values() if name not in master_class_names})
 
 
-def ensure_verified(model_version: str | None = None) -> str:
-    """검증 상태를 확인하고 확정된 후보 이름을 돌려준다.
+def ensure_supported(model_version: str) -> None:
+    """이 라벨 목록이 적용되는 모델인지 확인한다.
 
-    두 가지를 본다.
-      1. 매핑 순서가 실측으로 확정됐는가 (VERIFIED_ORDER)
-      2. **지금 쓰는 모델이 그때 검증한 모델인가** (VERIFIED_WITH)
-
-    ⚠️ 2번이 없으면 VERIFIED_WITH는 죽은 상수가 된다. 다른 백본으로 갈아끼우면
-       클래스 순서가 재배열됐을 수 있는데, 그래도 아무 경고 없이 돌아간다.
-       라벨 어긋남을 막는 게 이 모듈의 존재 이유이므로 1번과 같은 엄격함을 적용한다.
-
-    검증 강제를 끄면(SAPIENS_REQUIRE_VERIFIED_LABELS=false) 경고만 남기고 진행한다.
+    ⚠️ 다른 체크포인트는 클래스 순서가 다를 수 있다. 확인 없이 돌리면
+       부위가 통째로 어긋난 결과가 저장되고, 에러는 나지 않는다.
     """
-    strict = settings.sapiens_require_verified_labels
+    if model_version in SUPPORTED_MODELS:
+        return
 
-    if VERIFIED_ORDER is None:
-        if strict:
-            raise LabelsNotVerifiedError(
-                "라벨 매핑 미검증 상태에서는 세그멘테이션을 실행하지 않습니다.\n"
-                "  python scripts/verify_labels.py --image <사람 사진>\n"
-                "을 돌려 VERIFIED_ORDER 를 채우세요."
-            )
-        log.warning(
-            "라벨 매핑이 미검증 상태입니다. 최선의 추정값 %r 로 진행합니다 "
-            "— 부위가 통째로 뒤바뀐 결과가 저장될 수 있습니다.",
-            _BEST_KNOWN,
-        )
-        return _BEST_KNOWN
-
-    if model_version is not None and model_version not in VERIFIED_WITH:
-        message = (
-            f"라벨 매핑은 {', '.join(VERIFIED_WITH)} 로만 검증됐는데 "
-            f"지금은 {model_version} 로 돌리려 합니다.\n"
-            "모델이 바뀌면 클래스 순서가 재배열될 수 있고, 틀려도 에러 없이 진행됩니다.\n"
-            f"  SAPIENS_SIZE=... python scripts/verify_labels.py --image <사람 사진>\n"
-            "을 그 모델로 돌려 확인한 뒤 VERIFIED_WITH 에 추가하세요."
-        )
-        if strict:
-            raise LabelsNotVerifiedError(message)
-        log.warning("%s", message)
-
-    return VERIFIED_ORDER
+    message = (
+        f"{model_version} 는 라벨 목록이 확인된 모델이 아닙니다 "
+        f"(확인된 모델: {', '.join(SUPPORTED_MODELS)}).\n"
+        "그 모델의 문서에서 클래스 목록을 확인하고 "
+        "app/services/sapiens_labels.py 의 SUPPORTED_MODELS 에 추가하세요."
+    )
+    if settings.sapiens_strict_labels:
+        raise LabelsNotVerifiedError(message)
+    log.warning("%s", message)

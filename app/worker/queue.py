@@ -209,6 +209,5 @@ def all_settled(session_id: UUID, kind: JobKind) -> bool:
 
     인바디처럼 "있으면 쓰고 없으면 그냥 진행"할 때 대기 여부 판정에 쓴다.
     """
-    return not list_jobs(session_id, kind=kind) or all(
-        j["status"] not in OPEN_STATUSES for j in list_jobs(session_id, kind=kind)
-    )
+    jobs = list_jobs(session_id, kind=kind)
+    return not jobs or all(j["status"] not in OPEN_STATUSES for j in jobs)

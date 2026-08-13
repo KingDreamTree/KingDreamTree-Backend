@@ -102,7 +102,8 @@ ctx.putImageData(out, 0, 0);
 
 **⚠️ 함정 3가지**
 
-1. **캔버스 오염(tainted canvas).** signed URL은 다른 오리진이므로 `img.crossOrigin = "anonymous"` 없이 그리면 `getImageData()`가 `SecurityError`를 던집니다. **Supabase Storage 버킷에 CORS 설정도 필요합니다.** 프론트에서 제일 먼저 막히는 지점이니 미리 알려주세요.
+1. **캔버스 오염(tainted canvas).** signed URL은 다른 오리진이므로 `img.crossOrigin = "anonymous"` 없이 그리면 `getImageData()`가 `SecurityError`를 던집니다. 프론트에서 제일 먼저 막히는 지점이니 미리 알려주세요.
+   - ✅ **서버 쪽 CORS 설정은 필요 없습니다.** Supabase Storage가 signed URL 응답에 `Access-Control-Allow-Origin: *`를 이미 내려줍니다 (GET·OPTIONS 모두 확인). 버킷에 따로 설정할 항목이 없습니다.
 2. **맵 크기 ≠ 원본 크기.** Sapiens2 추론 해상도가 원본과 다를 수 있습니다. `map_width`/`map_height`를 반드시 저장하고, 프론트는 CSS로 원본 크기에 맞춰 늘립니다. **JS로 리샘플하지 마세요** (§1.3).
 3. **`image-rendering: pixelated`.** 안 주면 브라우저가 부드럽게 늘리면서 경계에 없는 색이 생깁니다. 색칠 결과만 볼 때는 상관없지만, 확대해서 보면 티가 납니다.
 
@@ -495,7 +496,7 @@ ctx.putImageData(out, 0, 0);
 **규칙**
 
 - ⚠️ 전체 URL은 DB에 저장하지 않습니다. 조회 시 백엔드가 signed URL 발급(만료 1시간).
-- ⚠️ **`segmentations` 버킷에 CORS 설정이 필요합니다.** 프론트가 `getImageData`로 픽셀을 읽어야 하는데, CORS가 없으면 캔버스가 오염되어 읽을 수 없습니다. `photos` 버킷은 `<img>`로 표시만 하므로 CORS가 없어도 되지만, 같이 켜두는 편이 낫습니다.
+- ✅ **CORS는 별도 설정이 필요 없습니다.** Supabase Storage가 signed URL 응답에 `Access-Control-Allow-Origin: *`를 기본으로 내려줍니다(실측 확인). 프론트는 `img.crossOrigin = "anonymous"`만 붙이면 `getImageData`로 픽셀을 읽을 수 있습니다.
 - 최상위 `{user_id}/` 네임스페이스 — 유저 삭제 시 prefix 통째 삭제가 유일한 정리 수단입니다. FK CASCADE는 Storage를 지우지 않습니다.
 - ⚠️ **사진 교체 시 삭제 순서**: `body-parts` 크롭 → `segmentations` 맵 → `photos` 원본 → `photo` 행 삭제(나머지 CASCADE). 행을 먼저 지우면 어느 파일을 지울지 알 수 없게 됩니다.
 - ⚠️ 인바디 임시 이미지는 `OCR_INBODY`가 `DONE`이 된 직후 삭제. `FAILED`면 재처리를 위해 남깁니다.

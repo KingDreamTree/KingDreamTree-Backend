@@ -70,7 +70,7 @@ B가 읽음  →  DB SELECT + signed URL 만
 | 0-3 | `app/services/db.py`, `storage.py`, `app/deps.py`, `app/config.py` |
 | 0-4 | `app/worker/queue.py` + 잡 등록/폴링 — `GET /jobs/{id}`가 도는 상태까지 |
 | 0-5 | `requirements.txt`, `.env.example` — torch **CPU 빌드**, 전부 `==` 고정 |
-| 0-6 | **Supabase Storage 버킷 4개 생성** — `photos`, `segmentations`, `body-parts`, `inbody-temp` (전부 private) + **`segmentations`에 CORS 설정** |
+| 0-6 | **Supabase Storage 버킷 4개 생성** — `photos`, `segmentations`, `body-parts`, `inbody-temp` (전부 private). `segmentations`·`body-parts`는 `image/png`만 허용하도록 MIME 제한 |
 
 전부 공유 파일입니다. **한 브랜치에서 같이 작업하고 한 PR로 머지하세요.**
 
@@ -156,9 +156,11 @@ img.resize((w, h), Image.NEAREST)   # ⚠️ NEAREST 외에는 절대 쓰지 마
 - 맵 해상도가 원본과 다를 수 있으므로 `map_width`/`map_height`를 반드시 저장하세요.
 - 프론트가 원본 위에 그릴 때 `photo_width / map_width` 배율로 스케일합니다.
 
-### 6.4 CORS
+### 6.4 CORS — 서버 쪽은 할 일 없음
 
-프론트가 `getImageData()`로 픽셀 값을 읽어야 하는데, signed URL은 다른 오리진이라 **`segmentations` 버킷에 CORS가 없으면 캔버스가 오염되어 읽을 수 없습니다.** 프론트가 제일 먼저 막히는 지점이니 Phase 0에서 설정하고 미리 알려주세요.
+프론트가 `getImageData()`로 픽셀 값을 읽으려면 CORS 헤더가 필요한데, **Supabase Storage가 signed URL 응답에 `Access-Control-Allow-Origin: *`를 이미 내려줍니다.** GET·OPTIONS 둘 다 실측으로 확인했고, 버킷에 따로 설정할 항목도 없습니다.
+
+⚠️ 다만 **프론트는 `img.crossOrigin = "anonymous"`를 반드시 붙여야 합니다.** 서버가 헤더를 줘도 클라이언트가 이 속성 없이 로드하면 캔버스가 오염되어 `getImageData()`가 `SecurityError`를 던집니다. 프론트가 제일 먼저 막히는 지점이니 미리 알려주세요.
 
 ### 6.5 색 팔레트
 
@@ -200,7 +202,7 @@ img.resize((w, h), Image.NEAREST)   # ⚠️ NEAREST 외에는 절대 쓰지 마
 - [ ] 맵 PNG가 8-bit 그레이스케일 / 알파 없음 / ICC 없음인지 **파일로 확인**
 - [ ] 맵을 색칠해서 좌우가 안 뒤집혔는지 **눈으로 확인**
 - [ ] `label_map`이 행마다 저장되고 마스터와 대조되는지
-- [ ] `segmentations` 버킷 CORS 설정 + 프론트에 공지
+- [ ] 프론트에 `img.crossOrigin = "anonymous"` 필요하다고 공지 (서버 CORS 설정은 불필요)
 - [ ] 사진 재업로드 시 고아 파일이 안 남는지
 - [ ] `DELETE /users/me` 후 Storage 4개 prefix가 비었는지
 - [ ] 세그 워커 동시성 1 확인, 메모리 사용량 실측

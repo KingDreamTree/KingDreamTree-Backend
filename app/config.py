@@ -77,7 +77,10 @@ class Settings(BaseSettings):
     #: 백본 크기. 0.4b | 0.8b | 1b | 5b
     #  ⚠️ 코드는 크기와 무관하다. 바꿔도 재추론만 하면 되고 스키마는 그대로다.
     #     5b는 fp16 가중치만 ~9.5GB라 VRAM 16GB 이상(24GB 권장)이 필요하다.
-    sapiens_size: str = "0.4b"
+    #  ⚠️ 기본값을 5b로 둔 이유 — 라벨 매핑을 이 크기로만 실측 검증했다
+    #     (sapiens_labels.VERIFIED_WITH). 기본값이 미검증 크기면 아무 설정 없이
+    #     돌렸을 때 검증 안 된 조합으로 도는 셈이 된다.
+    sapiens_size: str = "5b"
 
     #: auto | cuda | cpu.  auto면 CUDA가 있으면 CUDA, 없으면 CPU
     sapiens_device: str = "auto"

@@ -825,7 +825,7 @@ workout_log(feedback_text) → ROUTINE_PATCH → 새 month_routine 버전
 | 4 | 유사도 산출 방식 | F09 `score_source` | `VLM` 고정 |
 | 5 | 루틴 진행 기준 | F11 `day_source` | `COUNT` |
 | 6 | 루틴 생성 분할 | F10 `status` 전환 | 일괄. 분할하면 4주차까지 끝나야 `DONE` |
-| 7 | **VLM 입력 형식** | F08 `vlm_input_type`, `crop_path` | `CROP`. **맵이 있으므로 나중에 바꿔도 재추론 불필요** |
+| 7 | ~~VLM 입력 형식~~ | — | ✅ **확정 (2026-08-13): `HIGHLIGHT`** — 아래 참조 |
 | 8 | 3방향 촬영 | F04/F05 `photo.kind` | 1장 |
 | 9 | 레퍼런스 프리셋 | F18 | `USER_UPLOAD` 고정 |
 | 10 | 맵 저장 해상도 | F06 전송량 | 긴 변 1024px 권장 |

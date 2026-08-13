@@ -84,14 +84,20 @@ def main() -> int:
     user_id = r.json()["user_id"]
     H = {"X-User-Id": user_id}
 
-    check("GET /users/me → 200", client.get(f"{API}/users/me", headers=H).status_code == 200)
-    check("헤더 없으면 401", client.get(f"{API}/users/me").status_code == 401)
-    check(
-        "없는 유저는 404",
-        client.get(f"{API}/users/me", headers={"X-User-Id": str(UUID(int=0))}).status_code == 404,
-    )
+    # ⚠️ 만든 유저는 여기에 모아두고 finally에서 전부 지운다.
+    #    유저를 만든 직후부터 try 안이어야 한다 — 그 사이에서 예외가 나면
+    #    공유 무료 티어에 테스트 유저가 남는다.
+    created: list[str] = [user_id]
 
     try:
+        check("GET /users/me → 200", client.get(f"{API}/users/me", headers=H).status_code == 200)
+        check("헤더 없으면 401", client.get(f"{API}/users/me").status_code == 401)
+        check(
+            "없는 유저는 404",
+            client.get(f"{API}/users/me", headers={"X-User-Id": str(UUID(int=0))}).status_code
+            == 404,
+        )
+
         # ── F03 세션 ──────────────────────────────────────────────────────
         print("\nF03 세션")
         r = client.post(f"{API}/sessions", headers=H)
@@ -244,17 +250,16 @@ def main() -> int:
         # ── 소유권 ────────────────────────────────────────────────────────
         print("\n소유권 검증")
         other = client.post(f"{API}/users").json()["user_id"]
+        created.append(other)  # 여기서 예외가 나도 finally가 지우도록
         r = client.get(f"{SP}/reference", headers={"X-User-Id": other})
         check("남의 세션 조회 → 404 (403 아님)", r.status_code == 404, f"status={r.status_code}")
-        storage.delete_user_files(UUID(other))
-        db.delete_user(UUID(other))
 
     finally:
         print("\n정리")
-        removed = storage.delete_user_files(UUID(user_id))
-        db.delete_user(UUID(user_id))
-        print(f"  Storage 삭제: {removed}")
-        print(f"  유저 삭제: {user_id}")
+        for uid in created:
+            removed = storage.delete_user_files(UUID(uid))
+            db.delete_user(UUID(uid))
+            print(f"  유저 삭제: {uid}  Storage {removed}")
 
     print("\n" + "=" * 68)
     print(f"통과 {len(passed)} / 실패 {len(failed)}")

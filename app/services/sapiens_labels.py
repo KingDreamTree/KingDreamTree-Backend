@@ -22,7 +22,11 @@
     나중에 모델을 바꿔도 과거 데이터는 안전하다.
 """
 
+import logging
+
 from app.config import settings
+
+log = logging.getLogger("services.sapiens_labels")
 
 #: Sapiens(1세대) goliath 28클래스 — 공식 문서로 확인된 순서.
 #: https://github.com/facebookresearch/sapiens/blob/main/docs/SEG_README.md
@@ -74,16 +78,24 @@ CANDIDATES: dict[str, tuple[str, ...]] = {
 #:    scripts/verify_labels.py 를 돌려 확인한 값을 넣을 것.
 #:
 #:    2026-08-13 확정 — 정면 전신 사진(팔다리 노출)으로 실측.
-#:      alpha  통과 26 / 실패 0   점수 72
-#:      append 통과 20 / 실패 3   점수 46
+#:    아래 숫자는 **해부학 점검 항목 수**다 (클래스 수가 아니다).
+#:      alpha  점검 26개 통과 / 0개 실패 / 1개 판정불가   점수 72
+#:      append 점검 20개 통과 / 3개 실패 / 4개 판정불가   점수 46
 #:    append로 읽으면 Left_Foot이 화면 맨 위(y=96, 머리카락 자리)에 온다.
 #:    alpha는 좌우 배치까지 통과했다:
 #:      Left_Upper_Arm x=520 vs Right_Upper_Arm x=245 (정면 기준 피사체의 왼쪽 = x가 큼)
 #:    fp16 / bfloat16 결과는 픽셀 수까지 0.5% 이내로 동일해 정밀도 영향은 없었다.
 VERIFIED_ORDER: str | None = "alpha"
 
-#: 검증에 쓴 모델. 크기가 달라도 29클래스 어휘는 같지만, 다른 모델로 넘어가면 재확인한다.
-VERIFIED_WITH: str | None = "sapiens2-seg-5b"
+#: ⚠️ **이 모델로만 검증됐다.** 다른 백본으로 돌리면 ensure_verified()가 실행을 거부한다.
+#:    크기가 달라도 29클래스 어휘는 같을 것으로 보이지만, "같을 것"은 검증이 아니다.
+#:    다른 크기를 쓰려면 그 크기로 verify_labels.py를 돌리고 여기에 추가할 것.
+VERIFIED_WITH: tuple[str, ...] = ("sapiens2-seg-5b",)
+
+#: VERIFIED_ORDER가 비었는데 검증 강제를 꺼둔 경우에 쓸 값.
+#: ⚠️ append를 쓰면 안 된다 — 실측에서 "발이 머리 자리에 온다"로 탈락한 후보다.
+#:    (Left_Foot y=96/1024, Torso가 허벅지보다 아래)
+_BEST_KNOWN = "alpha"
 
 
 class LabelsNotVerifiedError(RuntimeError):
@@ -128,12 +140,45 @@ def check_against_master(label_map: dict[str, str], master_class_names: set[str]
     return sorted({name for name in label_map.values() if name not in master_class_names})
 
 
-def ensure_verified() -> str:
-    """검증 상태를 확인하고 확정된 후보 이름을 돌려준다."""
-    if VERIFIED_ORDER is None and settings.sapiens_require_verified_labels:
-        raise LabelsNotVerifiedError(
-            "라벨 매핑 미검증 상태에서는 세그멘테이션을 실행하지 않습니다.\n"
-            "검증을 건너뛰려면 SAPIENS_REQUIRE_VERIFIED_LABELS=false 로 두세요 "
-            "(⚠️ 부위가 통째로 뒤바뀐 결과가 저장될 수 있습니다)."
+def ensure_verified(model_version: str | None = None) -> str:
+    """검증 상태를 확인하고 확정된 후보 이름을 돌려준다.
+
+    두 가지를 본다.
+      1. 매핑 순서가 실측으로 확정됐는가 (VERIFIED_ORDER)
+      2. **지금 쓰는 모델이 그때 검증한 모델인가** (VERIFIED_WITH)
+
+    ⚠️ 2번이 없으면 VERIFIED_WITH는 죽은 상수가 된다. 다른 백본으로 갈아끼우면
+       클래스 순서가 재배열됐을 수 있는데, 그래도 아무 경고 없이 돌아간다.
+       라벨 어긋남을 막는 게 이 모듈의 존재 이유이므로 1번과 같은 엄격함을 적용한다.
+
+    검증 강제를 끄면(SAPIENS_REQUIRE_VERIFIED_LABELS=false) 경고만 남기고 진행한다.
+    """
+    strict = settings.sapiens_require_verified_labels
+
+    if VERIFIED_ORDER is None:
+        if strict:
+            raise LabelsNotVerifiedError(
+                "라벨 매핑 미검증 상태에서는 세그멘테이션을 실행하지 않습니다.\n"
+                "  python scripts/verify_labels.py --image <사람 사진>\n"
+                "을 돌려 VERIFIED_ORDER 를 채우세요."
+            )
+        log.warning(
+            "라벨 매핑이 미검증 상태입니다. 최선의 추정값 %r 로 진행합니다 "
+            "— 부위가 통째로 뒤바뀐 결과가 저장될 수 있습니다.",
+            _BEST_KNOWN,
         )
-    return VERIFIED_ORDER or "append"
+        return _BEST_KNOWN
+
+    if model_version is not None and model_version not in VERIFIED_WITH:
+        message = (
+            f"라벨 매핑은 {', '.join(VERIFIED_WITH)} 로만 검증됐는데 "
+            f"지금은 {model_version} 로 돌리려 합니다.\n"
+            "모델이 바뀌면 클래스 순서가 재배열될 수 있고, 틀려도 에러 없이 진행됩니다.\n"
+            f"  SAPIENS_SIZE=... python scripts/verify_labels.py --image <사람 사진>\n"
+            "을 그 모델로 돌려 확인한 뒤 VERIFIED_WITH 에 추가하세요."
+        )
+        if strict:
+            raise LabelsNotVerifiedError(message)
+        log.warning("%s", message)
+
+    return VERIFIED_ORDER

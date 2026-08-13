@@ -4,6 +4,37 @@
 
 ---
 
+## 2026-08-13 - F07 인바디 API 완성 + 하이라이트 파이프라인 검증 (B)
+
+**무엇이**:
+- `app/routes/inbody.py`: 업로드(202+job)·목록·상세·수정·삭제 5개 엔드포인트
+- `app/worker/handlers/ocr.py`: `OCR_INBODY` 핸들러. DONE 직후 임시 이미지 삭제
+- `app/services/inbody_repo.py`: B 전용 쿼리 (공유 파일 `db.py` 비대화 방지)
+- `app/services/ocr.py`: 다중 페이지 추출 + **DB CHECK 가드** + 확인 화면용 변환기
+- `app/schemas/inbody.py`: DTO 4종
+- `app/services/segmap.py`: **라벨 맵 → 하이라이트 생성** (F08 VLM 입력)
+- `scripts/verify_segmap.py`: 실제 맵 샘플로 검증 (A 샘플 20/20 통과)
+- `app/schemas/routine.py`: `InbodySnapshot.from_inbody()` — DB→DTO 매핑 일원화
+- `app/main.py`: inbody 라우터 등록
+
+**왜**:
+- **SMI는 VLM이 계산하지 않는다.** 프롬프트 절대 규칙이 "인쇄된 숫자만, 계산 금지"인데
+  계산을 시키면 할루시네이션 통로가 열린다. `calc_smi()`가 컬럼값으로 계산하고
+  DB에 저장하지 않아 사용자 수정이 즉시 반영된다.
+- **DB CHECK 가드**: OCR이 범위 밖 값을 뽑으면 UPDATE 전체가 터져
+  "검증 실패가 INSERT를 막지 않는다" 원칙이 깨진다. 위반 컬럼만 비우고 WARN 기록.
+- **하이라이트 함정 3개** (실측 검증): 맵-원본 종횡비 불일치(단일 배율 시 31px 오차),
+  리사이즈 보간이 라벨을 섞음(BILINEAR 시 23→28종), 라벨 인덱스 하드코딩 금지.
+- `openai` 지연 import: 최상단 import면 미설치 배포 서버에서 **API 전체가 기동 실패**.
+
+**영향 (프론트·상대 개발자)**:
+- 신규 엔드포인트 `/api/v1/sessions/{id}/inbody`, `/api/v1/inbody/{id}` (전부 `/api/v1` 아래).
+- `GET /inbody/{id}` 응답의 `smi`는 **DB 컬럼이 아니라 파생값**이다.
+- `validation`은 WARN 필드만 내려간다 (전부 주면 사용자가 대충 넘긴다).
+- **A 요청 사항 있음** → `docs/handoff-to-a.md` §1 (의류 병합 위치) 참고.
+
+---
+
 ## 2026-08-13 - VLM provider 추상화 + Sapiens2 모델 관리 정책
 
 **무엇이**:

@@ -2,13 +2,11 @@
 
 레퍼런스 이미지 기반 체형 비교 분석 + 개인화 운동 루틴 생성 백엔드.
 
-**스택**: FastAPI / Sapiens2(세그멘테이션) / Claude Vision / Supabase / Docker / EC2
+**스택**: FastAPI / Sapiens2(세그멘테이션) / VLM(미확정) / Supabase / Docker / EC2
 
 ---
 
-## 빠른 시작
-
-### 로컬 (venv)
+## 빠른 시작 — mock 모드 (키·모델 없이)
 
 ```bash
 python -m venv .venv
@@ -18,34 +16,62 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-
-cp .env.example .env
-# .env 에서 USE_MOCK=true 설정 (키 없이 바로 실행 가능)
+cp .env.example .env   # USE_MOCK=true 설정
 
 USE_MOCK=true uvicorn app.main:app --reload --port 8000
 ```
 
 브라우저에서 http://localhost:8000/docs 확인.
 
-### Docker Compose
+### Docker Compose (mock)
 
 ```bash
-cp .env.example .env
-# .env 에서 USE_MOCK=true 설정
-
+cp .env.example .env   # USE_MOCK=true 설정
 docker compose up --build
 ```
 
-http://localhost:8000/docs 에서 Swagger UI 확인.
+---
+
+## Sapiens2 모델 가중치 설정 (실제 추론 시)
+
+가중치는 git에 포함되지 않습니다. 로컬 `models/` 디렉토리에 직접 배치해야 합니다.
+
+```bash
+pip install huggingface-hub
+python scripts/download_sapiens.py
+```
+
+다운로드 후 구조:
+```
+models/
+└── sapiens/
+    └── ...pth
+```
+
+Docker를 사용할 경우 `docker-compose.yml`이 `./models:/app/models` 로 자동 마운트합니다.
+모델 가중치는 절대 커밋하지 마세요 (`*.pth`, `*.safetensors` 등은 `.gitignore`에 포함).
+
+---
+
+## VLM provider 설정 (실제 추론 시)
+
+VLM provider가 아직 확정되지 않았습니다. `.env`에서 선택합니다:
+
+```env
+VLM_PROVIDER=claude    # ANTHROPIC_API_KEY 필요
+VLM_PROVIDER=openai   # OPENAI_API_KEY 필요 (미구현, TODO)
+```
+
+확정 전에는 `USE_MOCK=true`로 우회하세요.
 
 ---
 
 ## 호출 순서
 
 ```
-POST /analyze   → 사용자·레퍼런스 이미지 세그멘테이션
-POST /compare   → 체형 비교 분석 (Claude Call1)
-POST /routine   → 개인화 운동 루틴 생성 (Claude Call2)
+POST /analyze   → 이미지 업로드 + 세그멘테이션
+POST /compare   → 체형 비교 분석 (VLM Call1)
+POST /routine   → 개인화 운동 루틴 생성 (VLM Call2)
 ```
 
 자세한 통합 가이드는 [docs/FRONTEND.md](docs/FRONTEND.md) 참고.  
@@ -53,32 +79,33 @@ POST /routine   → 개인화 운동 루틴 생성 (Claude Call2)
 
 ---
 
-## 수동 설정 (사람이 직접 해야 할 것)
+## 환경 변수
 
-아래 작업은 자동화되어 있지 않습니다. 최초 셋업 시 수동으로 진행하세요.
-
-1. **GitHub branch protection** — `main`/`develop` 브랜치 보호 규칙 설정
-2. **Supabase 프로젝트 생성** — [supabase.com](https://supabase.com) 에서 새 프로젝트 생성
-3. **Supabase 버킷 생성** — Storage에서 `images/`, `overlays/` 버킷 생성
-4. **DB 스키마 적용** — Supabase SQL 에디터에서 `db/schema.sql` 실행
-5. **.env 실제 값 입력** — `ANTHROPIC_API_KEY`, `SUPABASE_URL` 등
+| 변수 | 설명 | mock 없이 필요? |
+|------|------|----------------|
+| `SUPABASE_URL` | Supabase 프로젝트 URL | 필수 |
+| `SUPABASE_ANON_KEY` | Supabase anon 키 | 필수 |
+| `SUPABASE_SERVICE_ROLE_KEY` | service role 키 (서버 전용) | 필수 |
+| `VLM_PROVIDER` | `claude` 또는 `openai` | 필수 |
+| `ANTHROPIC_API_KEY` | Claude API 키 | VLM_PROVIDER=claude 시 |
+| `OPENAI_API_KEY` | OpenAI API 키 | VLM_PROVIDER=openai 시 |
+| `MODEL_DIR` | Sapiens2 가중치 디렉토리 (기본 `models`) | 필수 |
+| `USE_MOCK` | `true`이면 모든 외부 호출 없이 mock 반환 | — |
 
 ---
 
-## 환경 변수
+## 수동 설정 (사람이 직접 해야 할 것)
 
-| 변수 | 설명 |
-|------|------|
-| `ANTHROPIC_API_KEY` | Claude API 키 |
-| `SUPABASE_URL` | Supabase 프로젝트 URL |
-| `SUPABASE_ANON_KEY` | Supabase anon 키 |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role 키 (서버 전용) |
-| `USE_MOCK` | `true` 이면 실제 모델·API 호출 없이 mock 데이터 반환 |
+1. **GitHub branch protection** — `main`/`develop` 보호 규칙
+2. **Supabase 프로젝트 생성** → 버킷(`images/`, `overlays/`) 생성
+3. **DB 스키마 적용** — Supabase SQL 에디터에서 `db/schema.sql` 실행
+4. **모델 가중치 다운로드** — `python scripts/download_sapiens.py`
+5. **VLM provider 확정** → `.env`의 `VLM_PROVIDER` 설정
 
 ---
 
 ## 개발 팁
 
-- `USE_MOCK=true` 상태에서는 API 키·모델 없이 end-to-end 200 응답 확인 가능.
-- 실제 모델(`requirements.txt`의 ML 섹션 주석 해제)은 별도 `models/` 볼륨에 두고 docker compose로 마운트.
+- `USE_MOCK=true`로 API 키·모델 없이 즉시 개발 시작 가능.
+- ML 패키지(torch 등)는 `requirements.txt` 하단 주석 해제 후 설치.
 - 포매터: `black --check .` + `isort --check-only .`

@@ -1,0 +1,238 @@
+# LLM 전략 — B파트 (F07~F12)
+
+> **기준일**: 2026-08-13 · **VLM**: GPT-4o / GPT-4o Vision (OpenAI)
+> **구현 범위**: 옵시디언 `08 - 해커톤 MVP 범위` 기준
+> **관련 파일**: `app/prompts/` · `app/services/{ocr,vlm,routine,routine_templates}.py`
+
+---
+
+## 데이터 흐름
+
+```
+[원본 사진 + seg_map 하이라이트]  ← A파트 (crop 아님)
+[인바디 결과지] ── F07 OCR ──→ raw_ocr (선택, 없어도 전체 동작)
+                                   │
+                     ┌─────────────┘ 있으면 프롬프트에 합성
+                     ↓
+              F08 부위별 비교 진단   (Vision, 부위별 병렬)
+                     ↓
+              F09 종합 진단          (Prompt Chaining)
+                     ↓
+              F10 4주 루틴 생성      (코드 템플릿 + LLM 1회)
+                     ↓
+              F12 피드백 → 루틴 수정 (Function Calling)
+```
+
+---
+
+## F07 — 인바디 OCR
+
+**기술: GPT-4o Vision + JSON mode + 결정론적 검증**
+
+별도 OCR 엔진(Tesseract/CLOVA/Document AI)을 쓰지 않는다.
+
+| 근거 | 내용 |
+|---|---|
+| 입력이 스캔본이 아님 | 폰 사진은 기울어짐·그림자·반사가 기본. 템플릿 좌표 OCR은 정렬 전처리가 전제이고, 그 전처리가 VLM 호출보다 구현 비용이 크다 |
+| 스택 단일화 | 파이프라인이 이미 GPT-4o를 쓴다. OCR 엔진 추가 = 의존성·키·장애 지점 하나 더 |
+| 필요한 건 텍스트가 아니라 구조 | OCR은 글자를 주지만 라벨-값 매핑은 직접 짜야 한다. VLM은 매핑까지 한 번에 |
+
+> **단일 양식(InBody570) 전제는 OCR이 아니라 VLM에 유리하게 작용한다.**
+> 실제 라벨명을 프롬프트에 그대로 박아 정확도를 올릴 수 있기 때문 (`app/prompts/inbody_ocr.py`).
+
+### 할루시네이션 방어 — 추출과 검증의 분리
+
+LLM은 **초안 작성자**이고, 최종 확정은 **결정론적 규칙 + 사용자**다.
+
+| 검증 규칙 | 식 |
+|---|---|
+| 체중 항등식 | 체중 ≈ 체수분 + 단백질 + 무기질 + 체지방량 |
+| BMI 항등식 | BMI ≈ 체중 ÷ 신장(m)² |
+| 제지방량 | 제지방량 ≈ 체중 − 체지방량 |
+| 체지방률 | 체지방률 ≈ 체지방량 ÷ 체중 × 100 |
+| 부위별 범위 | 팔 0.5~8kg / 다리 2~20kg / 몸통 10~40kg |
+| 좌우 대칭 | 차이 30% 초과 시 경고 (**자동 수정 안 함**) |
+
+실측 결과 (InBody570 샘플):
+
+```
+정상 샘플            → 11개 검사 전부 PASS (항등식 오차 0.0%, BMI 0.1%)
+체지방량 1개 오독    → 독립된 3개 검사가 동시에 WARN
+```
+
+항등식이 서로 얽혀 있어 **단일 오독이 숨을 곳이 없다.**
+
+### 주의사항
+
+- 검증 실패가 INSERT를 막지 않는다 → `inbody.validation` JSONB에 기록
+- `raw_ocr` 원본은 사용자 수정 시에도 **덮어쓰지 않는다** (정확도 측정 근거)
+- `temperature=0` — 수치 추출은 결정론적으로
+- 항등식 전용 항목(체수분·단백질·무기질)은 **컬럼을 만들지 않고** `raw_ocr`에서 읽어 검증만
+- `lean_percentage` / `fat_percentage`가 **부위별 취약 판단의 핵심 기준** (100% 미만 = 근육 부족, 130% 초과 = 지방 과다)
+- 골격근량 절대값 단독 사용 금지 → `calc_smi()`로 체격 보정
+
+---
+
+## F08 — 부위별 비교 진단
+
+**기술: GPT-4o Vision + Structured Output + 병렬 호출**
+
+| 항목 | 값 |
+|---|---|
+| 입력 | **원본 사진 + seg_map 하이라이트** (크롭 ❌, `crop_path` = NULL) |
+| 병렬 | `vlm_worker_concurrency = 3` (비교 대상 최대 9부위) |
+| 저장 | `part_diagnosis` |
+
+### 의류 처리 — 자기신고가 신뢰성의 전부
+
+픽셀 비율로는 헐렁한 셔츠와 머슬핏을 구분할 수 없다(둘 다 몸통 100% 덮음). 임의 임계값을 만드는 순간 신뢰성이 무너지므로 **임의 상수를 두지 않는다.**
+
+대신 LLM에게 **"모른다"는 출구**를 준다:
+
+> 이 부위의 체형을 옷 때문에 판단할 수 없으면
+> `gap_level: null`, `confidence: "LOW"`, `blocked_reason`에 이유를 쓰고 **추측하지 마세요.**
+
+판단 불가 부위는 진단에서 제외되지만, **루틴 3계층 분리 덕에 기본 볼륨을 받아 루틴은 안 깨진다.**
+
+병합 규칙: `Upper_Clothing → Torso`, `Lower_Clothing → Left/Right_Upper_Leg`, `Apparel → 무시`
+
+### ⚠️ enum 값 주의 (DB CHECK와 일치해야 함)
+
+```
+gap_level  : NONE | SLIGHT | MODERATE | SIGNIFICANT   ← LOW/MEDIUM/HIGH 아님
+confidence : LOW | MEDIUM | HIGH
+status     : PENDING | PROCESSING | DONE | FAILED
+```
+
+소문자를 넣으면 INSERT가 터진다.
+
+### 주의사항
+
+- 부분 실패 허용 — 1개 `FAILED`여도 나머지 진행, `GET /analysis`는 **200**
+- `raw_response` 항상 저장
+- 인바디는 선행 조건이 아님. `PENDING`이면 기다리지 말고 없이 진행
+- `differences`는 JSONB **배열** (TEXT로 이어붙이지 말 것)
+
+---
+
+## F09 — 종합 진단
+
+**기술: Prompt Chaining + Context Injection + Conditional Enrichment**
+
+F08 결과 전체를 context로 주입. 분석과 진단을 한 번에 하면 프롬프트가 길어져 품질이 떨어지므로 단계를 분리한다. 인바디가 있을 때만 체성분 해석을 추가 합성한다.
+
+출력: `similarity_score`(0~100) · `summary` · `priority_parts` · `strengths` · `cautions`
+
+> 유사도 점수는 **VLM 직접 출력**만 쓴다 (규칙 합산은 스코프 아웃) → `score_source = 'VLM'`
+
+---
+
+## F10 — 4주 루틴 생성
+
+**기술: 코드 템플릿(골격) + LLM 1회(운동 선택) + 코드 복제(4주)**
+
+```
+[코드]  days_per_week (1~7) → 분할 템플릿 → 1주 슬롯 확정 (근육군·세트·횟수)
+          ↓
+[LLM]   1주치 운동만 선택 (호출 1회)
+          ↓
+[코드]  4주 복제 + 주차별 볼륨 배율 → 28행
+```
+
+**LLM에게 분할 설계를 맡기지 않는다.** 맡기면 초보자에게 브로스플릿을 주거나, 휴식일을 빠뜨리거나, 같은 근육군을 연속 배치(회복 무시)하는 사고가 난다. 골격이 코드라서 28행과 회복 간격이 항상 보장된다. 토큰도 1/4.
+
+### 핵심 원칙 — 진단은 가중치이지 구성 요소가 아니다
+
+| Layer | 내용 | 진단 의존 |
+|---|---|---|
+| L1 골격 | `days_per_week` → 분할 템플릿 | ❌ 코드 고정 |
+| L2 강조 | 약점 부위 볼륨 가산 | ⭕ 가중치만 |
+| L3 제외 | `contraindications` → 대체 운동 | ⭕ 통증 피드백 |
+
+→ 진단 없는 부위(의류 가림 등)도 **기본 볼륨**을 받으므로 인바디 없음·VLM 실패·의류 가림 어떤 조합에서도 루틴 생성이 성공한다.
+
+### 분할 템플릿 (`app/services/routine_templates.py`)
+
+| 일수 | 분할 | 일수 | 분할 |
+|---|---|---|---|
+| 1 | 전신 | 5 | 상/하/상/하/약점 |
+| 2 | 전신 A/B | 6 | PPL ×2 |
+| 3 | 전신 A/B/C ⭐권장 | 7 | **6일 + 능동회복** |
+| 4 | 상/하 ×2 | | |
+
+> 주 7일을 골라도 7일 근력을 주지 않는다. 회복이 적응의 조건이므로 6일 + 능동회복으로 변환하고 `SEVEN_DAY_NOTICE`로 이유를 안내한다.
+
+### 주차별 진행
+
+| 주차 | RPE | 볼륨 배율 |
+|---|---|---|
+| 1 | 6 | ×0.8 (적응·폼 학습) |
+| 2 | 7 | ×1.0 |
+| 3 | 8 | ×1.1 (최대) |
+| 4 | 7 | ×1.0 (재측정) |
+
+### 주의사항
+
+- 28행 항상 생성 (휴식일 `is_rest=true` 포함)
+- `week_number`는 **생성 컬럼** — INSERT에 넣으면 실패
+- 운동 일수 변경 = **새 버전** (`generation_type='DAYS_CHANGED'`)
+- `month_routine` 행 삭제 금지 → `is_active=false`로만 내림 (삭제 시 `workout_log` CASCADE)
+- 새 버전이 `DONE`이 된 뒤에만 `is_active` 이전
+
+---
+
+## F12 — 피드백 → 루틴 수정
+
+**기술: Function Calling (OpenAI Tool Use)**
+
+### 도구 3개 (MVP 확정)
+
+| 함수 | 용도 |
+|---|---|
+| `adjust_intensity` | 세트·횟수·중량·휴식 조정 — 가장 흔한 피드백 |
+| `replace_exercise` | 운동 교체 — 두 번째로 흔함 |
+| `flag_contraindication` | 통증 부위 금기 등록 — **안전 필수** |
+
+제외: `reschedule_day`(데모 가치 낮음) · `remove_exercise`(`replace_exercise`로 대체)
+
+### JSON mode 대신 Function Calling인 이유
+
+- 변경이 `[{function, args}]` 배열로 자동 구조화 → `routine_revision.changes` JSONB에 직결
+- LLM이 필요한 함수만 선택 호출 (변경 없으면 0회)
+- "왜 바뀌었는지" 항목별 설명이 가능
+
+### 반환 ↔ DB 매핑
+
+| 반환 키 | 컬럼 |
+|---|---|
+| `interpretation` | `routine_revision.interpretation` |
+| `changes` | `routine_revision.changes` |
+| `contraindications_added` | `routine_revision.contraindications_added` + `analysis_session.contraindications` 누적 |
+| `raw_response` | `routine_revision.raw_response` |
+
+### 안전 처리
+
+통증 피드백 → `flag_contraindication` 필수 호출 → `severity`가 `BLOCK`이면 이후 루틴 생성에서도 해당 부위 부하 운동 전면 제외. "통증이 지속되면 전문가 상담" 안내 동반.
+
+> ⚠️ 패치는 **변경분만**. 전체 재생성 금지.
+> `feedback_text`는 `workout_log`에만 저장 (revision에 중복 금지, 조회 시 조인).
+
+---
+
+## 공통 원칙
+
+| 원칙 | 내용 |
+|---|---|
+| `raw_response` 항상 저장 | 프롬프트 튜닝 재현성 |
+| 부분 실패 허용 | 1개 실패가 전체를 죽이지 않음 |
+| 대문자 enum 엄수 | DB CHECK 위반 시 INSERT 실패 |
+| 중복 호출 가드 | `PENDING`/`PROCESSING` 잡 있으면 기존 `job_id` 반환 (**요금 2배 방지**) |
+| 의학 고지 | `weight_kg` 추정치 disclaimer + "의학적 조언 아님" |
+| `job.error` | 스택 트레이스·프롬프트 전문·API 키 금지 (프론트 노출됨) |
+
+---
+
+## 미확정
+
+- [ ] `confidence='LOW'` 진단을 루틴 입력에서 뺄지
+- [ ] 인바디 추출 컬럼 최종 확정 (실제 결과지 샘플 5~10장 확보 후)

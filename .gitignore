@@ -38,7 +38,12 @@ uploads/
 overlays/
 tmp/
 # scripts/verify_labels.py 산출물 (사람 사진이 들어간 오버레이 — 절대 커밋 금지)
-out/
+# ⚠️ out/ 만 막으면 --out out_run1 처럼 다른 이름을 주는 순간 뚫린다.
+#    검증용 사진 자체도 리포에 두면 커밋 대상이 되므로 확장자로 함께 막는다.
+out*/
+*.jpg
+*.jpeg
+*.png
 
 # IDE
 .idea/

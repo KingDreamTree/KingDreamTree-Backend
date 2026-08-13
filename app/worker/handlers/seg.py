@@ -21,7 +21,7 @@ from uuid import UUID
 from app.config import settings
 from app.schemas.enums import JobKind
 from app.services import db, segmenter, storage
-from app.worker.run import register
+from app.worker.registry import register
 
 log = logging.getLogger("worker.seg")
 

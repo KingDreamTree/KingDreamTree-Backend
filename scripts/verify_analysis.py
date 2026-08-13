@@ -106,7 +106,13 @@ def test_scale_invariance() -> None:
     asym = dict(ref)
     asym["Right_Upper_Arm"] = _segment("Right_Upper_Arm", 5600, 300, 120, 50, 200)
     sym = segmap.symmetry(asym, names, PERSON)
-    check("좌우 비대칭 검출", "Upper_Arm" in sym and sym["Upper_Arm"] > 25, str(sym))
+    check(
+        "좌우 비대칭 검출",
+        "Upper_Arm" in sym and sym["Upper_Arm"]["diff_pct"] > 25,
+        str(sym),
+    )
+    # 방향이 빠지면 좌·우 문장이 똑같아진다 (segmap.symmetry 주석 참고)
+    check("비대칭 방향 포함", sym.get("Upper_Arm", {}).get("larger") == "LEFT", str(sym))
 
 
 def test_overlay() -> None:

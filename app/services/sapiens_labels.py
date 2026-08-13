@@ -2,24 +2,25 @@
 
 ⚠️ 이 파일이 이 프로젝트에서 가장 조용히 망가지기 쉬운 지점이다.
 
-배경
-    config.json 의 id2label 은 "LABEL_0" ... "LABEL_28" 플레이스홀더다.
-    즉 **어느 픽셀 값이 어느 부위인지 모델 파일만으로는 알 수 없다.**
+순서의 출처 — **공식 문서다. 추측이 아니다.**
+    https://github.com/facebookresearch/sapiens2/blob/main/docs/SEG.md
+    (모델 카드 https://huggingface.co/facebook/sapiens2-seg-5b 에서 이 문서로 안내한다)
 
-    Sapiens(1세대) goliath 28클래스의 순서는 공식 문서로 확인됐다:
-      0 = Background, 1~22 = 알파벳순, 23~27 = 나중에 추가된 얼굴 세부 클래스
-    Sapiens2는 여기에 Eyeglasses 하나가 늘어 29개다. 그런데 그게
-      (A) 맨 뒤 28번에 붙었는지
-      (B) 알파벳순으로 2번에 끼어들어 나머지가 한 칸씩 밀렸는지
-    문서에 없다. 그리고 이걸 틀리면 **전 부위가 어긋난 채 에러 없이** 돌아간다.
+    ⚠️ 모델 파일만으로는 알 수 없다. config.json 의 id2label 이
+       "LABEL_0" ... "LABEL_28" 플레이스홀더라서 어느 픽셀 값이 어느 부위인지
+       거기서는 못 읽는다. 그래서 위 문서가 유일한 출처다.
 
-그래서
-    후보를 상수로 두고, 실측으로 하나를 고른 뒤 VERIFIED_ORDER 에 박는다.
-    검증 전에는 워커가 실행을 거부한다 (settings.sapiens_require_verified_labels).
-    검증 절차: scripts/verify_labels.py
+    ⚠️ 이걸 틀리면 **전 부위가 한 칸씩 밀린 채 에러 없이** 돌아간다.
+       왼팔을 오른다리로 읽으면서 프로그램은 멀쩡히 끝난다.
+
+실측으로도 교차 확인했다 (2026-08-13)
+    문서를 찾기 전에 후보 두 개를 놓고 사람 사진으로 골라냈고, 그 결과가
+    공식 순서와 일치했다. 검증 절차는 scripts/verify_labels.py 에 남아 있다.
+    모델을 다른 것으로 바꿀 때 다시 쓸 수 있다 — 그 모델의 문서가 부실할 수도 있으니.
 
     확정된 매핑은 추론할 때마다 segmentation.label_map 에 행 단위로 박제되므로,
     나중에 모델을 바꿔도 과거 데이터는 안전하다.
+    검증 전에는 워커가 실행을 거부한다 (settings.sapiens_require_verified_labels).
 """
 
 import logging
@@ -61,28 +62,34 @@ SAPIENS1_GOLIATH_28: tuple[str, ...] = (
     "Tongue",  # 27
 )
 
-#: 후보 A — Eyeglasses가 맨 뒤에 append 됨
-_CANDIDATE_APPEND: tuple[str, ...] = SAPIENS1_GOLIATH_28 + ("Eyeglasses",)
-
-#: 후보 B — Eyeglasses가 알파벳순으로 Apparel과 Face_Neck 사이에 삽입됨
-_CANDIDATE_ALPHA: tuple[str, ...] = (
-    SAPIENS1_GOLIATH_28[:2] + ("Eyeglasses",) + SAPIENS1_GOLIATH_28[2:]
+#: ✅ Sapiens2 공식 29클래스 — docs/SEG.md 를 그대로 옮긴 것.
+#:    Sapiens(1세대) 28클래스에 `Eyeglass` 가 알파벳 자리(2번)에 끼어들어
+#:    그 뒤가 전부 한 칸씩 밀린 형태다.
+#: ⚠️ 이름은 `Eyeglass` **단수**다. 복수형(Eyeglasses)으로 적어두면
+#:    body_part 마스터 대조에서 조용히 어긋난다.
+SAPIENS2_GOLIATH_29: tuple[str, ...] = (
+    SAPIENS1_GOLIATH_28[:2] + ("Eyeglass",) + SAPIENS1_GOLIATH_28[2:]
 )
+
+#: ⚠️ 탈락한 후보 — `Eyeglass` 가 맨 뒤에 붙었다고 가정한 배열.
+#:    문서를 찾기 전 후보였고, 실측에서 "발이 머리 꼭대기에 온다"로 탈락했다.
+#:    verify_labels.py 의 대조군으로만 남긴다. **쓰지 말 것.**
+_CANDIDATE_APPEND: tuple[str, ...] = SAPIENS1_GOLIATH_28 + ("Eyeglass",)
 
 CANDIDATES: dict[str, tuple[str, ...]] = {
     "append": _CANDIDATE_APPEND,
-    "alpha": _CANDIDATE_ALPHA,
+    "alpha": SAPIENS2_GOLIATH_29,
 }
 
-#: ⚠️ 실측으로 확정한 뒤 여기에 후보 이름을 박는다. None이면 미검증.
-#:    scripts/verify_labels.py 를 돌려 확인한 값을 넣을 것.
+#: 어느 배열을 쓸지. None이면 미검증으로 보고 워커가 실행을 거부한다.
 #:
-#:    2026-08-13 확정 — 정면 전신 사진(팔다리 노출)으로 실측.
-#:    아래 숫자는 **해부학 점검 항목 수**다 (클래스 수가 아니다).
+#: ✅ 2026-08-13 확정 — 공식 문서(docs/SEG.md)와 실측이 **둘 다 alpha 를 가리킨다.**
+#:
+#:    실측 근거 (정면 전신 사진, 팔다리 노출). 숫자는 **해부학 점검 항목 수**다:
 #:      alpha  점검 26개 통과 / 0개 실패 / 1개 판정불가   점수 72
 #:      append 점검 20개 통과 / 3개 실패 / 4개 판정불가   점수 46
 #:    append로 읽으면 Left_Foot이 화면 맨 위(y=96, 머리카락 자리)에 온다.
-#:    alpha는 좌우 배치까지 통과했다:
+#:    좌우 배치도 확인했다 — 문서에는 이게 안 적혀 있어서 실측이 필요했다:
 #:      Left_Upper_Arm x=520 vs Right_Upper_Arm x=245 (정면 기준 피사체의 왼쪽 = x가 큼)
 #:    fp16 / bfloat16 결과는 픽셀 수까지 0.5% 이내로 동일해 정밀도 영향은 없었다.
 VERIFIED_ORDER: str | None = "alpha"

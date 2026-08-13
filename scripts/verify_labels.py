@@ -86,7 +86,7 @@ def analyze(labels: np.ndarray, names: tuple[str, ...]) -> dict[str, dict]:
 
 #: 얼굴 세부 클래스 — 사람 픽셀의 몇 %를 넘을 수 없다.
 #  입술이 몸의 3%를 차지하는 사진은 존재하지 않는다.
-TINY_CLASSES = ("Lower_Lip", "Upper_Lip", "Lower_Teeth", "Upper_Teeth", "Tongue", "Eyeglasses")
+TINY_CLASSES = ("Lower_Lip", "Upper_Lip", "Lower_Teeth", "Upper_Teeth", "Tongue", "Eyeglass")
 TINY_MAX_RATIO = 0.03
 
 #: 좌우 대칭 쌍 — 정면 사진에서 픽셀 수가 이 배수를 넘게 차이나면 이상하다.

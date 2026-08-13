@@ -1,56 +1,99 @@
-"""Sapiens2 세그멘테이션 모델 가중치 다운로드 스크립트.
+"""Sapiens2 body-part segmentation 가중치 다운로드.
 
 사용법:
     pip install huggingface-hub
-    python scripts/download_sapiens.py
+    python scripts/download_sapiens.py               # 기본: 0.4b
+    python scripts/download_sapiens.py --size 1b
+    python scripts/download_sapiens.py --list        # 받지 않고 파일 목록만 확인
 
-    # HuggingFace 토큰이 필요한 경우 (gated model):
+    # gated 모델이라 토큰이 필요한 경우
     huggingface-cli login
-    python scripts/download_sapiens.py
 
-모델 출처:
-    https://huggingface.co/facebook/sapiens2-seg-0.4b
-    Meta AI Sapiens2 — semantic segmentation 0.4B 파라미터.
-    상업적 이용 시 Meta 라이선스 확인 필수.
+모델 출처
+    https://huggingface.co/facebook/sapiens2
+    Meta AI. body-part segmentation 29클래스 (Sapiens 28 + Eyeglasses).
 
-다운로드 후 구조:
-    models/
-    └── sapiens2-seg-0.4b/
-        └── *.pth  (또는 safetensors)
+⚠️ 기본값이 0.4b인 이유 — EC2 t3.large는 GPU가 없다. CPU 추론이라 백본이 커질수록
+   사용자가 로딩 화면에서 기다리는 시간이 그대로 늘어난다. 0.4b로 시작해 품질을 보고
+   올리는 편이 안전하다. (0.4b mIoU 79.5 / 5b 82.5)
+
+⚠️ 라이선스는 "Sapiens2 License"다. 논문의 CC BY 4.0과 다르므로 혼동하지 말 것.
+   상업적 이용 조건은 직접 확인해야 한다:
+   https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md
+
+⚠️ 가중치는 절대 커밋하지 말 것. .gitignore에 *.safetensors / *.pth / models/* 가 있다.
 """
 
+import argparse
 import os
 import sys
 
-REPO_ID = "facebook/sapiens2-seg-0.4b"
+#: 크기별 세그멘테이션 체크포인트 레포
+REPOS = {
+    "0.4b": "facebook/sapiens2-seg-0.4b",
+    "0.8b": "facebook/sapiens2-seg-0.8b",
+    "1b": "facebook/sapiens2-seg-1b",
+    "5b": "facebook/sapiens2-seg-5b",
+}
+
+#: ⚠️ 반드시 좁혀서 받는다.
+#   패턴을 지정하지 않으면 snapshot_download가 레포 전체를 받는다.
+#   ignore_patterns만으로는 부족하다 — 무엇이 들어 있는지 모르기 때문이다.
+#   실제 파일 구성은 --list 로 먼저 확인할 것.
+ALLOW_PATTERNS = ["*.safetensors", "*.json", "*.txt"]
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Sapiens2 세그멘테이션 가중치 다운로드")
+    parser.add_argument(
+        "--size",
+        default="0.4b",
+        choices=sorted(REPOS),
+        help="백본 크기 (기본 0.4b — t3.large CPU 추론 기준)",
+    )
+    parser.add_argument("--list", action="store_true", help="받지 않고 파일 목록만 출력")
+    args = parser.parse_args()
+
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import list_repo_files, snapshot_download
     except ImportError:
         print("huggingface-hub 가 설치되어 있지 않습니다.")
         print("  pip install huggingface-hub")
         sys.exit(1)
 
+    repo_id = REPOS[args.size]
+
+    if args.list:
+        print(f"{repo_id} 파일 목록:")
+        for f in sorted(list_repo_files(repo_id)):
+            print(f"  {f}")
+        return
+
     model_dir = os.environ.get("MODEL_DIR", "models")
-    target = os.path.join(model_dir, "sapiens2-seg-0.4b")
+    target = os.path.join(model_dir, f"sapiens2-seg-{args.size}")
     os.makedirs(target, exist_ok=True)
 
-    print(f"repo  : {REPO_ID}")
-    print(f"저장  : {os.path.abspath(target)}")
-    print("다운로드 중... (수 GB, 시간이 걸릴 수 있습니다)")
+    print(f"레포     : {repo_id}")
+    print(f"저장 위치: {os.path.abspath(target)}")
+    print(f"패턴     : {', '.join(ALLOW_PATTERNS)}")
+    print()
+    print("다운로드를 시작합니다. 백본 크기에 따라 수 GB이며 시간이 걸립니다...")
     print()
 
     snapshot_download(
-        repo_id=REPO_ID,
+        repo_id=repo_id,
         local_dir=target,
-        ignore_patterns=["*.md", ".gitattributes"],
+        allow_patterns=ALLOW_PATTERNS,
     )
 
     print()
-    print(f"완료. {target} 에 가중치가 저장되었습니다.")
-    print("이제 USE_MOCK=false 로 서버를 기동할 수 있습니다.")
+    print(f"완료. {target}")
+    print()
+    print("다음 단계 — 첫 추론에서 반드시 확인할 것:")
+    print("  1. 출력 클래스 개수가 29인지")
+    print("  2. 각 픽셀 값 ↔ 클래스명 매핑 (segmentation.label_map 에 저장할 값)")
+    print("  3. Eyeglasses 클래스의 정확한 철자")
+    print("     → python scripts/seed_body_parts.py --check 로 마스터와 대조")
 
 
 if __name__ == "__main__":

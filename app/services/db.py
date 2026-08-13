@@ -135,4 +135,3 @@ def comparable_class_names() -> list[str]:
         .data
     )
     return [r["class_name"] for r in rows]
-

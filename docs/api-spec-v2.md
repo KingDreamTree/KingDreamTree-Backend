@@ -372,7 +372,7 @@ ctx.putImageData(out, 0, 0);
 ```
 
 **⚠️ 프론트가 반드시 알아야 할 3가지**
-1. **`crossOrigin = "anonymous"` 없으면 캔버스가 오염되어 `getImageData()`가 던집니다.** signed URL은 다른 오리진입니다. **`segmentations` 버킷에 CORS 설정도 필요합니다.** 여기서 제일 먼저 막힙니다.
+1. **`crossOrigin = "anonymous"` 없으면 캔버스가 오염되어 `getImageData()`가 던집니다.** signed URL은 다른 오리진입니다. 여기서 제일 먼저 막힙니다. (서버 쪽 CORS 설정은 불필요 — Supabase Storage가 `Access-Control-Allow-Origin: *`를 이미 내려줍니다)
 2. **맵을 JS로 리샘플하지 마세요.** 보간이 라벨 값을 섞어 존재하지 않는 클래스를 만듭니다. 크기 조정은 CSS로만, `image-rendering: pixelated` 함께.
 3. **`label_map`을 하드코딩하지 마세요.** 응답의 `palette`를 그대로 씁니다.
 
@@ -734,7 +734,7 @@ workout_log(feedback_text) → ROUTINE_PATCH → 새 month_routine 버전
 **주의**
 - ⚠️ **`path`가 `{X-User-Id}/`로 시작하는지 검증하는 것만으로 부족합니다.** 그 경로가 실제로 DB에 존재하는 행인지도 확인하세요. prefix 검증만 하면 임의 경로 탐색이 가능합니다.
 - `expires_in` 최대 3600초. 초과 값은 잘라냅니다.
-- ⚠️ **`segmentations` 버킷은 CORS 설정이 필요합니다** (F06 참조).
+- ✅ CORS는 별도 설정이 필요 없습니다. Supabase Storage가 signed URL 응답에 `Access-Control-Allow-Origin: *`를 기본으로 내려줍니다 (F06 참조).
 
 ---
 

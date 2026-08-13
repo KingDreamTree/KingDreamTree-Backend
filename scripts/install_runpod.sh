@@ -105,9 +105,9 @@ except Exception as e:
     print("        --index-url https://download.pytorch.org/whl/cu128")
     sys.exit(1)
 
-if vram < 16:
-    print("⚠️ 5b fp16은 가중치만 ~9.5GB입니다. 활성값까지 하면 16GB로는 빠듯합니다.")
-elif vram < 24:
+if vram < 15:
+    print("⚠️ 5b fp16은 가중치만 ~9.5GB입니다. 활성값까지 하면 이 VRAM으로는 빠듯합니다.")
+elif vram < 22:  # 24GB 카드는 실제로 23.5GB 정도로 보고된다
     print("⚠️ VRAM 여유가 크지 않습니다. OOM이 나면 SAPIENS_SIZE=1b 로 내리거나")
     print("   SAPIENS_OFFLOAD=true 를 쓰세요.")
 PY

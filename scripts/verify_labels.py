@@ -134,8 +134,29 @@ def run_checks(stats: dict[str, dict], height: int) -> list[tuple[str, bool | No
     return checks
 
 
+def _font(size: int):
+    from PIL import ImageFont
+
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "C:/Windows/Fonts/arialbd.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
 def render_overlay(image: Image.Image, labels: np.ndarray, names: tuple[str, ...]) -> Image.Image:
-    """원본 위에 부위별 색칠. 눈으로 확인하는 게 최종 판정이다."""
+    """원본 위에 부위별 색칠 + **부위 이름을 직접 그린다**.
+
+    ⚠️ 색만 칠하면 후보끼리 이미지가 똑같아서 눈으로 구분할 수 없다.
+       "몸통 위치에 Torso 라고 적혀 있는가"를 볼 수 있어야 판정이 된다.
+    """
+    from PIL import ImageDraw
+
     h, w = labels.shape
     base = image.resize((w, h), Image.LANCZOS).convert("RGB")
 
@@ -146,8 +167,25 @@ def render_overlay(image: Image.Image, labels: np.ndarray, names: tuple[str, ...
         color[labels == value] = PALETTE[int(value) % len(PALETTE)]
 
     alpha = np.where(labels[..., None] == 0, 0.0, 0.55)
-    blended = (np.asarray(base) * (1 - alpha) + color * alpha).astype(np.uint8)
-    return Image.fromarray(blended)
+    blended = Image.fromarray((np.asarray(base) * (1 - alpha) + color * alpha).astype(np.uint8))
+
+    draw = ImageDraw.Draw(blended)
+    font = _font(max(13, w // 45))
+
+    present, counts = np.unique(labels, return_counts=True)
+    for value, count in zip(present.tolist(), counts.tolist()):
+        # 너무 작은 영역은 글자만 겹쳐서 지저분해진다
+        if value == 0 or value >= len(names) or count < 400:
+            continue
+        cx, cy = centroid(labels == value)
+        text = f"{value} {names[value]}"
+        box = draw.textbbox((cx, cy), text, font=font, anchor="mm")
+        draw.rectangle(
+            (box[0] - 4, box[1] - 3, box[2] + 4, box[3] + 3), fill=(0, 0, 0)
+        )
+        draw.text((cx, cy), text, font=font, fill=(255, 255, 255), anchor="mm")
+
+    return blended
 
 
 def main() -> int:

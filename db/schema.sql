@@ -92,6 +92,7 @@ CREATE TABLE photo (
     framing_score           NUMERIC(4,3)  CHECK (framing_score BETWEEN 0 AND 1),
     pose_person_area_ratio  REAL          CHECK (pose_person_area_ratio BETWEEN 0 AND 1),
     multi_person            BOOLEAN       NOT NULL DEFAULT false,
+    was_mirrored            BOOLEAN       NOT NULL DEFAULT false,
     created_at              TIMESTAMPTZ   NOT NULL DEFAULT now(),
 
     CONSTRAINT photo_session_kind_uniq UNIQUE (session_id, kind)
@@ -101,6 +102,9 @@ COMMENT ON COLUMN photo.pose_person_area_ratio IS
     'MediaPipe 기준 추정치(프레이밍 판정용). 정확한 인물 면적은 segmentation.person_pixel_count.';
 COMMENT ON COLUMN photo.pose_landmarks IS
     '반전되지 않은 카메라 원본 기준. 미러링은 프론트 CSS만.';
+COMMENT ON COLUMN photo.was_mirrored IS
+    '거울 촬영으로 접수돼 서버가 좌우를 되돌려 저장했는지. '
+    '저장된 이미지·랜드마크는 항상 비반전 기준이므로 이 값은 추적용이다.';
 
 
 -- ============================================================================

@@ -13,6 +13,11 @@ from app.config import settings
 from app.errors import ApiError
 from app.routes.body_parts import router as body_parts_router
 from app.routes.jobs import router as jobs_router
+from app.routes.photos import router as photos_router
+from app.routes.segmentation import router as segmentation_router
+from app.routes.sessions import router as sessions_router
+from app.routes.storage import router as storage_router
+from app.routes.users import router as users_router
 
 app = FastAPI(
     title="KingDreamTree Backend",
@@ -55,10 +60,21 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 # 라우터
 # --------------------------------------------------------------------------- #
 
-app.include_router(body_parts_router)
-app.include_router(jobs_router)
+# ⚠️ 접두사는 여기 한 곳에서만 붙인다. 라우터마다 prefix="/api/v1"을 적으면
+#    한 군데만 빠져도 프론트가 404를 맞고, 버전을 올릴 때 전부 고쳐야 한다.
+#    (Phase 0 라우터들이 실제로 접두사 없이 등록돼 명세의 Base URL과 어긋나 있었다)
+API_PREFIX = "/api/v1"
 
-# TODO(A): users, sessions, photos, segmentation, storage 라우터 (Phase 1~3)
+for _router in (
+    body_parts_router,
+    jobs_router,
+    users_router,
+    sessions_router,
+    photos_router,
+    segmentation_router,
+    storage_router,
+):
+    app.include_router(_router, prefix=API_PREFIX)
 # TODO(B): inbody, analysis, routines, workout_logs 라우터
 
 # ⚠️ 구 스캐폴드 라우터(/analyze, /compare, /routine)는 등록하지 않는다.

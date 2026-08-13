@@ -106,6 +106,34 @@ def get_photo_by_id(photo_id: UUID) -> dict[str, Any] | None:
     return rows[0] if rows else None
 
 
+def create_photo(row: dict[str, Any]) -> dict[str, Any]:
+    """⚠️ UNIQUE (session_id, kind) 때문에 같은 종류가 이미 있으면 실패한다.
+
+    교체는 delete_photo 로 먼저 지우고 넣는다. 그리고 **행보다 Storage 파일을
+    먼저 지워야 한다** — 행을 먼저 지우면 어느 파일을 지울지 알 수 없게 된다.
+    """
+    return get_client().table("photo").insert(row).execute().data[0]
+
+
+def delete_photo(photo_id: UUID) -> None:
+    """사진 행 삭제. segmentation / body_part_segment 는 CASCADE로 딸려 지워진다.
+
+    ⚠️ Storage 파일은 CASCADE 대상이 아니다. 호출부가 먼저 지울 것.
+    """
+    get_client().table("photo").delete().eq("photo_id", str(photo_id)).execute()
+
+
+def rows_for_session(table: str, session_id: UUID, columns: str = "*") -> list[dict[str, Any]]:
+    """세션에 딸린 행들을 그대로 가져온다.
+
+    GET /sessions/active 의 단계별 집계처럼 여러 테이블을 훑어야 할 때 쓴다.
+    테이블마다 전용 함수를 만들면 담당 B 영역까지 여기가 비대해진다.
+    """
+    return (
+        get_client().table(table).select(columns).eq("session_id", str(session_id)).execute().data
+    )
+
+
 def get_segmentation(photo_id: UUID) -> dict[str, Any] | None:
     """행의 존재 = 세그멘테이션 완료. 진행/실패 상태는 job이 소스다."""
     rows = (
@@ -122,6 +150,72 @@ def get_segmentation(photo_id: UUID) -> dict[str, Any] | None:
 def list_body_parts() -> list[dict[str, Any]]:
     """⚠️ 워커의 SKIN_CLASSES 상수 대신 이걸 쓴다. 코드와 DB가 어긋나지 않게."""
     return get_client().table("body_part").select("*").order("display_order").execute().data
+
+
+def master_class_names() -> set[str]:
+    """라벨 맵 검증용 — body_part 전체 class_name."""
+    rows = get_client().table("body_part").select("class_name").execute().data
+    return {r["class_name"] for r in rows}
+
+
+def replace_segmentation(
+    photo_id: UUID, segmentation: dict[str, Any], parts: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """세그멘테이션 결과를 통째로 교체한다.
+
+    ⚠️ UNIQUE(photo_id) 때문에 재추론 시 기존 행이 있으면 INSERT가 실패한다.
+       Storage 파일 삭제는 호출부(핸들러) 책임 — 여기서는 DB만 다룬다.
+    """
+    client = get_client()
+    client.table("segmentation").delete().eq("photo_id", str(photo_id)).execute()
+
+    row = client.table("segmentation").insert({**segmentation, "photo_id": str(photo_id)})
+    created = row.execute().data[0]
+
+    if parts:
+        client.table("body_part_segment").insert(
+            [{**p, "segmentation_id": created["segmentation_id"]} for p in parts]
+        ).execute()
+
+    return created
+
+
+def list_part_segments(segmentation_id: UUID) -> list[dict[str, Any]]:
+    """맵에서 파생된 부위별 통계. 검출된 **모든** 클래스가 들어있다.
+
+    ⚠️ is_valid=false 행도 함께 온다. 그래야 "왼팔은 왜 빠졌지?"에 답할 수 있다.
+    """
+    return (
+        get_client()
+        .table("body_part_segment")
+        .select("*")
+        .eq("segmentation_id", str(segmentation_id))
+        .execute()
+        .data
+    )
+
+
+def storage_path_exists(bucket: str, path: str) -> bool:
+    """그 경로가 DB에 실제로 등록된 파일인지 확인한다.
+
+    ⚠️ signed URL 발급 시 `{user_id}/` prefix 검사만으로는 부족하다.
+       prefix만 보면 임의 경로를 넣어 탐색할 수 있다. 실재 여부까지 확인할 것.
+
+    ⚠️ inbody-temp 는 여기서 확인할 수 없다(경로가 job.payload 안에만 있다).
+       그 버킷은 서버 내부용이라 발급 대상에서 제외한다 — 호출부 책임.
+    """
+    client = get_client()
+    table, column = {
+        settings.bucket_photos: ("photo", "storage_path"),
+        settings.bucket_segmentations: ("segmentation", "map_path"),
+        settings.bucket_body_parts: ("body_part_segment", "crop_path"),
+    }.get(bucket, (None, None))
+
+    if table is None:
+        return False
+
+    rows = client.table(table).select(column).eq(column, path).limit(1).execute().data
+    return bool(rows)
 
 
 def comparable_class_names() -> list[str]:

@@ -37,6 +37,17 @@ models/*
 uploads/
 overlays/
 tmp/
+# scripts/verify_labels.py 산출물 (사람 사진이 들어간 오버레이 — 절대 커밋 금지)
+# ⚠️ out/ 만 막으면 --out out_run1 처럼 다른 이름을 주는 순간 뚫린다.
+out*/
+
+# 검증용으로 리포 루트에 떨어뜨린 사람 사진.
+# ⚠️ 앞의 `/` 가 중요하다 — 확장자를 전역으로 막으면 docs/ 에 스크린샷을 추가할 때
+#    git add 가 조용히 아무것도 안 한다. 에러도 안 난다. 딱 루트만 막는다.
+/*.jpg
+/*.jpeg
+/*.png
+/*.heic
 
 # IDE
 .idea/

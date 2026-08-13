@@ -32,6 +32,15 @@ from app.schemas.enums import JobKind
 #: kind → 핸들러. 담당별로 app/worker/handlers/ 아래에서 등록한다.
 HANDLERS: dict[JobKind, Callable[[dict], dict | None]] = {}
 
+#: 기동 전 점검. 실패하면 워커가 아예 안 뜬다.
+#: ⚠️ 설정이 틀렸다는 걸 **잡을 몇 번 말아먹은 뒤에** 알게 되면 안 된다.
+#:    모델 경로나 API 키처럼 "없으면 어차피 다 실패할" 것들을 여기서 본다.
+PREFLIGHTS: list[Callable[[], None]] = []
+
 
 def register(kind: JobKind, fn: Callable[[dict], dict | None]) -> None:
     HANDLERS[kind] = fn
+
+
+def register_preflight(fn: Callable[[], None]) -> None:
+    PREFLIGHTS.append(fn)

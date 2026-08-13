@@ -35,9 +35,25 @@ from app.worker import queue
 #    사본 쪽 딕셔너리로 들어가고 __main__ 쪽은 빈 채로 남는다.
 #    (재수출은 유지한다 — 기존 `from app.worker.run import register` 도 이제
 #     같은 딕셔너리를 가리키므로 안전하다)
-from app.worker.registry import HANDLERS, register  # noqa: F401
+from app.worker.registry import HANDLERS, PREFLIGHTS, register  # noqa: F401
 
 log = logging.getLogger("worker")
+
+
+def _preflight() -> bool:
+    """기동 전 점검. 하나라도 실패하면 워커를 띄우지 않는다.
+
+    ⚠️ 설정이 틀렸는데 워커가 뜨면, 들어오는 잡을 재시도 한도까지 말아먹은 뒤에야
+       원인을 알게 된다. 사용자는 그동안 로딩 화면을 본다. 여기서 먼저 죽는 게 낫다.
+    """
+    ok = True
+    for check in PREFLIGHTS:
+        try:
+            check()
+        except Exception as e:  # noqa: BLE001
+            log.error("기동 점검 실패 — %s", e)
+            ok = False
+    return ok
 
 
 def _load_handlers(kinds: list[JobKind]) -> None:
@@ -93,6 +109,9 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
     missing = [k for k in kinds if k not in HANDLERS]
     if missing:
         log.error("핸들러가 없는 kind: %s", ", ".join(missing))
+        return 1
+
+    if not _preflight():
         return 1
 
     log.info(

@@ -412,11 +412,18 @@ def symmetry(
     rows: dict[str, dict[str, Any]],
     class_names: list[str],
     person_classes: set[str],
-) -> dict[str, float]:
-    """한 사람 안에서 좌우 같은 부위의 면적 차이(%). 레퍼런스와 무관한 자기 기준 지표.
+) -> dict[str, dict[str, Any]]:
+    """한 사람 안에서 좌우 같은 부위의 면적 차이. 레퍼런스와 무관한 자기 기준 지표.
 
     좌우 쌍은 접두사 규칙(Left_/Right_)으로 찾는다. 부위 목록이 늘어도
     코드를 고칠 일이 없어야 한다 (work-b.md §5: 부위명 하드코딩 금지).
+
+    Returns:
+        {쌍 이름: {"diff_pct": float, "larger": "LEFT"|"RIGHT"|"EQUAL"}}
+
+    ⚠️ **방향(larger)이 빠지면 좌·우 문장이 똑같아진다.** 차이 %만 주면 VLM 이
+       "어느 쪽이 더 큰지"를 모르므로 쌍의 두 항목을 구분할 근거가 없고,
+       수치가 비슷한 좌우 쌍은 복사한 듯한 문장이 된다 (실호출로 확인).
 
     ⚠️ 경고용 참고값이다. 자세·각도로도 쉽게 10~20% 가 나므로 자동 판정에 쓰지 않는다
        (인바디 좌우 대칭 30% 규칙과 같은 취급 — 경고만, 자동 수정 금지).
@@ -425,7 +432,7 @@ def symmetry(
     if bounds is None:
         return {}
 
-    out: dict[str, float] = {}
+    out: dict[str, dict[str, Any]] = {}
     for name in class_names:
         if not name.startswith("Left_"):
             continue
@@ -436,5 +443,8 @@ def symmetry(
         right = normalized_stats(rows[mirror], bounds)["area_share"]
         base = max(left, right)
         if base > 0:
-            out[name[len("Left_") :]] = round(abs(left - right) / base * 100, 1)
+            out[name[len("Left_") :]] = {
+                "diff_pct": round(abs(left - right) / base * 100, 1),
+                "larger": "LEFT" if left > right else ("RIGHT" if right > left else "EQUAL"),
+            }
     return out

@@ -13,6 +13,8 @@ from app.schemas.enums import JobKind, JobStatus
 from app.services.db import get_client
 
 #: 아직 끝나지 않은 잡 (중복 등록 판정용)
+#: ⚠️ PROCESSING 이라고 다 살아있는 건 아니다 — 워커가 죽으면 그대로 멈춘다.
+#:    find_open() 은 is_stale() 로 좀비를 걸러낸다.
 OPEN_STATUSES: tuple[str, ...] = (JobStatus.PENDING, JobStatus.PROCESSING)
 
 
@@ -37,12 +39,42 @@ def enqueue(
     return get_client().table("job").insert(row).execute().data[0]
 
 
+def is_stale(job: dict[str, Any], older_than_sec: int | None = None) -> bool:
+    """PROCESSING 인데 너무 오래 붙잡고 있는 잡인가 (= 워커가 죽었나).
+
+    ⚠️ 시각 비교는 UTC 기준이다. started_at 은 TIMESTAMPTZ 로 저장된다.
+    """
+    if job.get("status") != JobStatus.PROCESSING:
+        return False
+    started = job.get("started_at")
+    if not started:
+        # PROCESSING 인데 started_at 이 없다 — 정상 경로에서는 나올 수 없다. 좀비로 본다.
+        return True
+
+    limit = older_than_sec if older_than_sec is not None else settings.job_stale_after_sec
+    try:
+        at = datetime.fromisoformat(str(started).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - at).total_seconds() > limit
+
+
 def find_open(
     session_id: UUID,
     kind: JobKind,
     payload_match: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """이 세션에 아직 끝나지 않은 같은 종류의 잡이 있는지 찾는다."""
+    """이 세션에 아직 끝나지 않은 같은 종류의 잡이 있는지 찾는다.
+
+    ⚠️ **좀비(워커가 죽어 PROCESSING 에 멈춘 잡)는 '진행 중'으로 치지 않는다.**
+       치면 enqueue_once() 가 그 좀비를 계속 돌려주고, 사용자가 새로고침해도 같은
+       job_id 만 받아 분석이 영구 정지한다. 재시도할 방법이 아예 없어진다.
+       좀비를 빼면 새 잡이 생겨 살아 있는 워커가 이어받는다.
+
+       (좀비 자체의 상태 정리는 reclaim_stale() 이 한다. 여기서는 판단만 바꾼다.)
+    """
     rows = (
         get_client()
         .table("job")
@@ -54,6 +86,7 @@ def find_open(
         .execute()
         .data
     )
+    rows = [r for r in rows if not is_stale(r)]
     if payload_match:
         rows = [
             r

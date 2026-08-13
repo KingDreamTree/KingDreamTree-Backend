@@ -287,6 +287,29 @@ def test_prompts() -> None:
     check("종합 프롬프트에 이미지 없음", "data:image" not in overall_prompt)
 
 
+def test_retry_policy() -> None:
+    print("\n6. 재시도 정책 (결정론적 실패 3배 과금 방지)")
+
+    from app.services.vlm import VlmResponseError
+    from app.worker.handlers.vlm import InputNotUsableError
+    from app.worker.run import _is_retryable
+
+    check("응답 형식 오류는 재시도 안 함", not _is_retryable(VlmResponseError("형식 오류")))
+    check("입력 불가는 재시도 안 함", not _is_retryable(InputNotUsableError("부위 부족")))
+    # 네트워크·일시 장애는 재시도해야 한다 — 전부 껐다가 진짜 복구 가능한 실패까지
+    # 한 번에 죽이면 반대 방향으로 틀린다.
+    check("일시적 오류는 재시도함", _is_retryable(TimeoutError("일시 장애")))
+    check("일반 예외는 재시도함", _is_retryable(RuntimeError("알 수 없음")))
+
+    from app.config import settings
+
+    check(
+        "죽은 설정값 제거됨",
+        not hasattr(settings, "vlm_worker_concurrency"),
+        "vlm_worker_concurrency",
+    )
+
+
 def main() -> int:
     print("F08/F09 진단 파이프라인 검증")
     test_handlers()
@@ -294,6 +317,7 @@ def main() -> int:
     test_overlay()
     test_partial_acceptance()
     test_prompts()
+    test_retry_policy()
 
     print()
     if _failures:

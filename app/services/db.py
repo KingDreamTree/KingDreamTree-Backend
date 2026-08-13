@@ -136,24 +136,3 @@ def comparable_class_names() -> list[str]:
     )
     return [r["class_name"] for r in rows]
 
-
-# --------------------------------------------------------------------------- #
-# ⚠️ LEGACY — 초기 스캐폴드 잔재
-#
-# 이 함수들이 쓰던 `analysis` 테이블은 v4 스키마에서 사라졌다.
-# routes/compare.py 가 아직 import하고 있어 시그니처만 남겨둔다.
-# 담당 B가 새 구조로 옮긴 뒤 이 블록과 routes/compare.py 를 함께 삭제할 것.
-# --------------------------------------------------------------------------- #
-
-_LEGACY_MSG = (
-    "`analysis` 테이블은 v4 스키마에서 제거되었습니다. "
-    "docs/db-design-v4.md 기준의 새 테이블을 사용하세요."
-)
-
-
-async def create_analysis(user_image_url: str, ref_image_url: str) -> str:
-    raise RuntimeError(_LEGACY_MSG)
-
-
-async def update_analysis(analysis_id: str, **fields: Any) -> None:
-    raise RuntimeError(_LEGACY_MSG)

@@ -64,6 +64,28 @@ def _handle_signal(signum, frame) -> None:  # noqa: ANN001
     _stop = True
 
 
+def _reclaim(kinds: list[JobKind]) -> None:
+    """죽은 워커가 남긴 PROCESSING 잡을 되살린다.
+
+    ⚠️ 자기가 처리하는 kind 만 본다. 남의 kind 를 건드리면 멀쩡히 돌고 있는
+       다른 워커의 잡을 빼앗는다.
+    """
+    try:
+        reclaimed = queue.reclaim_stale(kinds)
+    except Exception:  # noqa: BLE001 — 회수 실패로 워커가 죽으면 안 된다
+        log.exception("좀비 잡 회수 실패 — 계속 진행합니다")
+        return
+
+    for job in reclaimed:
+        log.warning(
+            "[%s] %s 좀비 회수 → %s (시도 %d)",
+            job["job_id"],
+            job["kind"],
+            job["status"],
+            job["attempts"],
+        )
+
+
 def run(kinds: list[JobKind], poll_interval: float) -> int:
     _load_handlers(kinds)
 
@@ -72,13 +94,27 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
         log.error("핸들러가 없는 kind: %s", ", ".join(missing))
         return 1
 
-    log.info("워커 기동 — kinds=%s poll=%.1fs", ",".join(kinds), poll_interval)
+    log.info(
+        "워커 기동 — kinds=%s poll=%.1fs 좀비판정=%ds",
+        ",".join(kinds),
+        poll_interval,
+        settings.job_stale_after_sec,
+    )
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
+    # ⚠️ 기동 직후 한 번 — 팟을 껐다 켜는 게 좀비가 생기는 제일 흔한 경로다.
+    #    여기서 바로 회수해야 사용자가 로딩 화면에서 무한정 기다리지 않는다.
+    _reclaim(kinds)
+    last_reclaim = time.monotonic()
+
     idle_logged = False
     while not _stop:
+        if time.monotonic() - last_reclaim >= settings.job_reclaim_interval_sec:
+            _reclaim(kinds)
+            last_reclaim = time.monotonic()
+
         job = queue.claim(kinds)
         if job is None:
             if not idle_logged:

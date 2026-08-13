@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -26,8 +27,11 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from fastapi.testclient import TestClient  # noqa: E402
 from PIL import Image  # noqa: E402
 
+from app.config import settings  # noqa: E402
 from app.main import app  # noqa: E402
+from app.schemas.enums import SEG_KINDS, JobKind  # noqa: E402
 from app.services import db, storage  # noqa: E402
+from app.worker import queue  # noqa: E402
 
 API = "/api/v1"
 client = TestClient(app)
@@ -246,6 +250,62 @@ def main() -> int:
         check("active: 레퍼런스 uploaded", steps["reference_photo"]["uploaded"] is True)
         check("active: 사용자 uploaded", steps["user_photo"]["uploaded"] is True)
         check("active: 잡 상태 노출", steps["user_photo"]["job_status"] == "PENDING")
+
+        # ── 좀비 잡 회수 ──────────────────────────────────────────────────
+        print("\n좀비 잡 회수")
+        jobs = queue.list_jobs(UUID(session_id))
+        check("세그 잡이 큐에 있음", len(jobs) >= 2, f"{len(jobs)}개")
+
+        sb = db.get_client()  # ⚠️ 모듈 레벨 TestClient(client)와 이름이 겹치지 않게
+        stale = (
+            datetime.now(timezone.utc) - timedelta(seconds=settings.job_stale_after_sec * 2)
+        ).isoformat()
+
+        # (1) 재시도 여력이 남은 좀비 → PENDING 으로 되살아나야 한다
+        alive = jobs[0]["job_id"]
+        sb.table("job").update({"status": "PROCESSING", "attempts": 1, "started_at": stale}).eq(
+            "job_id", alive
+        ).execute()
+
+        # (2) 재시도를 소진한 좀비 → PENDING 으로 두면 아무도 안 집는다. FAILED 여야 한다
+        exhausted = jobs[1]["job_id"]
+        sb.table("job").update(
+            {"status": "PROCESSING", "attempts": settings.job_max_attempts, "started_at": stale}
+        ).eq("job_id", exhausted).execute()
+
+        # (3) 방금 시작한 잡 → 건드리면 안 된다 (돌고 있는 워커의 잡을 빼앗는 셈)
+        fresh = queue.enqueue(UUID(session_id), JobKind.SEG_USER, {"photo_id": None})["job_id"]
+        sb.table("job").update(
+            {
+                "status": "PROCESSING",
+                "attempts": 1,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("job_id", fresh).execute()
+
+        reclaimed = queue.reclaim_stale(SEG_KINDS)
+        by_id = {j["job_id"]: j for j in reclaimed}
+
+        check("멈춘 잡을 회수함", alive in by_id, f"{len(reclaimed)}개 회수")
+        if alive in by_id:
+            check(
+                "재시도 여력 있으면 PENDING",
+                by_id[alive]["status"] == "PENDING",
+                by_id[alive]["status"],
+            )
+        check("재시도 소진 잡도 회수함", exhausted in by_id)
+        if exhausted in by_id:
+            check(
+                "재시도 소진이면 FAILED (PENDING이면 영영 안 집힌다)",
+                by_id[exhausted]["status"] == "FAILED",
+                by_id[exhausted]["status"],
+            )
+            check("사용자에게 보여줄 에러 문구", bool(by_id[exhausted]["error"]))
+        check("방금 시작한 잡은 건드리지 않음", fresh not in by_id)
+        check(
+            "회수된 잡을 워커가 다시 집을 수 있음",
+            queue.claim(SEG_KINDS) is not None,
+        )
 
         # ── 소유권 ────────────────────────────────────────────────────────
         print("\n소유권 검증")

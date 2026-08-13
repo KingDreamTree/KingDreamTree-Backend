@@ -65,6 +65,14 @@ class Settings(BaseSettings):
     job_max_attempts: int = 3
     job_claim_retries: int = 5  # CAS 선점 실패 시 재시도 횟수
     worker_poll_interval_sec: float = 1.0
+
+    #: PROCESSING 인 채로 이 시간이 지나면 워커가 죽은 것으로 보고 회수한다.
+    #  ⚠️ **가장 오래 걸리는 잡보다 넉넉히 길어야 한다.** 짧게 잡으면 멀쩡히
+    #     돌고 있는 잡을 회수해 같은 일을 두 번 하게 된다(= VLM이면 요금 두 배).
+    #     세그는 GPU에서 1초 미만, CPU에서 수십 초다. 루틴 생성이 제일 길다.
+    job_stale_after_sec: int = 900  # 15분
+    #: 회수 검사 주기. 매 폴링마다 돌리면 쓸데없는 쿼리가 쌓인다.
+    job_reclaim_interval_sec: int = 60
     # ⚠️ t3.large는 GPU가 없고 메모리 8GB다. 세그 워커를 2개 이상 돌리면 OOM.
     seg_worker_concurrency: int = 1
     vlm_worker_concurrency: int = 3

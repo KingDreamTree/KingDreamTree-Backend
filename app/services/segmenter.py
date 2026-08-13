@@ -327,6 +327,14 @@ def segment(
     image = load_rgb(image_bytes)
     labels, num_classes, elapsed_ms = infer_labels(image, size)
 
+    # ⚠️ 맵 상한을 여기서 적용한다. **통계를 내기 전에** 줄여야 bbox·pixel_count가
+    #    저장되는 맵과 같은 좌표계가 된다. 나중에 줄이면 전부 어긋난다.
+    #    ⚠️ 라벨 배열이므로 NEAREST 외에는 절대 쓰면 안 된다 (보간이 없는 클래스를 만든다).
+    h, w = labels.shape
+    if max(h, w) > settings.map_max_side:
+        scale = settings.map_max_side / max(h, w)
+        labels = resize_labels(labels, max(1, round(w * scale)), max(1, round(h * scale)))
+
     label_map = sapiens_labels.build_label_map(num_classes, order)
 
     # ⚠️ 조용히 넘어가면 seed 불일치를 못 잡는다.

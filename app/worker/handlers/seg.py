@@ -20,8 +20,8 @@ from uuid import UUID
 
 from app.config import settings
 from app.schemas.enums import JobKind
-from app.services import db, segmenter, storage
-from app.worker.run import register
+from app.services import db, sapiens_labels, segmenter, storage
+from app.worker.registry import register, register_preflight
 
 log = logging.getLogger("worker.seg")
 
@@ -123,5 +123,33 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _preflight() -> None:
+    """기동 시 점검 — 가중치가 실제로 있는지, 라벨 매핑이 이 모델로 검증됐는지.
+
+    ⚠️ 둘 다 "없으면 어차피 모든 잡이 실패할" 조건이다. 잡을 재시도 한도까지
+       말아먹은 뒤에 알게 되면 사용자는 그동안 로딩 화면을 본다.
+
+    ⚠️ MODEL_DIR 을 셸 export 로만 두면 터미널을 새로 열 때마다 날아간다.
+       .env 에 넣어두는 게 안전하다 — 여기 메시지에 그 경로를 찍어 확인할 수 있게 한다.
+    """
+    import os
+
+    path = segmenter.model_path()
+    log.info("환경: %s", segmenter.describe_environment())
+    log.info("가중치 경로: %s", path)
+
+    if not os.path.isdir(path):
+        raise RuntimeError(
+            f"가중치 폴더가 없습니다: {path}\n"
+            f"  MODEL_DIR 이 맞는지 확인하세요 (지금 값: {settings.model_dir}).\n"
+            "  셸 export 는 터미널을 새로 열면 날아갑니다. .env 에 넣어두세요:\n"
+            "    echo 'MODEL_DIR=/workspace/models' >> .env"
+        )
+
+    # 라벨 매핑이 이 백본으로 검증됐는지 — 아니면 부위가 통째로 어긋난 채 저장된다
+    sapiens_labels.ensure_verified(segmenter.model_version())
+
+
+register_preflight(_preflight)
 register(JobKind.SEG_REFERENCE, _handle)
 register(JobKind.SEG_USER, _handle)

@@ -22,7 +22,7 @@ from PIL import Image
 
 from app.config import settings
 from app.schemas.enums import InvalidReason
-from app.services import sapiens_labels
+from app.services import part_merge, sapiens_labels
 
 # ⚠️ 사진 유틸(load_rgb / encode_photo)은 app/services/images.py 에 있다.
 #    API 프로세스가 사진 처리 때문에 이 모듈(=torch를 끌어오는 워커 전용 모듈)을
@@ -52,6 +52,9 @@ class PartStat:
     is_truncated: bool
     is_valid: bool
     invalid_reason: str | None = None
+    #: 이 부위 픽셀 중 옷에서 흡수한 것 (병합을 껐으면 항상 0)
+    #: ⚠️ 이 값이 크면 "노출된 살"이 아니라 "옷 실루엣"을 재고 있는 것이다.
+    clothing_pixel_count: int = 0
 
 
 @dataclass
@@ -69,6 +72,12 @@ class SegmentationResult:
     detected_class_count: int
     inference_ms: int
     parts: list[PartStat] = field(default_factory=list)
+
+    #: 옷 병합 **전** 기준으로 유효했던 비교 대상 수.
+    #: ⚠️ parts 의 유효 수와 크게 차이나면 "옷을 많이 입었다"는 뜻이다.
+    #:    병합은 헐렁한 옷 실루엣도 유효하게 만들어버리므로, 재촬영 판단은
+    #:    이 두 숫자를 같이 봐야 한다.
+    valid_comparable_raw: int = 0
 
 
 # --------------------------------------------------------------------------- #
@@ -339,6 +348,28 @@ def segment(
     h, w = labels.shape
     person_pixel_count = int(np.count_nonzero(labels != 0))
 
+    # ⚠️ 옷 병합은 **is_valid 판정보다 먼저** 일어나야 한다. 나중에 병합하면
+    #    이미 TOO_SMALL 로 무효 처리된 부위를 되살릴 수 없다.
+    #    (긴팔이면 상완 노출이 1,200px 대로 떨어져 기준 1,500px 에 걸린다)
+    #
+    # ⚠️ 저장하는 맵은 **원본**이다. 병합된 배열을 저장하면 label_map 에는 있는
+    #    클래스가 맵에는 없는 상태가 되고, 규칙을 바꿀 때 재추론이 필요해진다.
+    #    읽는 쪽(담당 B 하이라이트)은 같은 part_merge 함수를 태워서 맞춘다.
+    stat_labels = labels
+    contribution: dict[str, int] = {}
+    valid_raw = 0
+
+    if settings.seg_merge_clothing:
+        raw_parts = compute_parts(labels, label_map, person_pixel_count, comparable)
+        valid_raw = sum(1 for p in raw_parts if p.is_valid)
+        stat_labels, contribution = part_merge.merge_clothing(labels, label_map, comparable)
+
+    parts = compute_parts(stat_labels, label_map, person_pixel_count, comparable)
+    for p in parts:
+        p.clothing_pixel_count = contribution.get(p.class_name, 0)
+    if not settings.seg_merge_clothing:
+        valid_raw = sum(1 for p in parts if p.is_valid)
+
     return SegmentationResult(
         map_png=encode_map_png(labels),
         map_width=w,
@@ -350,7 +381,8 @@ def segment(
         person_area_ratio=min(person_pixel_count / (w * h), 1.0),
         detected_class_count=int(len(np.unique(labels))),
         inference_ms=elapsed_ms,
-        parts=compute_parts(labels, label_map, person_pixel_count, comparable),
+        parts=parts,
+        valid_comparable_raw=valid_raw,
     )
 
 

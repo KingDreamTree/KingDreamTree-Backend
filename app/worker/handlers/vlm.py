@@ -38,6 +38,17 @@ from app.worker.registry import register
 log = logging.getLogger("worker.vlm")
 
 
+class InputNotUsableError(RuntimeError):
+    """입력 자체가 진단에 못 쓸 상태 — 다시 시도해도 같다.
+
+    비교 대상 부위가 모자란 경우가 이에 해당한다. 사진이 바뀌지 않는 한
+    재시도가 결과를 바꾸지 못하므로 즉시 종결시켜 사용자가 재촬영으로
+    넘어가게 한다 (worker/run.py `_is_retryable`).
+    """
+
+    retryable = False
+
+
 # --------------------------------------------------------------------------- #
 # 입력 준비
 # --------------------------------------------------------------------------- #
@@ -93,7 +104,7 @@ def _diagnose_parts(job: dict[str, Any]) -> dict[str, Any]:
 
     parts = context["parts"]
     if len(parts) < settings.min_comparable_parts:
-        raise ValueError(
+        raise InputNotUsableError(
             f"비교 가능한 부위가 {len(parts)}개뿐입니다 "
             f"(최소 {settings.min_comparable_parts}개). 다시 촬영해주세요."
         )
@@ -111,7 +122,7 @@ def _diagnose_parts(job: dict[str, Any]) -> dict[str, Any]:
         log.warning("맵에 없어 제외된 부위: %s", set(class_names) - set(painted))
     parts = [p for p in parts if p["class_name"] in painted]
     if len(parts) < settings.min_comparable_parts:
-        raise ValueError("맵에서 비교 대상 부위를 충분히 찾지 못했습니다.")
+        raise InputNotUsableError("맵에서 비교 대상 부위를 충분히 찾지 못했습니다.")
 
     ref_segments = context["segments"][str(PhotoKind.REFERENCE)]
     user_segments = context["segments"][str(PhotoKind.USER)]

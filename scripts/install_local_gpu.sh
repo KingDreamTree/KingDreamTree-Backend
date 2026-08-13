@@ -22,9 +22,9 @@ echo
 echo "== transformers 계열 =="
 pip install \
   "transformers==5.15.0" \
-  "safetensors==0.7.0" \
-  "huggingface-hub==0.36.0" \
-  "accelerate==1.13.0"
+  "safetensors==0.8.0" \
+  "huggingface-hub==1.27.0" \
+  "accelerate==1.14.0"
 
 echo
 echo "== 확인 =="

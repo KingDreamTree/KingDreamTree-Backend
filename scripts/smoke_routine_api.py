@@ -172,6 +172,25 @@ def main() -> int:
         )
         check("수행 기록 살아 있음", routine_repo.count_logs(month_routine_id) == 3)
 
+        # ── 6. 진행도가 새 버전에서도 이어지는가 ────────────────────────────
+        # ⚠️ 회귀 방지. 진행도를 month_routine_id 로 세던 시절엔 **피드백으로
+        #    버전이 갈릴 때마다 0 으로 돌아갔다.** 새 버전에는 기록이 없기
+        #    때문이다. 2주기까지 간 사용자가 처음부터 다시 하라는 화면을 봤다.
+        #    프로그램의 단위는 버전이 아니라 세션이다.
+        print("\n6. 버전이 갈려도 진행도는 이어진다")
+        v2_id = UUID(str(v2["month_routine_id"]))
+        routine_repo.replace_days(v2_id, days, 3)  # 같은 일수로 되돌려 비교 가능하게
+        p_old = routine_repo.progress(month_routine_id, 3)
+        p_new = routine_repo.progress(v2_id, 3)
+        check(
+            "새 버전 진행도 = 이전 버전 진행도",
+            (p_new["completed_count"], p_new["cycle_no"], p_new["next_day_order"])
+            == (p_old["completed_count"], p_old["cycle_no"], p_old["next_day_order"]),
+            f"이전 {p_old['completed_count']}회/{p_old['cycle_no']}주기 vs "
+            f"새 {p_new['completed_count']}회/{p_new['cycle_no']}주기",
+        )
+        check("새 버전에서도 0% 가 아니다", p_new["percent"] > 0, f"{p_new['percent']}%")
+
     finally:
         client.table("analysis_session").delete().eq("session_id", str(session_id)).execute()
         client.table("users").delete().eq("user_id", str(user_id)).execute()

@@ -83,6 +83,26 @@ def create_session(user_id: UUID) -> dict[str, Any]:
     )
 
 
+def archive_session(session_id: UUID) -> dict[str, Any] | None:
+    """세션을 ARCHIVED 로 내린다.
+
+    ⚠️ **UNIQUE (user_id) WHERE status='ACTIVE' 를 푸는 유일한 수단이다.**
+       이게 없으면 사용자는 첫 세션에 갇혀 새 분석을 영영 시작하지 못한다.
+    ⚠️ 행과 파일은 지우지 않는다. 지난 분석을 나중에 다시 볼 수 있어야 한다.
+       (보관 기간 정책은 아직 미정 — 담당 B 와 협의 대상)
+    """
+    rows = (
+        get_client()
+        .table("analysis_session")
+        .update({"status": SessionStatus.ARCHIVED})
+        .eq("session_id", str(session_id))
+        .eq("status", SessionStatus.ACTIVE)  # 이미 내려간 것을 또 건드리지 않는다
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
 # --------------------------------------------------------------------------- #
 # photo / segmentation
 # --------------------------------------------------------------------------- #

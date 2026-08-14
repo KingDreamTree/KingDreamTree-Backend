@@ -73,6 +73,12 @@ def _discard_existing(user_id: UUID, session_id: UUID, kind: PhotoKind) -> None:
 
     photo_id = UUID(str(existing["photo_id"]))
 
+    # ⚠️ 잡을 먼저 내린다. 사진 행을 지운 뒤에 워커가 그 잡을 집으면
+    #    "대상 사진을 찾을 수 없습니다"로 실패하고 재시도까지 돈다.
+    canceled = queue.cancel_open_for_photo(session_id, photo_id)
+    if canceled:
+        log.info("사진 교체로 잡 %d건 취소: photo_id=%s", canceled, photo_id)
+
     storage.delete_prefix(settings.bucket_body_parts, f"{user_id}/{session_id}/{str(kind).lower()}")
 
     segmentation = db.get_segmentation(photo_id)
@@ -222,7 +228,7 @@ async def get_reference(session: OwnedSession) -> ReferencePhotoResponse:
         pose_scale_basis=photo["pose_scale_basis"],
         was_mirrored=bool(photo.get("was_mirrored")),
         created_at=str(photo["created_at"]),
-        job_id=str(jobs[-1]["job_id"]) if jobs else "",
+        job_id=str(jobs[-1]["job_id"]) if jobs else None,
         pose_landmarks=photo["pose_landmarks"] or [],
         signed_url=url,
         signed_url_expires_at=expires_at.isoformat(),
@@ -248,7 +254,16 @@ async def upload_user_photo(
     capture_source: Annotated[CaptureSource, Form()],
     pose_landmarks: Annotated[str, Form()],
     pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
-    framing_score: Annotated[float, Form(description="0~1. 인물 bbox IoU")],
+    framing_score: Annotated[
+        float,
+        Form(
+            description=(
+                "0~1. 촬영 거리 일치도 = min(비율, 1/비율), "
+                "비율 = 사용자 몸통길이 / 레퍼런스 몸통길이. "
+                "⚠️ bbox IoU 아님 — 그건 팔다리 움직임을 프레이밍 문제로 오인한다"
+            )
+        ),
+    ],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
     facing_delta: Annotated[
         float, Form(description="0~1. 어깨폭/몸통길이 비율 차. 몸이 돌아간 정도")
@@ -283,11 +298,10 @@ async def upload_user_photo(
     #    촬영 거리가 딴판이라 비율 비교가 무의미해지는 경우를 못 잡는다.
     # ⚠️ VLM 에 이미지를 직접(base64) 보내므로 **거부될 사진은 Storage 에 안 올라간다.**
     # ⚠️ 판정 실패·타임아웃은 통과로 처리한다 (photo_screening 모듈 주석 참조).
-    jpeg_for_screening, _, _ = images.encode_photo(img, mirrored=is_mirrored)
-    screening = await photo_screening.screen(
-        jpeg_for_screening,
-        _reference_bytes(reference),
-    )
+    # ⚠️ 여기서 JPEG 로 인코딩하지 않는다. 판정 쪽에서 어차피 768px 로 줄이므로
+    #    원본 크기로 인코딩 → 디코딩을 한 번씩 더 하는 셈이 된다.
+    #    거울 여부는 판정 기준(옷·거리·잘림) 어디에도 영향이 없어 그대로 넘긴다.
+    screening = await photo_screening.screen(img, _reference_bytes(reference))
     if not screening.suitable:
         raise unsuitable_photo(
             screening.message,

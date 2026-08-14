@@ -32,6 +32,11 @@ class PaletteEntry(BaseModel):
     pixel_count: int
     area_ratio: float = Field(description="segmentation.person_pixel_count 대비 비율")
     bbox: BBox
+    #: ⚠️ 화면 가장자리에 닿아 잘렸을 수 있다는 표시. **무효 처리하지는 않는다** —
+    #  전신 사진은 발이 바닥 경계에 닿는 게 정상이라, 잘림만으로 빼면 너무 많이 빠진다.
+    #  대신 굵기 값의 신뢰도가 낮다는 신호로 쓴다. 저장은 하고 있었는데 응답에는
+    #  안 나가고 있어서 프론트가 알 방법이 없었다.
+    is_truncated: bool = False
 
 
 class ModelInfo(BaseModel):

@@ -42,7 +42,11 @@ class ReferencePhotoResponse(PhotoBase):
        거울 사진이었다면 **되돌린 뒤의** 값이다.
     """
 
-    job_id: str = Field(description="SEG_REFERENCE 잡. GET /jobs/{job_id} 로 폴링")
+    #: ⚠️ 조회 시점에 잡이 하나도 없으면 null 이다. 예전에는 빈 문자열("")을 넣었는데,
+    #  프론트가 그걸 유효한 id 로 보고 GET /jobs/ 를 호출하는 사고가 난다.
+    job_id: str | None = Field(
+        default=None, description="SEG_REFERENCE 잡. GET /jobs/{job_id} 로 폴링. 없으면 null"
+    )
     pose_landmarks: list[PoseLandmark]
     signed_url: str
     signed_url_expires_at: str

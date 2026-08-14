@@ -152,7 +152,10 @@ def parse_landmarks(raw: str | None) -> list[dict[str, Any]]:
 
         out.append(
             {
-                "index": int(item.get("index", i)),
+                # ⚠️ 들어온 index 를 믿지 않고 배열 위치로 덮어쓴다. 뒤집기 경로에서는
+                #    이미 다시 매기고 있었는데 일반 경로만 입력값을 그대로 써서,
+                #    같은 필드가 경로에 따라 의미가 달라지고 있었다.
+                "index": i,
                 "x": x,
                 "y": y,
                 "z": float(item.get("z", 0.0)),
@@ -189,6 +192,27 @@ def unmirror_landmarks(landmarks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
+def _ensure_range(name: str, value: float, low: float, high: float) -> None:
+    """점수가 약속한 범위 안인지 확인한다.
+
+    ⚠️ 이 검사가 없으면 **틀린 값이 판정을 그냥 통과한다.** 실제로 네 경우가 그랬다.
+         framing_score 를 0~100 으로 착각해 65 를 보냄  → 하한(0.65)을 여유롭게 넘어 통과
+         pose_similarity=150                          → 통과
+         pose_similarity=NaN                          → NaN 비교는 전부 False 라 통과
+         facing_delta=-5                              → 통과
+       그리고 저장 단계에서 DB CHECK 에 걸려 **500** 이 난다. 사용자에게는 원인을
+       알 수 없는 서버 오류로 보이고, 프론트는 자기 단위 실수를 눈치채지 못한다.
+
+    ⚠️ `not (low <= value <= high)` 로 쓴다. NaN 은 어떤 비교에도 False 라
+       이 형태여야 걸린다 (`value < low or value > high` 로 쓰면 NaN 이 빠져나간다).
+    """
+    if not (low <= value <= high):
+        raise invalid_request(
+            f"{name} 는 {low}~{high} 범위여야 합니다.",
+            {"field": name, "got": value, "min": low, "max": high},
+        )
+
+
 def ensure_single_person(multi_person: bool) -> None:
     if multi_person:
         raise multi_person_error()
@@ -221,6 +245,7 @@ def criteria() -> dict[str, float | int]:
         "hard_tol_deg": settings.pose_hard_tol_deg,
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
+        "f_hard": settings.framing_hard_min,
         "r_max": settings.pose_facing_max_delta,
         "min_visible_angles": settings.pose_min_visible_angles,
         "min_visibility": settings.pose_min_visibility,
@@ -240,15 +265,24 @@ def judge_user_photo(
 
     산식은 docs/pose-scoring.md 참조. 여기서는 **임계값 비교만** 한다.
 
-    ⚠️ **순서가 의미를 갖는다.** 프레이밍이 깨졌거나 몸이 돌아간 상태의 자세 점수는
-       믿을 수 없다. 그리고 안내 문구가 각각 달라야 한다 — 사용자가 취해야 할
-       행동이 다르기 때문이다.
-         FRAMING "몸이 다 나오게 서주세요" / FACING "정면을 보고 서주세요"
+    ⚠️ **순서가 의미를 갖는다.** 몸이 돌아간 상태의 자세 점수는 믿을 수 없고,
+       안내 문구가 각각 달라야 한다 — 사용자가 취해야 할 행동이 다르기 때문이다.
+         FRAMING "비슷한 거리에서 다시" / FACING "정면을 보고 서주세요"
          POSE    "포즈를 맞춰주세요"
+
+    ⚠️ 거리(framing)는 **f_hard 로만 막는다.** f_min 은 촬영 화면 유도용이다.
+       거리 차이는 몸통 길이 정규화로 상쇄되므로, 유도선에서 막으면 고쳐도
+       이득이 없는 이유로 사용자를 돌려보내게 된다. 자세한 근거는 config.py 참조.
 
     ⚠️ facing_delta 기본값이 0.0 인 것은 **미전달 시 통과**를 뜻한다.
        프론트가 아직 이 값을 안 보내는 동안 업로드가 막히면 안 된다.
     """
+    # ⚠️ 임계값 비교보다 **먼저** 범위를 본다. 단위를 착각한 값은 "미달"이 아니라
+    #    "잘못 보낸 것"이고, 사용자에게 재촬영을 시킬 일이 아니라 프론트가 고칠 일이다.
+    _ensure_range("pose_similarity", pose_similarity, 0.0, 100.0)
+    _ensure_range("framing_score", framing_score, 0.0, 1.0)
+    _ensure_range("facing_delta", facing_delta, 0.0, 1.0)
+
     ensure_single_person(multi_person)
     ensure_same_scale_basis(reference_scale_basis, str(scale_basis))
 
@@ -258,12 +292,20 @@ def judge_user_photo(
         "facing_delta": facing_delta,
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
+        "f_hard": settings.framing_hard_min,
         "r_max": settings.pose_facing_max_delta,
     }
 
-    if framing_score < settings.framing_f_min:
+    # ⚠️ **거리는 유도 기준(f_min)이 아니라 거부 기준(f_hard)으로 막는다.**
+    #    부위 굵기를 몸통 길이로 나눠 비교하므로 거리 차이는 계산에서 상쇄된다 —
+    #    2배 가까이 서면 팔뚝도 2배, 몸통도 2배라 비율은 같다.
+    #    거리가 진짜 문제가 되는 두 경우는 각각 다른 곳이 잡는다:
+    #      원근 왜곡 → 2차 검사 PERSPECTIVE_MISMATCH / 픽셀 부족 → 부위별 TOO_SMALL
+    #    여기서 f_min 으로 막으면 **고쳐도 이득이 없는 이유로 사용자를 돌려보낸다.**
+    #    f_min 은 촬영 화면 유도에만 쓴다(GET /pose-criteria 로 내려준다).
+    if framing_score < settings.framing_hard_min:
         raise pose_mismatch(
-            "몸이 화면에 다 나오도록 서주세요.",
+            "레퍼런스와 촬영 거리가 너무 다릅니다. 비슷한 거리에서 다시 촬영해주세요.",
             reason="FRAMING",
             detail=detail,
         )

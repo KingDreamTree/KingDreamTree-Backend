@@ -380,12 +380,55 @@ def test_retry_policy() -> None:
     )
 
 
+def test_blocked_without_inbody() -> None:
+    """blocked + 인바디 없음 → gap_level 이 점수에 들어가면 안 된다.
+
+    실연동(2026-08-14)에서 이 경로로 SIGNIFICANT 2건이 점수에 들어가 56점을
+    만들었다 — 빼면 88점이었다. 프롬프트가 null 을 강제하지만 LLM 이 어긴다.
+    시각으로도 못 보고 실측도 없는 등급은 근거가 0 이라 코드가 무효화한다. (A 발견)
+    """
+    print("\n[blocked + 인바디 없음]")
+    resp = {
+        "parts": [
+            {
+                "class_name": "Torso",
+                "gap_level": "SIGNIFICANT",
+                "confidence": "LOW",
+                "blocked_reason": "옷에 가려 형태 확인 불가",
+                "priority": 1,
+            },
+            {
+                "class_name": "Left_Upper_Arm",
+                "gap_level": "MODERATE",
+                "confidence": "HIGH",
+                "blocked_reason": None,
+                "priority": 2,
+            },
+        ]
+    }
+    names = ["Torso", "Left_Upper_Arm"]
+
+    without = {
+        r["class_name"]: r["gap_level"]
+        for r in vlm.parse_part_response(resp, names, inbody_available=False)["results"]
+    }
+    check("인바디 없으면 blocked 등급을 null 로 강등", without["Torso"] is None)
+    check("정상 부위는 영향 없음", without["Left_Upper_Arm"] == "MODERATE")
+
+    with_inbody = {
+        r["class_name"]: r["gap_level"]
+        for r in vlm.parse_part_response(resp, names, inbody_available=True)["results"]
+    }
+    check("인바디 있으면 유지 (인바디 근거 경로)", with_inbody["Torso"] == "SIGNIFICANT")
+
+
 def main() -> int:
     print("F08/F09 진단 파이프라인 검증")
     test_handlers()
     test_scale_invariance()
     test_overlay()
     test_partial_acceptance()
+    test_blocked_without_inbody()
     test_prompts()
     test_citation_routing()
     test_retry_policy()

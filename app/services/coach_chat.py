@@ -71,9 +71,13 @@ def validate_tool_call(
     name: str,
     args: dict[str, Any],
     days: list[dict[str, Any]],
-    allowed_refs: set[str],
+    candidates: dict[str, list[dict[str, Any]]],
 ) -> tuple[dict[str, Any] | None, str | None]:
     """도구 호출 하나를 검증·정규화한다.
+
+    Args:
+        candidates: 근육군 → 후보 운동 목록. **근육군별로 받는다** — 합집합만
+            받으면 가슴 슬롯을 하체 운동으로 바꿔도 통과한다 (아래 참조).
 
     Returns:
         (정규화된 args, None)  통과
@@ -121,8 +125,26 @@ def validate_tool_call(
         if target not in names:
             return None, f"'{target}' 은 Day {day['day_order']} 에 없습니다."
         ref = args.get("new_exercise_ref")
-        if ref not in allowed_refs:
-            return None, f"'{ref}' 는 후보 목록에 없습니다. 제공된 후보에서만 고르세요."
+
+        # ⚠️ **교체는 같은 근육군 후보 안에서만** 허용한다.
+        #    후보를 합집합으로 뭉쳐서 검사하면, 이 루틴에 하체 Day 가 있다는
+        #    이유만으로 가슴 슬롯에 스쿼트를 넣어도 통과한다 (실측으로 확인).
+        #    그러면 운동은 하체인데 muscle_group 은 '가슴'으로 남아
+        #    **주간 볼륨 집계와 화면 라벨이 조용히 어긋난다.**
+        #    슬롯의 세트·횟수도 그 근육군 기준으로 정해진 값이라 함께 무의미해진다.
+        slot = next((e for e in day.get("exercises", []) if e["name"] == target), None)
+        group = (slot or {}).get("muscle_group")
+        same_group = candidates.get(group) if group else None
+        if same_group is None:
+            # 근육군을 알 수 없으면 최소한 전체 후보 안에는 있어야 한다
+            if ref not in {c["exercise_ref"] for g in candidates.values() for c in g}:
+                return None, f"'{ref}' 는 후보 목록에 없습니다. 제공된 후보에서만 고르세요."
+            return args, None
+        if ref not in {c["exercise_ref"] for c in same_group}:
+            return None, (
+                f"'{ref}' 는 '{group}' 후보가 아닙니다. "
+                f"'{group}' 슬롯은 같은 부위 운동으로만 바꿀 수 있습니다."
+            )
         return args, None
 
     return None, f"알 수 없는 도구: {name}"
@@ -195,7 +217,7 @@ def apply_changes_to_days(
 def collect_tool_calls(
     messages: list[dict[str, Any]],
     days: list[dict[str, Any]],
-    allowed_refs: set[str],
+    candidates: dict[str, list[dict[str, Any]]],
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """대화 히스토리에서 검증 통과한 도구 호출과 finalize 를 재수집한다.
 
@@ -213,7 +235,7 @@ def collect_tool_calls(
                 args = json.loads(fn.get("arguments") or "{}")
             except (TypeError, ValueError):
                 continue
-            ok_args, err = validate_tool_call(name, args, days, allowed_refs)
+            ok_args, err = validate_tool_call(name, args, days, candidates)
             if err is not None:
                 log.info("도구 재검증 거부: %s — %s", name, err)
                 continue
@@ -312,7 +334,6 @@ async def chat_turn(
     """
     turn = _count_user_turns(messages)
     candidates = _candidates_by_group(days, catalog)
-    allowed_refs = {c["exercise_ref"] for group in candidates.values() for c in group}
 
     if settings.use_mock:
         mock = _mock_reply(messages, turn)
@@ -378,7 +399,7 @@ async def chat_turn(
                 args = json.loads(tc.function.arguments or "{}")
             except ValueError:
                 args = {}
-            ok_args, err = validate_tool_call(tc.function.name, args, days, allowed_refs)
+            ok_args, err = validate_tool_call(tc.function.name, args, days, candidates)
             if err is not None:
                 # 거부 사유를 돌려줘 LLM 이 같은 턴에서 고치게 한다.
                 result = {"ok": False, "error": err}
@@ -442,7 +463,7 @@ async def chat_turn(
                 args = json.loads(tc.function.arguments or "{}")
             except ValueError:
                 args = {}
-            ok_args, err = validate_tool_call(tc.function.name, args, days, allowed_refs)
+            ok_args, err = validate_tool_call(tc.function.name, args, days, candidates)
             llm_messages.append(
                 {
                     "role": "tool",

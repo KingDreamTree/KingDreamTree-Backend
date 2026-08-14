@@ -37,13 +37,15 @@ SYSTEM_PROMPT = """당신은 체형 분석 결과를 종합하는 전문가입�
 
 # 출력 형식
 
-JSON 하나만 반환합니다.
+JSON 하나만 반환합니다. `<>` 는 채워 넣을 자리 표시입니다 —
+**자리 표시나 이 명세의 문장을 출력에 그대로 복사하지 마세요.**
+모든 문장은 위의 부위별 진단 결과에서 실제로 근거를 찾을 수 있어야 합니다.
 
 {
-  "summary": "...",
-  "priority_parts": ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"],
-  "strengths": ["하체 균형이 좋습니다"],
-  "cautions": ["좌우 팔 근육량 차이가 있어 균형 운동을 권합니다"]
+  "summary": "<§summary 규칙을 따르는 2~3문장>",
+  "priority_parts": ["<개선이 시급한 class_name 순서대로>"],
+  "strengths": ["<NONE/SLIGHT 근거가 있는 부위의 좋은 점 — 없으면 빈 배열>"],
+  "cautions": ["<주의할 점 — 없으면 빈 배열>"]
 }
 
 ## 필드 규칙
@@ -178,6 +180,7 @@ def build_overall_prompt(
     failed: list[str],
     inbody: dict[str, Any] | None,
     score: int | None = None,
+    excluded: list[str] | None = None,
 ) -> str:
     """F09 사용자 메시지. 이미지 없음.
 
@@ -185,6 +188,9 @@ def build_overall_prompt(
         parts:   판단에 성공한 부위 진단 (gap_level 이 있는 것)
         blocked: 판단 불가로 처리된 부위 (gap_level 이 null)
         failed:  응답 자체가 없거나 형식이 깨진 부위의 class_name
+        excluded: **분석 자체가 안 된** 비교 대상 부위 (미검출·교집합 탈락).
+                 이 목록이 없으면 LLM 이 "하체 균형이 좋다"처럼 본 적도 없는
+                 부위를 언급한다 — 실연동에서 실제로 났던 사고다 (A 발견)
         score:   scoring.compute_similarity() 가 계산한 유사도 점수.
                  LLM 은 이 값을 **받아서 쓸 뿐** 만들지 않는다 (score_source=RULE).
     """
@@ -220,6 +226,16 @@ def build_overall_prompt(
             f"## 진단 실패 부위: {', '.join(failed)}",
             "",
             "※ 기술적 실패입니다. 점수에 반영하지 말고 언급도 하지 마세요.",
+        ]
+
+    if excluded:
+        sections += [
+            "",
+            f"## 분석되지 않은 부위: {', '.join(excluded)}",
+            "",
+            "※ 사진에서 검출되지 않아 **아무 정보가 없는** 부위입니다.",
+            "  이 부위를 strengths·summary 의 근거로 쓰지 마세요 — 본 적이 없습니다.",
+            "  cautions 에 '○○는 이번 사진에서 확인할 수 없었다'로만 언급할 수 있습니다.",
         ]
 
     sections += [

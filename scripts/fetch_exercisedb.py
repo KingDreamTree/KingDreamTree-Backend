@@ -1,16 +1,20 @@
 """ExerciseDB(ascendapi) 운동 풀 배치 수집 → 로컬 캐시.
 
-    RAPIDAPI_KEY=... python scripts/fetch_exercisedb.py enums      # bodyparts/muscles 등 enum 확정
-    RAPIDAPI_KEY=... python scripts/fetch_exercisedb.py fetch      # 전체 운동 수집 → data/exercise_catalog.json
-    RAPIDAPI_KEY=... python scripts/fetch_exercisedb.py sample     # 5건만 받아 필드 구조 확인
+    python scripts/fetch_exercisedb.py enums    # bodyparts/muscles 등 enum 확정
+    python scripts/fetch_exercisedb.py fetch    # 전체 운동 수집 → data/exercise_catalog.json
+    python scripts/fetch_exercisedb.py sample   # 5건만 받아 필드 구조 확인
 
 왜 배치 1회 수집인가 (docs/routine-logic-decision.md §5 D6)
     * 사용자 요청마다 외부 API를 부르면 비용·rate limit·응답 속도가 전부 외부 종속이 된다.
     * 시연 중 RapidAPI 장애가 우리 장애가 되는 것을 원천 차단한다.
     * 운동 목록은 사실상 정적 데이터다 — 수집 시각(fetched_at)만 남기면 된다.
 
-⚠️ 키는 .env 가 아니라 환경변수로만 받는다. .env 는 공유 파일(A 리뷰 대상)이라
-   확정 전 변수를 늘리지 않는다. 확정되면 .env.example 에 이름만 추가한다.
+키는 `.env` 의 `RAPIDAPI_KEY` 를 읽는다 (환경변수로 덮어쓸 수 있다).
+`.env` 는 gitignore 대상이라 실제 키가 저장소에 올라가지 않는다 —
+공유되는 `.env.example` 에는 이름만 있다.
+
+⚠️ **이 키는 배치 수집에만 필요하다.** API 서버와 워커는 수집된 로컬 캐시만
+   읽으므로 키 없이 돈다. 외부 API 장애가 서비스 장애가 되지 않게 하려는 설계다.
 
 ━━ 실측으로 확인한 API 스펙 (2026-08-14) ━━
 
@@ -44,7 +48,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-HOST = "edb-with-videos-and-images-by-ascendapi.p.rapidapi.com"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from app.config import settings  # noqa: E402
+
+HOST = settings.rapidapi_exercisedb_host
 OUT_DIR = Path(__file__).resolve().parent.parent / "data"
 
 #: 실측 확인된 경로 (2026-08-14). 앞의 것부터 시도한다.
@@ -81,10 +89,13 @@ ADVANCED_KEYWORDS = (
 
 
 def _key() -> str:
+    """RapidAPI 키 — 환경변수 > .env(settings) 순서로 찾는다."""
     key = os.environ.get("RAPIDAPI_KEY", "").strip()
     if not key:
-        print("[X] RAPIDAPI_KEY 환경변수가 없습니다.")
-        print("    RapidAPI 콘솔(rapidapi.com) → 해당 API → X-RapidAPI-Key 값을 넣어 실행:")
+        key = (settings.rapidapi_key or "").strip()
+    if not key:
+        print("[X] RAPIDAPI_KEY 가 없습니다.")
+        print("    .env 에 RAPIDAPI_KEY=... 를 넣거나, 실행 시 환경변수로 지정하세요:")
         print("    RAPIDAPI_KEY=xxxx python scripts/fetch_exercisedb.py enums")
         sys.exit(1)
     return key

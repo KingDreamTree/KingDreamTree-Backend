@@ -207,7 +207,10 @@ def test_partial_acceptance() -> None:
 
     overall = vlm.parse_overall_response(
         {
-            "similarity_score": 140,  # 범위 밖 → 100 으로 clamp
+            # ⚠️ LLM 이 점수를 보내와도 **버려야 한다.** 유사도는 규칙이 계산한다
+            #    (scoring.compute_similarity, score_source=RULE). 여기서 통과시키면
+            #    "AI 가 뱉은 숫자"가 화면에 그대로 나가고 재현성이 깨진다.
+            "similarity_score": 140,
             "summary": "요약",
             "priority_parts": ["Torso", "Nonexistent_Part"],
             "strengths": "하체가 좋습니다",  # 문자열 → 배열
@@ -215,7 +218,7 @@ def test_partial_acceptance() -> None:
         },
         set(names),
     )
-    check("점수 clamp", overall["similarity_score"] == 100, str(overall["similarity_score"]))
+    check("LLM 이 보낸 점수는 버림 (규칙이 계산)", "similarity_score" not in overall)
     check("없는 부위는 우선순위에서 제거", overall["priority_parts"] == ["Torso"])
     check("strengths 배열화", overall["strengths"] == ["하체가 좋습니다"])
 

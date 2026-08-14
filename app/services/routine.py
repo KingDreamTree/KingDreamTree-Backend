@@ -1,310 +1,335 @@
 """루틴 생성·패치 서비스 (F10, F12).
 
-F10 — generate_routine(): 4주 루틴 초기 생성 (exercise_days_per_week 기반)
-F12 — patch_routine(): 피드백 기반 루틴 패치 (Function Calling)
+F10 — build_routine(): 확정 로직 (2026-08-14 PM 결정 반영)
+
+    [코드] L0  모드        routine_mode.decide_mode() — 체지방률 1차, BMI 폴백
+    [코드] L1  골격        routine_templates.get_template(N, mode) — 주기당 N일
+    [코드] L2  가중        apply_weakness_boost() — 약점 부위 +2~4세트/주
+    [코드]     후보        exercise_catalog.candidates_for_slot() — 카탈로그 필터
+    [LLM ]     선택        후보 중 exercise_ref 만 고름 (환각 구조적 차단)
+    [코드]     검증·조립   후보 밖 응답 폐기→1순위 대체, 주간 중복 제한, RIR 부여
+
+    ⚠️ LLM 호출은 1회, 그마저도 "무엇을 골라도 규칙 위반이 아닌" 집합 안이다.
+       USE_MOCK 이거나 LLM 이 실패하면 **결정론적 선택**(후보 순서 라운드로빈)으로
+       완주한다 — 루틴 생성은 어떤 조합에서도 실패하지 않는다 (D10 취지).
+
+F12 — patch_routine(): 피드백 기반 루틴 패치 (Function Calling) — 기존 유지
 """
 
+from __future__ import annotations
+
 import json
+import logging
 from typing import Any
 
 from app.config import settings
-from app.prompts.routine_gen import build_generate_prompt
+from app.prompts.routine_gen import SYSTEM_PROMPT as SELECTION_SYSTEM
+from app.prompts.routine_gen import build_selection_prompt
 from app.prompts.routine_patch import SYSTEM_PROMPT, TOOLS
+from app.services import exercise_catalog, routine_mode
 from app.services.routine_templates import (
+    CUT_NOTICE,
     SEVEN_DAY_NOTICE,
-    expand_to_28_days,
-    get_week_template,
+    DayPlan,
+    apply_weakness_boost,
+    build_weak_point_day,
+    get_template,
+    weekly_sets_by_group,
 )
 
-# ── Mock ─────────────────────────────────────────────────────────────────────
+log = logging.getLogger("services.routine")
 
-_REST_DAY = {"is_rest": True, "title": "휴식", "estimated_duration_min": None, "exercises": []}
+#: 같은 운동을 주간에 허용하는 최대 횟수. 초과 선택은 코드가 다른 후보로 바꾼다.
+MAX_WEEKLY_REPEAT = 2
 
-#: LLM이 반환하는 **1주치** 계획 모양 (주 3일 = 전신 A/B/C 템플릿 기준).
-#: generate_routine()이 expand_to_28_days()로 4주 복제한다.
-_MOCK_GENERATE_RESULT: dict[str, Any] = {
-    "goal": "어깨 라인 보완 및 전신 근력 균형 개선",
-    "focus_areas": ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"],
-    "week": [
-        {
-            "day_of_week": 1,
-            "is_rest": False,
-            "title": "전신 A",
-            "estimated_duration_min": 55,
-            "exercises": [
-                {
-                    "order_index": 1,
-                    "muscle_group": "가슴",
-                    "name": "덤벨 벤치프레스",
-                    "equipment": "덤벨",
-                    "target_muscle": "대흉근",
-                    "sets": 3,
-                    "reps": 10,
-                    "weight_kg": 12.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 2,
-                    "muscle_group": "등",
-                    "name": "덤벨 원암 로우",
-                    "equipment": "덤벨",
-                    "target_muscle": "광배근",
-                    "sets": 3,
-                    "reps": 10,
-                    "weight_kg": 14.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 3,
-                    "muscle_group": "대퇴사두",
-                    "name": "고블릿 스쿼트",
-                    "equipment": "덤벨",
-                    "target_muscle": "대퇴사두근",
-                    "sets": 3,
-                    "reps": 12,
-                    "weight_kg": 16.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 4,
-                    "muscle_group": "코어",
-                    "name": "플랭크",
-                    "equipment": None,
-                    "target_muscle": "복직근",
-                    "sets": 3,
-                    "reps": None,
-                    "weight_kg": None,
-                    "rest_sec": 60,
-                    "note": "40초 유지",
-                },
-            ],
-        },
-        dict(_REST_DAY, day_of_week=2),
-        {
-            "day_of_week": 3,
-            "is_rest": False,
-            "title": "전신 B",
-            "estimated_duration_min": 55,
-            "exercises": [
-                {
-                    "order_index": 1,
-                    "muscle_group": "어깨",
-                    "name": "덤벨 숄더프레스",
-                    "equipment": "덤벨",
-                    "target_muscle": "삼각근",
-                    "sets": 3,
-                    "reps": 12,
-                    "weight_kg": 10.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 2,
-                    "muscle_group": "등",
-                    "name": "랫 풀다운",
-                    "equipment": "케이블 머신",
-                    "target_muscle": "광배근",
-                    "sets": 3,
-                    "reps": 10,
-                    "weight_kg": 30.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 3,
-                    "muscle_group": "햄스트링·둔근",
-                    "name": "루마니안 데드리프트",
-                    "equipment": "덤벨",
-                    "target_muscle": "햄스트링",
-                    "sets": 3,
-                    "reps": 12,
-                    "weight_kg": 18.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 4,
-                    "muscle_group": "코어",
-                    "name": "데드버그",
-                    "equipment": None,
-                    "target_muscle": "복횡근",
-                    "sets": 3,
-                    "reps": 15,
-                    "weight_kg": None,
-                    "rest_sec": 60,
-                    "note": None,
-                },
-            ],
-        },
-        dict(_REST_DAY, day_of_week=4),
-        {
-            "day_of_week": 5,
-            "is_rest": False,
-            "title": "전신 C",
-            "estimated_duration_min": 55,
-            "exercises": [
-                {
-                    "order_index": 1,
-                    "muscle_group": "가슴",
-                    "name": "머신 체스트 프레스",
-                    "equipment": "머신",
-                    "target_muscle": "대흉근",
-                    "sets": 3,
-                    "reps": 10,
-                    "weight_kg": 25.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 2,
-                    "muscle_group": "등",
-                    "name": "시티드 케이블 로우",
-                    "equipment": "케이블 머신",
-                    "target_muscle": "승모근·능형근",
-                    "sets": 3,
-                    "reps": 12,
-                    "weight_kg": 28.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 3,
-                    "muscle_group": "대퇴사두",
-                    "name": "레그프레스",
-                    "equipment": "머신",
-                    "target_muscle": "대퇴사두근",
-                    "sets": 3,
-                    "reps": 10,
-                    "weight_kg": 60.0,
-                    "rest_sec": 90,
-                    "note": None,
-                },
-                {
-                    "order_index": 4,
-                    "muscle_group": "종아리",
-                    "name": "스탠딩 카프 레이즈",
-                    "equipment": None,
-                    "target_muscle": "비복근",
-                    "sets": 3,
-                    "reps": 15,
-                    "weight_kg": None,
-                    "rest_sec": 60,
-                    "note": None,
-                },
-            ],
-        },
-        dict(_REST_DAY, day_of_week=6),
-        dict(_REST_DAY, day_of_week=7),
-    ],
-    "raw_response": None,
-}
+#: RIR 처방값 — "이만큼 남기고 멈추는" 횟수. Zourdos 2016 척도 기준 초보 권장 구간.
+DEFAULT_RIR = 2
 
-_MOCK_PATCH_RESULT: dict[str, Any] = {
-    "interpretation": "무릎 통증으로 바벨 스쿼트를 레그프레스로 교체하고, 무릎을 주의 금기로 등록했습니다.",
-    "changes": [
-        {
-            "function": "replace_exercise",
-            "args": {
-                "day_number": 3,
-                "old_exercise_name": "바벨 스쿼트",
-                "new_exercise": {
-                    "name": "레그프레스",
-                    "equipment": "레그프레스 머신",
-                    "target_muscle": "대퇴사두근",
-                    "sets": 3,
-                    "reps": 12,
-                    "rest_sec": 90,
-                },
-                "reason": "무릎 통증으로 고관절 굴곡 부하를 최소화하기 위해 교체",
-            },
-        },
-        {
-            "function": "flag_contraindication",
-            "args": {
-                "body_part": "무릎",
-                "severity": "WARN",
-                "reason": "사용자 직접 통증 보고 — 이후 루틴에서 무릎 부하 운동 주의",
-            },
-        },
-    ],
-    "contraindications_added": [{"body_part": "무릎", "severity": "WARN"}],
-    "raw_response": None,
-}
+DISCLAIMER = "본 루틴은 의학적 조언이 아닙니다. 통증이 있으면 중단하고 전문가와 상담하세요."
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+def _rir_note(reps: int) -> str:
+    return f"{reps}회를 마쳤을 때 {DEFAULT_RIR}회 정도 여유가 남는 무게로 하세요."
 
 
-async def generate_routine(
-    exercise_days_per_week: int,
-    overall_diagnosis: dict,
-    inbody: dict | None,
-    contraindications: list[dict],
+# --------------------------------------------------------------------------- #
+# 운동 선택 — LLM(후보 제약) + 결정론 폴백
+# --------------------------------------------------------------------------- #
+
+
+def _slot_id(day: DayPlan, index: int) -> str:
+    return f"d{day['day_order']}s{index}"
+
+
+def _collect_candidates(
+    days: list[DayPlan],
+    catalog: list[dict[str, Any]],
+    single_side_parts: set[str],
+) -> dict[str, list[dict[str, Any]]]:
+    """슬롯별 후보 목록. 여기 없는 운동은 최종 루틴에 들어갈 수 없다."""
+    groups_of_asym = {
+        g for p in single_side_parts for g in exercise_catalog.PART_TO_SLOTS.get(p, ())
+    }
+    out: dict[str, list[dict[str, Any]]] = {}
+    for day in days:
+        for idx, slot in enumerate(day["slots"]):
+            if slot.get("kind") == "CARDIO":
+                continue
+            prefer_single = slot["muscle_group"] in groups_of_asym
+            if prefer_single:
+                slot["single_side"] = True  # 프롬프트 태그용
+            out[_slot_id(day, idx)] = exercise_catalog.candidates_for_slot(
+                slot["muscle_group"], catalog, prefer_single_side=prefer_single
+            )
+    return out
+
+
+def _fallback_selections(
+    days: list[DayPlan],
+    candidates: dict[str, list[dict[str, Any]]],
+) -> dict[str, str]:
+    """결정론적 선택 — 후보 순서대로, 주간 사용 횟수가 적은 것을 먼저.
+
+    mock 모드와 LLM 실패 시의 최후 보루다. 정렬이 이미
+    장비→복합→단측 순이므로 1순위 후보도 충분히 합리적이다.
+    """
+    used: dict[str, int] = {}
+    selections: dict[str, str] = {}
+    for day in days:
+        picked_today: set[str] = set()
+        for idx, slot in enumerate(day["slots"]):
+            if slot.get("kind") == "CARDIO":
+                continue
+            sid = _slot_id(day, idx)
+            pool = candidates.get(sid, [])
+            if not pool:
+                continue
+            fresh = [c for c in pool if c["exercise_ref"] not in picked_today]
+            if not fresh:
+                fresh = pool
+            best = min(
+                fresh,
+                key=lambda c: (used.get(c["exercise_ref"], 0), pool.index(c)),
+            )
+            ref = best["exercise_ref"]
+            selections[sid] = ref
+            used[ref] = used.get(ref, 0) + 1
+            picked_today.add(ref)
+    return selections
+
+
+async def _llm_selections(
+    days: list[DayPlan],
+    candidates: dict[str, list[dict[str, Any]]],
+    priority_parts: list[str],
+) -> tuple[dict[str, str], dict[str, Any] | None]:
+    """LLM 에게 후보 중 선택만 시킨다. 실패하면 빈 dict (폴백이 채운다)."""
+    from app.services.vlm import call_json  # 공용 JSON 호출 (provider 분기·temp=0)
+
+    try:
+        parsed, raw = await call_json(
+            SELECTION_SYSTEM,
+            [{"type": "text", "text": build_selection_prompt(days, candidates, priority_parts)}],
+            max_tokens=1500,
+        )
+    except Exception as e:  # noqa: BLE001 — 선택 실패는 루틴 실패가 아니다
+        log.warning("운동 선택 LLM 실패 — 결정론 폴백으로 진행: %s", e)
+        return {}, None
+
+    picks = parsed.get("selections")
+    return (picks if isinstance(picks, dict) else {}), {
+        "id": raw.get("id"),
+        "model": raw.get("model"),
+        "usage": raw.get("usage"),
+    }
+
+
+def _sanitize_selections(
+    raw_picks: dict[str, str],
+    days: list[DayPlan],
+    candidates: dict[str, list[dict[str, Any]]],
+) -> tuple[dict[str, str], int]:
+    """LLM 선택 검증 — 후보 밖·중복 초과는 폐기하고 폴백 규칙으로 메꾼다.
+
+    Returns: (확정 선택, 교정된 슬롯 수)
+    """
+    fallback = _fallback_selections(days, candidates)
+    used: dict[str, int] = {}
+    fixed = 0
+    final: dict[str, str] = {}
+
+    for day in days:
+        picked_today: set[str] = set()
+        for idx, slot in enumerate(day["slots"]):
+            if slot.get("kind") == "CARDIO":
+                continue
+            sid = _slot_id(day, idx)
+            pool = candidates.get(sid, [])
+            allowed = {c["exercise_ref"] for c in pool}
+            pick = raw_picks.get(sid)
+
+            ok = (
+                isinstance(pick, str)
+                and pick in allowed
+                and pick not in picked_today
+                and used.get(pick, 0) < MAX_WEEKLY_REPEAT
+            )
+            if not ok:
+                pick = fallback.get(sid)
+                if pick is None:
+                    continue
+                if raw_picks:  # LLM 이 시도했는데 교정된 경우만 센다
+                    fixed += 1
+
+            final[sid] = pick
+            used[pick] = used.get(pick, 0) + 1
+            picked_today.add(pick)
+
+    return final, fixed
+
+
+# --------------------------------------------------------------------------- #
+# Public API — F10
+# --------------------------------------------------------------------------- #
+
+
+async def build_routine(
+    days_per_week: int,
+    inbody: dict[str, Any] | None,
+    priority_parts: list[str] | None = None,
+    asymmetric_parts: list[str] | None = None,
 ) -> dict[str, Any]:
-    """4주 루틴을 생성한다 (F10 — ROUTINE_GEN 워커).
-
-    구조: 코드가 분할 골격을 정하고, LLM은 1주치 운동만 채우고, 코드가 4주로 복제한다.
-    → LLM 호출 1회로 28행이 보장된다 (옵시디언 [[08 - 해커톤 MVP 범위]]).
+    """4주기 루틴을 조립한다 (주기당 N일 — 확정 모델).
 
     Args:
-        exercise_days_per_week: 사용자가 선택한 주당 운동 일수 (1~7)
-        overall_diagnosis:      VLM_OVERALL 결과 (F09)
-        inbody:                 인바디 데이터 (없으면 None — 없어도 생성됨)
-        contraindications:      analysis_session.contraindications (누적 금기)
+        days_per_week:    사용자가 고른 1~7 (N)
+        inbody:           inbody 행 (없으면 None → BALANCE 확정)
+        priority_parts:   F09 우선 개선 부위 (없으면 가중 없이 기본 볼륨만)
+        asymmetric_parts: 좌우 차이가 큰 부위 — 해당 슬롯에서 단측 운동 우선
 
     Returns:
         {
-          "goal", "focus_areas",
-          "days": list[dict],   # 28개. day_routine + day_routine_exercise로 분해
-          "notice": str | None, # 7일 선택 시 능동회복 변환 안내
-          "raw_response": dict,
+          "mode", "mode_basis", "mode_reason", "days_per_week", "cycles",
+          "goal", "focus_areas", "notice", "disclaimer",
+          "boosts": {부위: +세트},          # 개인화 문구 근거
+          "weekly_sets": {근육군: 세트},     # 검증·화면용
+          "days": [ {day_order, title, exercises:[...]} ],
+          "selection": {"source": "LLM"|"FALLBACK", "fixed": int, "meta": {...}},
         }
     """
-    week_template = get_week_template(exercise_days_per_week)
-    notice = SEVEN_DAY_NOTICE if exercise_days_per_week == 7 else None
+    priority_parts = priority_parts or []
+    asymmetric_parts = asymmetric_parts or []
 
+    # L0 — 모드 (체지방률 1차, BMI 폴백, 인바디 없으면 BALANCE)
+    mode_info = routine_mode.decide_mode(inbody)
+    mode = str(mode_info["mode"])
+
+    # L1 — 골격 (주기당 N일, CUT 이면 근력일마다 유산소 슬롯)
+    days = get_template(days_per_week, mode)
+    for day in days:
+        if day["title"] == "약점 보완" and not day["slots"]:
+            day["slots"] = build_weak_point_day(priority_parts, exercise_catalog.PART_TO_SLOTS)
+
+    # L2 — 진단 가중 (진단 실패 부위는 여기 안 들어오고 기본 볼륨 유지 — D10)
+    boosts = apply_weakness_boost(days, priority_parts, exercise_catalog.PART_TO_SLOTS)
+
+    # 후보 수집 → 선택 (LLM 1회, 실패 시 결정론 폴백)
+    catalog = exercise_catalog.load_catalog()
+    candidates = _collect_candidates(days, catalog, set(asymmetric_parts))
+
+    llm_meta: dict[str, Any] | None = None
     if settings.use_mock:
-        result = dict(_MOCK_GENERATE_RESULT)
-        result["days"] = expand_to_28_days(result.pop("week"))
-        result["notice"] = notice
-        return result
+        raw_picks: dict[str, str] = {}
+    else:
+        raw_picks, llm_meta = await _llm_selections(days, candidates, priority_parts)
 
-    from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
+    selections, fixed = _sanitize_selections(raw_picks, days, candidates)
+    source = "LLM" if raw_picks else "FALLBACK"
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
-    system, user = build_generate_prompt(
-        week_template=week_template,
-        overall_diagnosis=overall_diagnosis,
-        inbody=inbody,
-        contraindications=contraindications,
+    # 조립 — 유산소는 코드가 직접 고른다 (머신 우선 라운드로빈)
+    cardio_pool = exercise_catalog.cardio_candidates(catalog)
+    cardio_i = 0
+    by_ref = {c["exercise_ref"]: c for c in catalog}
+
+    out_days: list[dict[str, Any]] = []
+    for day in days:
+        exercises: list[dict[str, Any]] = []
+        for idx, slot in enumerate(day["slots"]):
+            order = len(exercises) + 1
+            if slot.get("kind") == "CARDIO":
+                if not cardio_pool:
+                    continue
+                pick = cardio_pool[cardio_i % len(cardio_pool)]
+                cardio_i += 1
+                exercises.append(
+                    {
+                        "order_index": order,
+                        "exercise_ref": pick["exercise_ref"],
+                        "name": pick.get("name_ko") or pick["name_en"],
+                        "image_url": pick.get("image_url"),
+                        "kind": "CARDIO",
+                        "duration_min": slot.get("duration_min", 15),
+                        "note": "대화가 가능한 정도의 숨찬 속도로 하세요.",
+                    }
+                )
+                continue
+
+            ref = selections.get(_slot_id(day, idx))
+            picked = by_ref.get(ref) if ref else None
+            if picked is None:
+                continue
+            exercises.append(
+                {
+                    "order_index": order,
+                    "exercise_ref": picked["exercise_ref"],
+                    "name": picked.get("name_ko") or picked["name_en"],
+                    "image_url": picked.get("image_url"),
+                    "kind": "STRENGTH",
+                    "muscle_group": slot["muscle_group"],
+                    "sets": slot["sets"],
+                    "reps": slot["reps"],
+                    "rest_sec": slot["rest_sec"],
+                    "rir": DEFAULT_RIR,
+                    "note": _rir_note(slot["reps"]),
+                    "boosted_by": slot.get("boosted_by"),
+                }
+            )
+        out_days.append(
+            {"day_order": day["day_order"], "title": day["title"], "exercises": exercises}
+        )
+
+    notice = SEVEN_DAY_NOTICE if days_per_week == 7 else None
+    if mode == "CUT":
+        notice = f"{CUT_NOTICE} {notice}" if notice else CUT_NOTICE
+
+    goal = (
+        "체지방을 줄이면서 근육을 지키는 4주 전신 루틴"
+        if mode == "CUT"
+        else (
+            "약점 부위를 보완하는 4주 균형 루틴" if boosts else "기초 체력과 균형을 만드는 4주 루틴"
+        )
     )
-
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-    )
-
-    raw = response.model_dump()
-    parsed = json.loads(response.choices[0].message.content)
-
-    week: list[dict] = parsed.get("week", [])
-    if len(week) != 7:
-        raise ValueError(f"LLM이 {len(week)}일짜리 주간 계획을 반환했습니다. 7일이어야 합니다.")
 
     return {
-        "goal": parsed.get("goal", ""),
-        "focus_areas": parsed.get("focus_areas", []),
-        "days": expand_to_28_days(week),  # 코드가 4주 복제 + 주차 배율
+        "mode": mode,
+        "mode_basis": mode_info["basis"],
+        "mode_reason": mode_info["reason"],
+        "days_per_week": days_per_week,
+        "cycles": 4,
+        "goal": goal,
+        "focus_areas": list(boosts),
         "notice": notice,
-        "raw_response": raw,
+        "disclaimer": DISCLAIMER,
+        "boosts": boosts,
+        "weekly_sets": weekly_sets_by_group(days),
+        "days": out_days,
+        "selection": {"source": source, "fixed": fixed, "meta": llm_meta},
     }
+
+
+# --------------------------------------------------------------------------- #
+# Public API — F12 (기존 유지)
+# --------------------------------------------------------------------------- #
 
 
 async def patch_routine(

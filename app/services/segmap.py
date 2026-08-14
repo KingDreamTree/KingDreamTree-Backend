@@ -382,11 +382,19 @@ def normalized_stats(row: dict[str, Any], bounds: dict[str, Any]) -> dict[str, f
     aspect       부위 너비 / 높이             (그 자체로 스케일 불변)
     """
     w, h = int(row["bbox_w"]), int(row["bbox_h"])
+    px = int(row.get("pixel_count") or 0)
+
+    # 옷에서 흡수된 픽셀의 비중. 컬럼(clothing_pixel_count)이 아직 없으면 None —
+    # NULL(미계산)과 0(계산했고 흡수 없음)을 구분해야 구버전 행을 오독하지 않는다.
+    clothing = row.get("clothing_pixel_count")
+    clothing_ratio = round(int(clothing) / px, 4) if clothing is not None and px > 0 else None
+
     return {
-        "area_share": round(int(row.get("pixel_count") or 0) / bounds["total_px"], 4),
+        "area_share": round(px / bounds["total_px"], 4),
         "width_share": round(w / bounds["width"], 4),
         "height_share": round(h / bounds["height"], 4),
         "aspect": round(w / max(1, h), 3),
+        "clothing_ratio": clothing_ratio,
     }
 
 

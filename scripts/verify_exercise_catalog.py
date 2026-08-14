@@ -77,13 +77,23 @@ def main() -> int:
     check("헬스장 장비 유산소 존재", len(machine) >= 2, f"{len(machine)}개")
 
     print("\n5. 정렬 우선순위")
+    # 주동근 일치가 최우선 — 이두/삼두는 bodyParts 가 같아서(UPPER ARMS)
+    # targetMuscles 로 갈라야 한다. 이게 없으면 이두 슬롯에 프레스가 뽑힌다 (실측).
+    for slot in ("이두", "삼두"):
+        primary = ec.SLOT_TARGET_MUSCLES[slot]
+        top = ec.candidates_for_slot(slot, catalog, limit=4)
+        hits = [bool(primary & set(c.get("target_muscles") or [])) for c in top]
+        check(
+            f"{slot} 상위 후보의 주동근 일치",
+            all(hits),
+            ", ".join(c["name_en"].strip() for c in top[:3]),
+        )
     chest = ec.candidates_for_slot("가슴", catalog, limit=6)
     if chest:
-        equipped = [bool(set(c.get("equipments") or []) - {"BODY WEIGHT"}) for c in chest]
-        # 장비 운동이 하나라도 있으면 반드시 맨몸보다 앞에 있어야 한다
+        # 주동근 일치 그룹 안에서는 장비 운동이 맨몸보다 앞이어야 한다
         check(
-            "장비 운동이 맨몸보다 앞",
-            not any(equipped) or equipped.index(True) == 0,
+            "가슴 1순위가 장비+주동근 일치",
+            bool(set(chest[0].get("equipments") or []) - {"BODY WEIGHT"}),
             chest[0]["name_en"].strip(),
         )
 

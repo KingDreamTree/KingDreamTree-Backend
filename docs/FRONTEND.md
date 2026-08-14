@@ -164,7 +164,7 @@ POST /sessions                  → 201, 새 session_id
 |---|---|---|
 | `pose_similarity` | 0~100 | 관절이 **가리키는 방향**의 일치도 |
 | `framing_score` | 0~1 | **촬영 거리** 일치도 (몸통 길이 비율) |
-| `facing_delta` | 0~1 | 몸이 **옆으로 돌아간** 정도 |
+| `facing_delta` | 0~1 | **레퍼런스와 몸 방향의 차이.** ⚠️ '정면인가'가 아니라 상대값입니다 |
 
 ### 📦 구현이 있습니다 — 그대로 쓰세요
 
@@ -183,7 +183,7 @@ const hold = createHoldGate(criteria);
 // 매 프레임
 const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 
-showGuide(r.message);        // "정면을 보고 서주세요" 등, 그대로 노출 가능
+showGuide(r.message);        // "같은 방향으로 서주세요" 등, 그대로 노출 가능
 if (hold(r.pass)) shutter(); // 조건이 15프레임 이어지면 자동 촬영
 
 // 업로드할 때 이 세 값을 보냅니다
@@ -565,7 +565,7 @@ const box = { x: p.bbox.x * sx, y: p.bbox.y * sy,
 |---|---|---|
 | `POSE` | 자세를 바꿔야 함 | "레퍼런스와 포즈를 맞춰주세요" |
 | `FRAMING` | 촬영 거리가 너무 다름 | "비슷한 거리에서 다시 촬영해주세요" |
-| `FACING` | 몸이 옆으로 돌아감 | "정면을 보고 서주세요" |
+| `FACING` | **레퍼런스와 몸 방향이 다름** | "레퍼런스와 같은 방향으로 서주세요" |
 | `NO_PERSON` | 사람이 안 잡힘 | "전신이 보이도록 다시 촬영해주세요" |
 
 넷은 **서로 다른 지시**입니다. 하나로 뭉뚱그리면 사용자가 뭘 고쳐야 할지 모릅니다.

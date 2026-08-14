@@ -18,6 +18,7 @@ from app.config import settings
 from app.errors import ApiError, internal_error
 from app.routes.analysis import router as analysis_router
 from app.routes.body_parts import router as body_parts_router
+from app.routes.coach_chat import router as coach_chat_router
 from app.routes.inbody import router as inbody_router
 from app.routes.jobs import router as jobs_router
 from app.routes.photos import router as photos_router
@@ -156,6 +157,7 @@ for _router in (
     analysis_router,
     routines_router,
     workout_logs_router,
+    coach_chat_router,
 ):
     app.include_router(_router, prefix=API_PREFIX)
 

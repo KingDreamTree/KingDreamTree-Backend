@@ -152,7 +152,10 @@ def parse_landmarks(raw: str | None) -> list[dict[str, Any]]:
 
         out.append(
             {
-                "index": int(item.get("index", i)),
+                # ⚠️ 들어온 index 를 믿지 않고 배열 위치로 덮어쓴다. 뒤집기 경로에서는
+                #    이미 다시 매기고 있었는데 일반 경로만 입력값을 그대로 써서,
+                #    같은 필드가 경로에 따라 의미가 달라지고 있었다.
+                "index": i,
                 "x": x,
                 "y": y,
                 "z": float(item.get("z", 0.0)),
@@ -187,6 +190,27 @@ def unmirror_landmarks(landmarks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # 판정
 # --------------------------------------------------------------------------- #
+
+
+def _ensure_range(name: str, value: float, low: float, high: float) -> None:
+    """점수가 약속한 범위 안인지 확인한다.
+
+    ⚠️ 이 검사가 없으면 **틀린 값이 판정을 그냥 통과한다.** 실제로 네 경우가 그랬다.
+         framing_score 를 0~100 으로 착각해 65 를 보냄  → 하한(0.65)을 여유롭게 넘어 통과
+         pose_similarity=150                          → 통과
+         pose_similarity=NaN                          → NaN 비교는 전부 False 라 통과
+         facing_delta=-5                              → 통과
+       그리고 저장 단계에서 DB CHECK 에 걸려 **500** 이 난다. 사용자에게는 원인을
+       알 수 없는 서버 오류로 보이고, 프론트는 자기 단위 실수를 눈치채지 못한다.
+
+    ⚠️ `not (low <= value <= high)` 로 쓴다. NaN 은 어떤 비교에도 False 라
+       이 형태여야 걸린다 (`value < low or value > high` 로 쓰면 NaN 이 빠져나간다).
+    """
+    if not (low <= value <= high):
+        raise invalid_request(
+            f"{name} 는 {low}~{high} 범위여야 합니다.",
+            {"field": name, "got": value, "min": low, "max": high},
+        )
 
 
 def ensure_single_person(multi_person: bool) -> None:
@@ -249,6 +273,12 @@ def judge_user_photo(
     ⚠️ facing_delta 기본값이 0.0 인 것은 **미전달 시 통과**를 뜻한다.
        프론트가 아직 이 값을 안 보내는 동안 업로드가 막히면 안 된다.
     """
+    # ⚠️ 임계값 비교보다 **먼저** 범위를 본다. 단위를 착각한 값은 "미달"이 아니라
+    #    "잘못 보낸 것"이고, 사용자에게 재촬영을 시킬 일이 아니라 프론트가 고칠 일이다.
+    _ensure_range("pose_similarity", pose_similarity, 0.0, 100.0)
+    _ensure_range("framing_score", framing_score, 0.0, 1.0)
+    _ensure_range("facing_delta", facing_delta, 0.0, 1.0)
+
     ensure_single_person(multi_person)
     ensure_same_scale_basis(reference_scale_basis, str(scale_basis))
 

@@ -15,6 +15,9 @@
 from __future__ import annotations
 
 import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 from pathlib import Path
 
 from PIL import Image
@@ -267,7 +270,10 @@ def test_prompts() -> None:
         inbody=inbody,
     )
     check("색 범례 포함", "#FF0000" in prompt and "Left_Upper_Arm" in prompt)
-    check("수치 표 포함", "면적몫" in prompt)
+    # 2026-08-14 개정: 사진 간 크기 수치는 프롬프트에서 폐기됐다 (각도·자세·옷
+    # 흡수로 사이비 정밀도). 표가 "없어야" 하고, 수치 발명 금지 안내가 "있어야" 한다.
+    check("크기 비교 표 없음", "면적몫" not in prompt and "면적 차이" not in prompt)
+    check("수치 발명 금지 안내 포함", "크기 비교 수치는 제공하지 않습니다" in prompt)
     check("인바디 부위 매핑 포함", "LEFT_ARM" in prompt and "2.72" in prompt)
     check("부위 개수 명시", f"{len(parts)}개 부위" in prompt)
 

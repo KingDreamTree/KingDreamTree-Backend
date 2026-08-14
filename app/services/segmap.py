@@ -413,13 +413,32 @@ def compare_parts(
 ) -> dict[str, Any]:
     """비교 대상 부위별로 레퍼런스↔사용자 정규화 수치와 차이(%)를 낸다.
 
+    ⚠️ **정규화 분모는 "비교 대상 부위 집합"이다. 인물 전체가 아니다.**
+       (2026-08-14 실연동에서 발견한 분모 붕괴의 수정)
+
+       인물 전체를 분모로 쓰면 한쪽에서만 부위가 미검출될 때 분모가 무너진다.
+       실측: USER 사진에서 몸통·다리가 옷에 먹혀 미검출 → 분모가 팔 4개뿐
+       → 상완 하나가 인물의 50%로 계산 → "+776% 크다"는 거짓 수치가
+       프롬프트에 사실로 들어갈 뻔했다. framing_bias(중앙값 +280%,
+       same_direction 4/4)가 이를 잡았다.
+
+       양쪽을 **같은 부위 집합**(교집합 — class_names가 이미 그것이다)으로
+       나누면 검출 비대칭이 구조적으로 소거된다. 대신 의미가 바뀐다:
+       "인물 대비 비중"이 아니라 **"비교 부위들 사이의 상대 비중"**이다.
+       좌우 비대칭·부위 간 균형은 그대로 잡히고, "전신 대비 팔이 크다"류의
+       판단은 포기한다 — 애초에 몸통이 안 잡힌 사진에선 불가능한 판단이다.
+
+    person_classes 는 시그니처 호환으로 남겨두었지만 여기서는 쓰지 않는다
+    (symmetry() 는 같은 사진 안의 좌우 비교라 분모가 소거되므로 계속 쓴다).
+
     Returns:
         {"parts": {class_name: {...}}, "bounds": {...}}
-        bounds 가 None 이면(인물을 못 찾음) parts 는 빈 dict 다 — 이 경우
+        bounds 가 None 이면(부위를 못 찾음) parts 는 빈 dict 다 — 이 경우
         수치 없이 이미지만으로 진행한다. 진단을 막지는 않는다.
     """
-    ref_bounds = person_bounds(list(ref_rows.values()), person_classes)
-    user_bounds = person_bounds(list(user_rows.values()), person_classes)
+    basis = set(class_names)  # 양쪽 공통 분모 — 교집합 부위 집합
+    ref_bounds = person_bounds(list(ref_rows.values()), basis)
+    user_bounds = person_bounds(list(user_rows.values()), basis)
     if ref_bounds is None or user_bounds is None:
         return {"parts": {}, "bounds": None}
 
@@ -448,11 +467,16 @@ def compare_parts(
 
 
 def framing_bias(parts: dict[str, Any]) -> dict[str, Any] | None:
-    """잘림(프레이밍) 편향 지표. **판정하지 않고 기록만 한다.**
+    """분모 편향 지표. **판정하지 않고 기록만 한다.**
 
-    왜 필요한가
-        `area_share` 의 분모는 인물 전체 픽셀이다. 발이나 머리가 잘리면 분모가
-        줄어 **모든 부위 share 가 같은 방향으로 같은 비율만큼 밀린다.**
+    실적: 2026-08-14 실연동에서 분모 붕괴(부위 미검출 → +776% 거짓 수치)를
+    이 지표가 잡았다 (중앙값 +280%, same_direction 4/4). 그 수정으로 분모가
+    "비교 부위 집합"으로 바뀌어 검출 비대칭은 구조적으로 소거됐지만,
+    **잔여 편향 감시용으로 계속 기록한다** — 잘림·자세 차이 등 다른 원인의
+    균일 이동이 남아 있을 수 있다.
+
+    원리
+        분모가 어긋나면 **모든 부위 share 가 같은 방향으로 같은 비율만큼 밀린다.**
 
         원래는 A 의 프레이밍 게이트가 막아줬지만, 2026-08-14 에 게이트가
         bbox Jaccard → **몸통 길이 비율**로 바뀌면서 잘림을 못 잡는다.

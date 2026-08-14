@@ -68,6 +68,9 @@ htmlcov/
 # Mypy
 .mypy_cache/
 
+# ExerciseDB 배치 수집 캐시 (fetch_exercisedb.py 산출물 — 재수집 가능)
+/data/
+
 # 2차 검사 시험용 사진 (scripts/verify_photo_screening.py)
 # 실제 사람 몸 사진이다. 절대 커밋하지 말 것.
 photos/

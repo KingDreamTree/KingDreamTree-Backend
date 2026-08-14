@@ -219,6 +219,149 @@ export function facingDelta(ref, user) {
 }
 
 // --------------------------------------------------------------------------
+// K — OKS (Object Keypoint Similarity) · 0~1
+// --------------------------------------------------------------------------
+
+/**
+ * 관절별 사람 라벨링 편차 σ. **COCO keypoint 평가 기준의 공개 수치다.**
+ *
+ * 출처 — pycocotools `cocoeval.py`
+ *   kpt_oks_sigmas = [.26,.25,.25,.35,.35,.79,.79,.72,.72,.62,.62,
+ *                     1.07,1.07,.87,.87,.89,.89] / 10
+ *   (nose, eyeL/R, earL/R, shoulderL/R, elbowL/R, wristL/R,
+ *    hipL/R, kneeL/R, ankleL/R 순)
+ *
+ * 이 숫자가 뜻하는 것 — **같은 사진을 사람 여럿에게 라벨 붙이게 했을 때
+ * 서로 어긋난 정도.** 손목(0.062)은 사람끼리 잘 맞고, 골반(0.107)은 잘 안 맞는다.
+ * 즉 "이 정도 차이는 사람이 봐도 갈린다"를 관절마다 다르게 적용할 수 있다.
+ *
+ * ⚠️ **얼굴 관절(코·눈·귀)은 일부러 뺐다.** 두 가지 이유다.
+ *    1. 우리가 비교하는 건 몸통·팔·다리 9부위다. 얼굴은 진단하지 않는다.
+ *    2. 얼굴 σ 는 0.026 으로 몸의 1/4 이라, 고개만 살짝 돌려도 점수를
+ *       지배해버린다. 진단과 무관한 것 때문에 멀쩡한 사진이 떨어진다.
+ *    SEGMENTS 에서 얼굴 각도를 뺀 것과 같은 판단이다.
+ *
+ * ⚠️ **MediaPipe 랜드마크는 COCO 관절과 정의가 완전히 같지 않다.**
+ *    (BlazePose 는 어깨·골반을 자체 기준으로 찍는다) 그래서 이 σ 는
+ *    **그대로 옮겨온 값이 아니라 근사다.** "COCO σ 를 썼습니다"까지는
+ *    말할 수 있어도 "COCO 와 동일합니다"는 과장이다.
+ *    → MoveNet(COCO 17개 그대로 출력)으로 갈면 이 단서가 사라진다.
+ */
+export const KEYPOINT_SIGMA = {
+  [IDX.shoulderL]: 0.079, [IDX.shoulderR]: 0.079,
+  [IDX.elbowL]: 0.072, [IDX.elbowR]: 0.072,
+  [IDX.wristL]: 0.062, [IDX.wristR]: 0.062,
+  [IDX.hipL]: 0.107, [IDX.hipR]: 0.107,
+  [IDX.kneeL]: 0.087, [IDX.kneeR]: 0.087,
+  [IDX.ankleL]: 0.089, [IDX.ankleR]: 0.089,
+};
+
+/** 위 표의 관절 번호. 화면에 관절별 점수를 보여줄 때 이름도 같이 쓴다. */
+export const OKS_KEYPOINTS = Object.keys(KEYPOINT_SIGMA).map(Number);
+
+const NAME_OF_IDX = Object.fromEntries(Object.entries(IDX).map(([k, v]) => [v, k]));
+
+/**
+ * 자세 하나를 **위치·크기를 지운 좌표**로 바꾼다.
+ *
+ * COCO 의 OKS 는 같은 사진 안에서 정답과 예측을 견주므로 좌표계가 이미 같다.
+ * 우리는 **다른 사진 두 장**을 견주므로 먼저 맞춰놓아야 한다.
+ *
+ *   중심 = 쓰는 관절들의 사각형 중심
+ *   크기 s = √(사각형 넓이)
+ *
+ * ⚠️ **COCO 의 s 는 사람 세그멘테이션 면적이다.** 우리는 자세 관문 시점에
+ *    세그멘테이션이 없다(그건 업로드 후 GPU 에서 난다). 그래서 키포인트
+ *    사각형 넓이로 대신했다 — 세그가 없을 때 쓰는 통상적인 대체다.
+ *    배율이 정확히 같지는 않으므로 **σ 의 절대 눈금은 실측으로 확인해야 한다.**
+ *
+ * ⚠️ **회전은 맞추지 않는다.** Procrustes 처럼 돌려서 겹치면 몸이 돌아간 것과
+ *    기울어진 것이 지워진다 — 그건 우리가 FACING 으로 **일부러 잡는** 신호다.
+ *    위치와 크기만 지운다. (그래서 FRAMING 도 별도 관문으로 남는다)
+ *
+ * ⚠️ aspect — MediaPipe 좌표는 x 를 너비로, y 를 높이로 각각 나눈 값이라
+ *    화면비가 1 이 아니면 x·y 의 눈금이 다르다. 거리를 재는 계산에서는
+ *    이걸 안 맞추면 조용히 틀린다. 화면비(가로/세로)를 넘겨야 한다.
+ */
+function normalizeForOks(lm, indexes, aspect) {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  const pts = [];
+
+  for (const i of indexes) {
+    const x = lm[i].x * aspect;
+    const y = lm[i].y;
+    pts.push({ x, y });
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+
+  // ⚠️ 한 줄로 늘어선 자세(넓이 0)는 나눌 수 없다. 0 으로 나누면 조용히 NaN 이
+  //    되어 점수가 항상 0 으로 나온다 — 판정 불가로 명시해서 돌려보낸다.
+  const area = (x1 - x0) * (y1 - y0);
+  if (!(area > 0)) return null;
+
+  const s = Math.sqrt(area);
+  const cx = (x0 + x1) / 2;
+  const cy = (y0 + y1) / 2;
+  return pts.map((p) => ({ x: (p.x - cx) / s, y: (p.y - cy) / s }));
+}
+
+/**
+ * 두 자세가 얼마나 같은가를 **사람끼리 어긋나는 정도로 나눠서** 잰다.
+ *
+ *   OKS = 평균  exp( −d² / (2 · (2σ)²) )
+ *
+ * d 는 크기를 지운 좌표에서의 관절 간 거리, σ 는 그 관절의 사람 편차다.
+ * **d 가 2σ 만큼 벌어지면 그 관절 점수는 약 0.61 이 된다.**
+ *
+ * 왜 이걸 쓰는가 — 지금 poseScore 는 각도 차이를 TOL=45° 로 나눈다.
+ * 45 라는 숫자에 근거가 없고, 관절을 전부 똑같이 취급한다. OKS 는
+ * **관절마다 다르게 취급하고, 그 차등이 측정된 숫자에서 온다.**
+ *
+ * ⚠️ **아직 이걸로 막지 않는다.** poseScore 와 나란히 계산해서 비교만 한다.
+ *    잡음이 얼마인지 재기 전에 관문을 갈아끼우면 나아졌는지 알 방법이 없다.
+ *    (scripts/measure_pose_tolerance.py, 그리고 하한 실측)
+ *
+ * @param opts.refAspect  레퍼런스 사진의 가로/세로
+ * @param opts.userAspect 사용자 화면의 가로/세로
+ * @returns {{oks:number, reason:string|null, used:number, per:object}}
+ */
+export function oksScore(ref, user, criteria, { refAspect = 1, userAspect = 1 } = {}) {
+  const c = requireCriteria(criteria);
+
+  const used = OKS_KEYPOINTS.filter((i) => visibleIn([ref, user], [i], c.min_visibility));
+  if (used.length < c.min_visible_angles) {
+    return { oks: 0, reason: "NOT_ENOUGH_JOINTS", used: used.length, per: {} };
+  }
+
+  const A = normalizeForOks(ref, used, refAspect);
+  const B = normalizeForOks(user, used, userAspect);
+  if (!A || !B) {
+    return { oks: 0, reason: "NOT_ENOUGH_JOINTS", used: used.length, per: {} };
+  }
+
+  const per = {};
+  let sum = 0;
+
+  used.forEach((idx, k) => {
+    const d2 = (A[k].x - B[k].x) ** 2 + (A[k].y - B[k].y) ** 2;
+    const kappa = 2 * KEYPOINT_SIGMA[idx];
+    const v = Math.exp(-d2 / (2 * kappa * kappa));
+    per[NAME_OF_IDX[idx]] = Math.round(v * 1000) / 1000;
+    sum += v;
+  });
+
+  return {
+    oks: Math.round((sum / used.length) * 1000) / 1000,
+    reason: null,
+    used: used.length,
+    per,
+  };
+}
+
+// --------------------------------------------------------------------------
 // 한 번에 — 화면 표시용
 // --------------------------------------------------------------------------
 
@@ -260,12 +403,20 @@ export const MESSAGES = {
  *    "포즈를 맞춰주세요"라고 답하는데, 실제 문제는 몸이 안 보이는 것이라
  *    사용자가 엉뚱한 걸 고치게 된다.
  */
-export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
+export function evaluate(
+  ref,
+  user,
+  criteria,
+  { multiPerson = false, refAspect = 1, userAspect = 1 } = {}
+) {
   const c = requireCriteria(criteria);
 
   const pose = poseScore(ref, user, c);
   const framing = framingScore(ref, user, c);
   const facing = facingDelta(ref, user);
+  // ⚠️ **관찰만 한다.** 아래 판정에 쓰지 않는다 — 잡음을 재기 전에 관문을
+  //    갈아끼우면 나아졌는지 나빠졌는지 판단할 기준이 없다.
+  const oks = oksScore(ref, user, c, { refAspect, userAspect });
   const torsoRatio =
     torsoLength(user, c.min_visibility) / (torsoLength(ref, c.min_visibility) || 1);
 
@@ -301,11 +452,15 @@ export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
     reason: guideReason,
     blockReason,
     message: MESSAGES[guideReason ?? "OK"],
+    /** OKS — 관찰용. 판정에 쓰지 않는다. 서버로도 보내지 않는다. */
+    oks: oks.oks,
     detail: {
       usedAngles: pose.usedAngles,
       diffs: pose.diffs,
       poseReason: pose.reason,
       torsoRatio: Math.round(torsoRatio * 100) / 100,
+      oksUsed: oks.used,
+      oksPer: oks.per,
     },
   };
 }

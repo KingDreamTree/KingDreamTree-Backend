@@ -77,7 +77,10 @@ def main() -> int:
         RoutineMode.BALANCE,
     )
 
-    print("\n3. 폴백 체인")
+    print("\n3. 폴백 — 체지방률을 못 읽으면 BMI 로 CUT 을 트리거하지 않는다")
+    # ⚠️ BMI 폴백 CUT 은 폐기됐다 (2026-08-14). 체지방률 1차 원칙을 세워놓고
+    #    폴백에서 대리 지표로 감량을 처방하면 그 원칙을 스스로 뒤집는다 —
+    #    근육형 오분류를 우리가 만들어내는 셈이다. 확신 없으면 BALANCE.
     case(
         "체지방률 없음 → 체지방량÷체중 파생 (12/63.5=18.9% → BALANCE)",
         {"gender": "MALE", "body_fat_mass": 12.0, "weight": 63.5, "bmi": 26.0},
@@ -85,16 +88,22 @@ def main() -> int:
         "BODY_FAT_DERIVED",
     )
     case(
-        "체지방 정보 전무 → BMI 폴백 (26 → CUT)",
+        "체지방 정보 전무 → BMI 26 이어도 BALANCE",
         {"gender": "MALE", "bmi": 26.0},
-        RoutineMode.CUT,
-        "BMI_FALLBACK",
+        RoutineMode.BALANCE,
+        "BODY_FAT_UNAVAILABLE",
     )
     case(
-        "BMI 컬럼 없음 → 체중/신장으로 계산 (80kg/170cm=27.7 → CUT)",
+        "BMI 31 (고도비만) 이어도 BALANCE — 대리 지표로 감량 처방 안 함",
+        {"gender": "MALE", "bmi": 31.0},
+        RoutineMode.BALANCE,
+        "BODY_FAT_UNAVAILABLE",
+    )
+    case(
+        "체중/신장만 있어도 BALANCE",
         {"gender": "MALE", "weight": 80.0, "height": 170.0},
-        RoutineMode.CUT,
-        "BMI_FALLBACK",
+        RoutineMode.BALANCE,
+        "BODY_FAT_UNAVAILABLE",
     )
     case("인바디 없음 → BALANCE", None, RoutineMode.BALANCE, "NO_INBODY")
     case("빈 인바디 → BALANCE", {}, RoutineMode.BALANCE, "NO_INBODY")
@@ -102,7 +111,7 @@ def main() -> int:
         "수치를 하나도 못 읽음 → BALANCE",
         {"gender": "MALE", "device_type": "InBody570"},
         RoutineMode.BALANCE,
-        "NO_INBODY",
+        "BODY_FAT_UNAVAILABLE",
     )
 
     print("\n4. 경계·이상값")
@@ -117,10 +126,10 @@ def main() -> int:
         RoutineMode.BALANCE,
     )
     case(
-        "체지방률 0/음수는 무효 → BMI 폴백",
+        "체지방률 0/음수는 무효 → 판정 불가로 BALANCE",
         {"gender": "MALE", "body_fat_percentage": 0, "bmi": 26.0},
-        RoutineMode.CUT,
-        "BMI_FALLBACK",
+        RoutineMode.BALANCE,
+        "BODY_FAT_UNAVAILABLE",
     )
 
     print("\n5. 추적 가능성")
@@ -129,11 +138,16 @@ def main() -> int:
     )
     check("판정 근거(basis) 노출", muscular["basis"] == "BODY_FAT_MEASURED")
     check("사용자용 문구 존재", bool(muscular["reason"]), muscular["reason"])
-    fallback = decide_mode({"gender": "MALE", "bmi": 26.0})
+    unavailable = decide_mode({"gender": "MALE", "bmi": 26.0})
     check(
-        "BMI 폴백은 별도 basis 로 추적 가능",
-        fallback["basis"] == "BMI_FALLBACK",
-        "근육형 오분류 가능 경로",
+        "판정 불가는 별도 basis 로 구분",
+        unavailable["basis"] == "BODY_FAT_UNAVAILABLE",
+        "인바디 자체가 없는 NO_INBODY 와 구분된다",
+    )
+    check(
+        "BMI 는 참고값으로 남는다 (트리거 아님)",
+        unavailable["value"] == 26.0 and unavailable["cutoff"] is None,
+        f"value={unavailable['value']} cutoff={unavailable['cutoff']}",
     )
 
     print()

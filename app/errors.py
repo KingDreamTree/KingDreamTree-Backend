@@ -42,6 +42,16 @@ def missing_user_id() -> ApiError:
     return ApiError(401, "MISSING_USER_ID", "X-User-Id 헤더가 필요합니다.")
 
 
+def invalid_user_id() -> ApiError:
+    """헤더는 왔는데 UUID 형식이 아니다.
+
+    ⚠️ MISSING_USER_ID 와 나눈다. "헤더가 필요합니다"라고 하면 프론트는
+       헤더를 안 보낸 줄 알고 엉뚱한 데를 고친다. 실제로는 저장된 값이 깨진 것이라
+       재발급이 답이다.
+    """
+    return ApiError(401, "INVALID_USER_ID", "X-User-Id 형식이 올바르지 않습니다.")
+
+
 def not_found(what: str = "리소스") -> ApiError:
     """⚠️ 소유권 불일치도 이걸 쓴다.
 
@@ -108,6 +118,17 @@ def multi_person_error() -> ApiError:
         422,
         "MULTI_PERSON",
         "사진에 여러 사람이 있습니다. 혼자 나오도록 촬영해주세요.",
+    )
+
+
+def internal_error() -> ApiError:
+    """예상 못 한 서버 오류.
+
+    ⚠️ 원인을 message 에 넣지 않는다. 스택 트레이스·쿼리·경로가 사용자 화면과
+       프론트 로그로 새어나간다. 원인은 서버 로그에만 남긴다.
+    """
+    return ApiError(
+        500, "INTERNAL_ERROR", "서버에서 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
     )
 
 

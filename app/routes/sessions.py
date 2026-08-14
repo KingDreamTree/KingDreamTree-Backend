@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, status
 
-from app.deps import UserId
+from app.deps import CurrentUser, UserId
 from app.errors import active_session_exists, not_found
 from app.schemas.enums import JobKind, PhotoKind
 from app.schemas.session import (
@@ -33,12 +33,19 @@ router = APIRouter(tags=["sessions"])
     status_code=status.HTTP_201_CREATED,
     summary="새 분석 세션 시작",
 )
-async def create_session(user_id: UserId) -> SessionResponse:
+async def create_session(user: CurrentUser) -> SessionResponse:
     """⚠️ 진행 중 세션이 있으면 409.
 
     DB에 UNIQUE (user_id) WHERE status='ACTIVE' 가 걸려 있어 어차피 못 만든다.
     미리 확인해서 detail.session_id 를 돌려주면 프론트가 이어서 진행할 수 있다.
+
+    ⚠️ UserId 가 아니라 CurrentUser 를 쓴다 — **사용자가 실재하는지까지** 본다.
+       형식만 검사하면 없는 id 로 INSERT 가 들어가 FK 위반으로 **500** 이 났다.
+       DB 를 초기화했는데 프론트에 옛 id 가 남아 있는 상황이 정확히 이 경로다.
+       이때는 404 여야 프론트가 "재발급"으로 분기할 수 있다 (FRONTEND.md 안내와 일치).
+       다른 라우트는 OwnedSession 을 거치므로 세션 조회에서 이미 404 가 난다.
     """
+    user_id = UUID(str(user["user_id"]))
     existing = db.get_active_session(user_id)
     if existing is not None:
         raise active_session_exists(str(existing["session_id"]))

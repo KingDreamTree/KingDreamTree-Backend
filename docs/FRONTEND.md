@@ -45,6 +45,14 @@
 
 ---
 
+## CORS
+
+서버가 `CORS_ORIGINS` 에 적힌 오리진만 허용합니다. 기본값은 `*` (전부 허용)입니다.
+
+⚠️ **브라우저에서만 실패하고 Postman 에서는 되는 증상**이면 이걸 의심하세요. 배포 주소가 정해지면 백엔드에 알려주시면 목록에 넣습니다.
+
+---
+
 ## 인증 — `X-User-Id`
 
 로그인이 없습니다. `POST /users` 로 받은 UUID를 **모든 요청 헤더에** 실어 보냅니다.
@@ -195,7 +203,11 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 
 | HTTP | code | 화면에서 할 일 |
 |---|---|---|
-| 401 | `MISSING_USER_ID` | 헤더 누락. `POST /users` 로 재발급 |
+| 401 | `MISSING_USER_ID` | 헤더 자체가 없음 |
+| 401 | `INVALID_USER_ID` | 헤더는 있는데 UUID 형식이 아님 → **저장된 값이 깨진 것.** `POST /users` 로 재발급 |
+| 404 | `NOT_FOUND` (세션 생성 시) | **저장된 `user_id` 가 서버에 없음.** DB 초기화 등. `POST /users` 로 재발급 |
+| 405 | `METHOD_NOT_ALLOWED` | 요청 메서드가 틀림 (개발 중 실수) |
+| 500 | `INTERNAL_ERROR` | 서버 오류. `message` 를 그대로 보여주고 재시도 안내 |
 | 404 | `NOT_FOUND` | 없거나 **남의 것**. 403을 주지 않는 건 의도된 설계입니다 |
 | 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행** |
 | 409 | `PRECONDITION_NOT_MET` | 선행 단계 미완료 (예: 레퍼런스 없이 사용자 사진) |

@@ -175,7 +175,7 @@ def main() -> int:
             "framing_score": "0.9",
         }
 
-        r = upload(f"{SP}/user", H, {**ok, "pose_similarity": "55.0"})  # THRESHOLD=70 미만
+        r = upload(f"{SP}/user", H, {**ok, "pose_similarity": "40.0"})  # THRESHOLD=70 미만
         err = r.json().get("error", {})
         check("포즈 미달 → 422 POSE", r.status_code == 422 and err.get("code") == "POSE_MISMATCH")
         check("reason=POSE", err.get("detail", {}).get("reason") == "POSE")
@@ -192,10 +192,13 @@ def main() -> int:
             f"status={r.status_code}",
         )
 
-        r = upload(f"{SP}/user", H, {**ok, "facing_delta": "0.5"})  # R_MAX=0.25 초과
+        # ⚠️ FACING 관문은 2026-08-14 에 뺐다 — facing_delta 는 관찰용으로 저장만 한다.
+        #    돌아간 값이 있어도 다른 사유(여기서는 POSE)로만 거부되는지 본다.
+        #    (성공 업로드로 확인하면 사진이 저장돼 뒤의 검사 상태를 흔든다)
+        r = upload(f"{SP}/user", H, {**ok, "pose_similarity": "40.0", "facing_delta": "0.5"})
         check(
-            "몸이 돌아감 → 422 FACING",
-            r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "FACING",
+            "몸이 돌아가도 FACING 으로는 거부하지 않음 (POSE 가 나와야 함)",
+            r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "POSE",
             f"status={r.status_code}",
         )
 

@@ -136,9 +136,10 @@
         <div class="ds" id="fd">몸통 길이 비율. 유도선 미달은 안내만, 거부선 미달만 막힘</div>
       </div>
       <div class="metric">
-        <div class="top"><span class="nm">몸통 방향 (R)</span><span class="vl" id="rv">–</span></div>
-        <div class="track"><div class="fill" id="rf" style="width:0%"></div><div class="mark" id="rm"></div></div>
-        <div class="ds">어깨폭 ÷ 몸통길이 의 <b>차이</b>. <b>0이면 레퍼런스와 같은 방향</b>이고, 방향이 어긋날수록 커집니다</div>
+        <div class="top"><span class="nm">몸통 방향 (R) <span style="opacity:.6;font-weight:400">(관찰용)</span></span><span class="vl" id="rv">–</span></div>
+        <div class="track"><div class="fill" id="rf" style="width:0%"></div></div>
+        <div class="ds">어깨폭 ÷ 몸통길이 의 <b>차이</b>. <b>0이면 레퍼런스와 같은 방향</b>.
+          <b>판정에는 쓰지 않습니다</b> — 잡음이 많아 2026-08-14 에 관문에서 뺐고, 데이터만 쌓는 중</div>
         <div class="ds" id="rraw" style="font-family:Consolas,monospace;white-space:pre-line">–</div>
       </div>
 
@@ -175,8 +176,9 @@
       <li><b>옆으로 걸어보세요</b> → 자세 점수가 <b>안 변합니다</b>. 방향만 보기 때문입니다 (좌표를 비교했다면 여기서 떨어집니다)</li>
       <li><b>뒤로 물러났다 앞으로</b> → 자세는 그대로, <b>거리(F)만</b> 움직입니다</li>
       <li><b>한쪽 팔만 들어보세요</b> → 그 관절 막대만 길어지고 점수가 조금 깎입니다</li>
-      <li><b>팔을 크게 휘둘러 60°를 넘겨보세요</b> → 나머지가 다 맞아도 <b>0점</b>이 됩니다</li>
-      <li><b>몸을 옆으로 돌려보세요</b> → 각도는 거의 그대로인데 <b>정면성(R)만</b> 치솟습니다</li>
+      <li><b>팔을 크게 휘둘러 70°를 넘겨보세요</b> → 나머지가 다 맞아도 <b>0점</b>이 됩니다</li>
+      <li><b>팔을 카메라 쪽으로 뻗어보세요</b> → 그 관절이 계산에서 <b>빠집니다</b> (투영 각도가 잡음이라)</li>
+      <li><b>몸을 옆으로 돌려보세요</b> → 각도는 거의 그대로인데 <b>몸통 방향(R)만</b> 치솟습니다 — 지금은 관찰용이라 막지 않습니다</li>
       <li><b>자세를 맞추고 가만히</b> → 아래 초록 막대가 차오르고 자동 촬영됩니다</li>
     </ul>
   </div>
@@ -217,7 +219,6 @@ $("connect").onclick = async () => {
     hold = createHoldGate(criteria);
     $("pm").style.left = criteria.threshold + "%";
     $("fm").style.left = (criteria.f_min * 100) + "%";
-    $("rm").style.left = (criteria.r_max * 100) + "%";
     $("pd").textContent = `통과선 ${criteria.threshold}점 · 한 관절이라도 ${criteria.hard_tol_deg}° 넘으면 0점`;
     $("fd").textContent = `유도선 ${criteria.f_min} · 거부선 ${criteria.f_hard ?? "-"} (거부선 미만일 때만 서버가 막습니다)`;
     setStatus(`기준을 받았습니다 — ${JSON.stringify(criteria)}`, "ok");
@@ -379,8 +380,8 @@ function render(r) {
   };
   set("pv", "pf", r.pose_similarity.toFixed(1), r.pose_similarity, r.pose_similarity < criteria.threshold);
   set("fv", "ff", r.framing_score.toFixed(3), r.framing_score * 100, r.framing_score < (criteria.f_hard ?? 0.4));
-  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100, r.facing_delta > criteria.r_max);
-  // ⚠️ bad 표시를 하지 않는다 — 임계값이 아직 없다. 있는 척하면 안 된다.
+  // ⚠️ R·OKS 는 bad 표시를 하지 않는다 — 관찰용이라 임계값이 없다. 있는 척하면 안 된다.
+  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100, false);
   set("kv", "kf", r.oks.toFixed(3), r.oks * 100, false);
   $("kraw").textContent = Object.entries(r.detail.oksPer)
     .sort((a, b) => a[1] - b[1]).slice(0, 4)

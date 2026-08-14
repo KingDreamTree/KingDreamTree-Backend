@@ -32,7 +32,7 @@ from app.schemas.coach import (
     FinalizedCard,
 )
 from app.schemas.enums import DomainStatus, GenerationType
-from app.services import coach_chat, exercise_catalog, routine_repo
+from app.services import coach_chat, contraindication, exercise_catalog, routine_repo
 from app.services.db import get_client
 
 log = logging.getLogger("routes.coach_chat")
@@ -159,7 +159,18 @@ async def apply(session: OwnedSession, body: CoachApplyRequest) -> CoachApplyRes
     added = [{"body_part": f["body_part"], "severity": f["severity"]} for f in flags]
     _merge_contraindications(session_id, added)  # 멱등 — chat 때 이미 넣었어도 중복 안 됨
 
-    if not routine_calls:
+    by_ref = {c["exercise_ref"]: c for c in catalog}
+    new_days, applied = coach_chat.apply_changes_to_days(days, routine_calls, by_ref)
+
+    # ⚠️ 금기 강제는 **조기 반환보다 앞에** 있어야 한다. LLM 이 금기만 등록하고
+    #    운동을 안 건드리면 routine_calls 가 비는데, 그게 바로 통증이 기록만 되고
+    #    루틴에 반영되지 않는 누수 경로다. 여기서 걸러야 새 버전이 만들어진다.
+    new_days, enforced = contraindication.enforce(
+        new_days, _load_contraindications(session_id), applied
+    )
+    applied = applied + enforced
+
+    if not applied:
         # 루틴 변경이 없다 — 버전을 만들지 않고 이력만 남긴다.
         routine_repo.create_revision(
             month_routine_id,
@@ -177,9 +188,6 @@ async def apply(session: OwnedSession, body: CoachApplyRequest) -> CoachApplyRes
             contraindications_added=added,
             no_change=True,
         )
-
-    by_ref = {c["exercise_ref"]: c for c in catalog}
-    new_days, applied = coach_chat.apply_changes_to_days(days, routine_calls, by_ref)
 
     # FEEDBACK 새 버전 — 실패 시 이전 활성 버전이 그대로 남는다.
     new_row = routine_repo.create_routine(session_id, days_per_week, GenerationType.FEEDBACK)

@@ -30,6 +30,7 @@ from uuid import UUID
 from app.schemas.enums import DomainStatus, GenerationType, JobKind
 from app.services import (
     coach_chat,
+    contraindication,
     diagnosis_repo,
     exercise_catalog,
     inbody_repo,
@@ -273,7 +274,17 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
             "session_id", str(session_id)
         ).execute()
 
-    if not routine_calls:
+    by_ref = {c["exercise_ref"]: c for c in catalog}
+    new_days, applied = coach_chat.apply_changes_to_days(days, routine_calls, by_ref)
+
+    # ⚠️ 금기 강제는 **조기 반환보다 앞에** 있어야 한다. LLM 이 금기만 등록하고
+    #    운동을 안 건드리면 routine_calls 가 비는데, 그게 바로 통증이 기록만 되고
+    #    루틴에 반영되지 않는 누수 경로다. 여기서 걸러야 새 버전이 만들어진다.
+    merged_cx = existing + [a for a in added if a not in existing]
+    new_days, enforced = contraindication.enforce(new_days, merged_cx, applied)
+    applied = applied + enforced
+
+    if not applied:
         # 적용할 루틴 변경이 없다 — 버전을 만들지 않고 이력만 남긴다.
         routine_repo.create_revision(
             month_routine_id,
@@ -291,9 +302,6 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
             "contraindications_added": len(added),
             "no_change": True,
         }
-
-    by_ref = {c["exercise_ref"]: c for c in catalog}
-    new_days, applied = coach_chat.apply_changes_to_days(days, routine_calls, by_ref)
 
     days_per_week = row["exercise_days_per_week"]
     new_row = routine_repo.create_routine(session_id, days_per_week, GenerationType.FEEDBACK)

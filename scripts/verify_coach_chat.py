@@ -71,7 +71,11 @@ DAYS = [
         ],
     },
 ]
-ALLOWED = {"ref-legext", "ref-hipthrust"}
+# 후보는 **근육군별로** 준다 — 합집합으로 뭉치면 교차 교체가 뚫린다
+CANDIDATES = {
+    "대퇴사두": [{"exercise_ref": "ref-legext", "name_ko": "레그 익스텐션"}],
+    "햄스트링·둔근": [{"exercise_ref": "ref-hipthrust", "name_ko": "힙 쓰러스트"}],
+}
 CATALOG_BY_REF = {
     "ref-legext": {
         "exercise_ref": "ref-legext",
@@ -115,7 +119,7 @@ def rule_validation() -> None:
             "reason": "x",
         },
         DAYS,
-        ALLOWED,
+        CANDIDATES,
     )
     check("후보 밖 운동 거부", err is not None, err or "")
 
@@ -128,15 +132,30 @@ def rule_validation() -> None:
             "reason": "x",
         },
         DAYS,
-        ALLOWED,
+        CANDIDATES,
     )
     check("후보 안 운동 통과", err is None)
+
+    # ⚠️ 회귀 방지 — 후보를 합집합으로 검사하던 시절엔 이게 통과했다.
+    #    운동만 하체로 바뀌고 muscle_group 라벨은 그대로 남아 볼륨 집계가 어긋났다.
+    _, err = validate_tool_call(
+        "replace_exercise",
+        {
+            "day_order": 1,
+            "old_exercise_name": "레그프레스",
+            "new_exercise_ref": "ref-hipthrust",
+            "reason": "x",
+        },
+        DAYS,
+        CANDIDATES,
+    )
+    check("다른 근육군 운동으로 교체 거부", err is not None, err or "통과해버림")
 
     _, err = validate_tool_call(
         "adjust_intensity",
         {"day_order": 9, "exercise_name": "레그프레스", "reason": "x"},
         DAYS,
-        ALLOWED,
+        CANDIDATES,
     )
     check("없는 Day 거부", err is not None)
 
@@ -144,7 +163,7 @@ def rule_validation() -> None:
         "adjust_intensity",
         {"day_order": 1, "exercise_name": "레그프레스", "sets_delta": 99, "reason": "x"},
         DAYS,
-        ALLOWED,
+        CANDIDATES,
     )
     check("세트 증감 클램프 (+99 → +2)", err is None and ok_args["sets_delta"] == 2)
 
@@ -152,7 +171,7 @@ def rule_validation() -> None:
         "flag_contraindication",
         {"body_part": "무릎", "severity": "FATAL", "reason": "x"},
         DAYS,
-        ALLOWED,
+        CANDIDATES,
     )
     check("잘못된 severity 거부", err is not None)
 
@@ -232,14 +251,14 @@ def rule_recollect() -> None:
         ),
         tc("finalize_revision", {"summary": "정리", "changes": [{"what": "교체", "why": "통증"}]}),
     ]
-    calls, finalized = collect_tool_calls(messages, DAYS, ALLOWED)
+    calls, finalized = collect_tool_calls(messages, DAYS, CANDIDATES)
 
     check("finalize 수집", finalized is not None)
     refs = [c["args"].get("new_exercise_ref") for c in calls if c["name"] == "replace_exercise"]
     check("조작된 후보 밖 항목은 걸러짐", refs == ["ref-legext"], str(refs))
     check("금기 호출 수집", any(c["name"] == "flag_contraindication" for c in calls))
 
-    _, no_fin = collect_tool_calls(messages[:-1], DAYS, ALLOWED)
+    _, no_fin = collect_tool_calls(messages[:-1], DAYS, CANDIDATES)
     check("finalize 없으면 None (apply 400 경로)", no_fin is None)
 
 

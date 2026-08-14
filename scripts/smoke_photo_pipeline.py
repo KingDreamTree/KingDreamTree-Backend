@@ -175,16 +175,23 @@ def main() -> int:
             "framing_score": "0.9",
         }
 
-        r = upload(f"{SP}/user", H, {**ok, "pose_similarity": "71.2"})
+        r = upload(f"{SP}/user", H, {**ok, "pose_similarity": "55.0"})  # THRESHOLD=70 미만
         err = r.json().get("error", {})
         check("포즈 미달 → 422 POSE", r.status_code == 422 and err.get("code") == "POSE_MISMATCH")
         check("reason=POSE", err.get("detail", {}).get("reason") == "POSE")
         check("임계값을 detail에 내려줌", "threshold" in err.get("detail", {}))
 
-        r = upload(f"{SP}/user", H, {**ok, "framing_score": "0.5"})
+        r = upload(f"{SP}/user", H, {**ok, "framing_score": "0.4"})  # F_MIN=0.65 미만
         check(
             "프레이밍 미달 → 422 FRAMING",
             r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "FRAMING",
+        )
+
+        r = upload(f"{SP}/user", H, {**ok, "facing_delta": "0.5"})  # R_MAX=0.25 초과
+        check(
+            "몸이 돌아감 → 422 FACING",
+            r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "FACING",
+            f"status={r.status_code}",
         )
 
         r = upload(f"{SP}/user", H, {**ok, "pose_scale_basis": "HIP_KNEE"})

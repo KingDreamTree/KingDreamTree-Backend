@@ -247,9 +247,12 @@ async def upload_user_photo(
     file: Annotated[UploadFile, File()],
     capture_source: Annotated[CaptureSource, Form()],
     pose_landmarks: Annotated[str, Form()],
-    pose_similarity: Annotated[float, Form(description="0~100. 프론트 계산값")],
-    framing_score: Annotated[float, Form(description="0~1. 프론트 계산값")],
+    pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
+    framing_score: Annotated[float, Form(description="0~1. 인물 bbox IoU")],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
+    facing_delta: Annotated[
+        float, Form(description="0~1. 어깨폭/몸통길이 비율 차. 몸이 돌아간 정도")
+    ] = 0.0,
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
     multi_person: Annotated[bool, Form()] = False,
     is_mirrored: Annotated[bool, Form()] = False,
@@ -272,6 +275,7 @@ async def upload_user_photo(
         scale_basis=pose_scale_basis,
         reference_scale_basis=reference.get("pose_scale_basis"),
         multi_person=multi_person,
+        facing_delta=facing_delta,
     )
 
     # ── 2차 관문: 이 둘로 비교 진단이 성립하는가 ──────────────────────────

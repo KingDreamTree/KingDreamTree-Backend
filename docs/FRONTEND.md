@@ -164,7 +164,8 @@ POST /sessions                  → 201, 새 session_id
 |---|---|---|
 | `pose_similarity` | 0~100 | 관절이 **가리키는 방향**의 일치도 |
 | `framing_score` | 0~1 | **촬영 거리** 일치도 (몸통 길이 비율) |
-| `facing_delta` | 0~1 | 몸이 **옆으로 돌아간** 정도 |
+| `facing_delta` | 0~ | **레퍼런스와 몸 방향의 차이.** ⚠️ '정면인가'가 아니라 상대값이고, **1을 넘을 수 있습니다** (레퍼런스가 많이 돌아가 있을 때) |
+| `oks` | 0~1 | OKS-inspired 유사도. ⚠️ **판정에 안 씁니다.** 업로드 때 `pose_oks`로 같이 보내주세요 — 어느 산식이 나은지 비교하려고 모으는 중입니다 |
 
 ### 📦 구현이 있습니다 — 그대로 쓰세요
 
@@ -183,7 +184,8 @@ const hold = createHoldGate(criteria);
 // 매 프레임
 const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 
-showGuide(r.message);        // "정면을 보고 서주세요" 등, 그대로 노출 가능
+showGuide(r.message);        // "같은 방향으로 서주세요" 등, 그대로 노출 가능
+                             // 문구를 바꾸려면 MESSAGES 를 수정하세요 (export 돼 있습니다)
 if (hold(r.pass)) shutter(); // 조건이 15프레임 이어지면 자동 촬영
 
 // 업로드할 때 이 세 값을 보냅니다
@@ -298,7 +300,8 @@ if (hold(r.pass)) shutter(); // 조건이 15프레임 이어지면 자동 촬영
 | `capture_source` | O | `CAPTURE`(앱 내 촬영) \| `UPLOAD`(파일 선택) |
 | `pose_similarity` | O | 0~100 |
 | `framing_score` | O | 0~1 |
-| `facing_delta` | X | 0~1. 안 보내면 통과 처리되지만 **몸이 돌아간 사진을 못 거릅니다** |
+| `facing_delta` | X | 안 보내면 통과 처리되지만 **몸이 돌아간 사진을 못 거릅니다**. ⚠️ 1을 넘을 수 있으니 클램프하지 마세요 |
+| `pose_oks` | X | 판정에 안 쓰지만 **보내주세요.** 안 보내면 산식 비교 데이터가 안 쌓입니다 |
 | `pose_scale_basis` | O | ⚠️ **레퍼런스와 같아야 합니다.** 다르면 422 |
 
 ⚠️ **레퍼런스가 먼저 등록돼 있어야 합니다.** 없으면 409 `PRECONDITION_NOT_MET`
@@ -565,7 +568,7 @@ const box = { x: p.bbox.x * sx, y: p.bbox.y * sy,
 |---|---|---|
 | `POSE` | 자세를 바꿔야 함 | "레퍼런스와 포즈를 맞춰주세요" |
 | `FRAMING` | 촬영 거리가 너무 다름 | "비슷한 거리에서 다시 촬영해주세요" |
-| `FACING` | 몸이 옆으로 돌아감 | "정면을 보고 서주세요" |
+| `FACING` | **레퍼런스와 몸 방향이 다름** | "레퍼런스와 같은 방향으로 서주세요" |
 | `NO_PERSON` | 사람이 안 잡힘 | "전신이 보이도록 다시 촬영해주세요" |
 
 넷은 **서로 다른 지시**입니다. 하나로 뭉뚱그리면 사용자가 뭘 고쳐야 할지 모릅니다.

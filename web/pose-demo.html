@@ -136,10 +136,18 @@
         <div class="ds" id="fd">몸통 길이 비율. 유도선 미달은 안내만, 거부선 미달만 막힘</div>
       </div>
       <div class="metric">
-        <div class="top"><span class="nm">정면성 (R)</span><span class="vl" id="rv">–</span></div>
+        <div class="top"><span class="nm">몸통 방향 (R)</span><span class="vl" id="rv">–</span></div>
         <div class="track"><div class="fill" id="rf" style="width:0%"></div><div class="mark" id="rm"></div></div>
-        <div class="ds">어깨폭 ÷ 몸통길이 의 <b>차이</b>. <b>0이 정면</b>이고, 몸을 돌릴수록 커집니다</div>
+        <div class="ds">어깨폭 ÷ 몸통길이 의 <b>차이</b>. <b>0이면 레퍼런스와 같은 방향</b>이고, 방향이 어긋날수록 커집니다</div>
         <div class="ds" id="rraw" style="font-family:Consolas,monospace">–</div>
+      </div>
+
+      <div class="metric" style="border-top:1px dashed rgba(255,255,255,.25);padding-top:10px">
+        <div class="top"><span class="nm">OKS <span style="opacity:.6;font-weight:400">(관찰용)</span></span><span class="vl" id="kv">–</span></div>
+        <div class="track"><div class="fill" id="kf" style="width:0%"></div></div>
+        <div class="ds">COCO 기준. 관절별 <b>사람끼리 어긋나는 정도(σ)</b>로 나눈 유사도.
+          <b>판정에는 쓰지 않습니다</b> — P 와 나란히 보며 비교하는 중</div>
+        <div class="ds" id="kraw" style="font-family:Consolas,monospace">–</div>
       </div>
 
       <div>
@@ -191,6 +199,16 @@ const status = $("status");
 const setStatus = (msg, kind = "warn") => { status.textContent = msg; status.className = kind; };
 
 let criteria = null, landmarker = null, refLm = null, hold = null, running = false;
+
+// ⚠️ MediaPipe 좌표는 x 를 너비로, y 를 높이로 **각각** 나눈 값이다. 거리를 재는
+//    계산(OKS)은 화면비를 안 맞추면 조용히 틀린다. 각도 기반인 P·F·R 은 영향 없다.
+//    이 데모는 레퍼런스도 웹캠으로 잡으므로 둘이 같지만, 실제 앱에서는 레퍼런스가
+//    업로드 사진이라 다르다 — 그래서 따로 둔다.
+const videoAspect = () => {
+  const v = $("video");
+  return v.videoHeight ? v.videoWidth / v.videoHeight : 1;
+};
+let refAspect = 1;
 let captured = false;   // 촬영 후에는 다시 찍기를 누를 때까지 멈춘다
 
 // ── 1. 서버에서 기준 받아오기 ────────────────────────────────────────────
@@ -259,13 +277,16 @@ let liveLm = null, personCount = 0;
 //    자동 촬영은 통과했을 때만 걸리므로 그것만으로는 실험을 못 한다.
 $("shoot").onclick = () => {
   if (!refLm || !liveLm) return;
-  capture(evaluate(refLm, liveLm, criteria, { multiPerson: personCount > 1 }));
+  capture(evaluate(refLm, liveLm, criteria, {
+    multiPerson: personCount > 1,
+    refAspect, userAspect: videoAspect() }));
 };
 
 $("setref").onclick = () => {
   if (!liveLm) return;
   // ⚠️ 깊은 복사. 다음 프레임에 덮어써지면 자기 자신과 비교하게 된다.
   refLm = liveLm.map((p) => ({ ...p }));
+  refAspect = videoAspect();
   $("shoot").disabled = false;
   setStatus("레퍼런스를 잡았습니다. ⚠️ 실험 중이면 이 버튼을 다시 누르지 마세요 — 기준이 바뀝니다.", "ok");
 };
@@ -321,7 +342,9 @@ function loop() {
     draw(liveLm, v.videoWidth, v.videoHeight);
 
     if (refLm && liveLm && !captured) {
-      const r = evaluate(refLm, liveLm, criteria, { multiPerson: personCount > 1 });
+      const r = evaluate(refLm, liveLm, criteria, {
+    multiPerson: personCount > 1,
+    refAspect, userAspect: videoAspect() });
       render(r);
 
       const fired = hold(r.pass);
@@ -355,6 +378,11 @@ function render(r) {
   set("pv", "pf", r.pose_similarity.toFixed(1), r.pose_similarity, r.pose_similarity < criteria.threshold);
   set("fv", "ff", r.framing_score.toFixed(3), r.framing_score * 100, r.framing_score < (criteria.f_hard ?? 0.4));
   set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100, r.facing_delta > criteria.r_max);
+  // ⚠️ bad 표시를 하지 않는다 — 임계값이 아직 없다. 있는 척하면 안 된다.
+  set("kv", "kf", r.oks.toFixed(3), r.oks * 100, false);
+  $("kraw").textContent = Object.entries(r.detail.oksPer)
+    .sort((a, b) => a[1] - b[1]).slice(0, 4)
+    .map(([k, v]) => `${k} ${v.toFixed(2)}`).join("  ");
 
   const rows = Object.entries(r.detail.diffs)
     .sort((a, b) => b[1] - a[1])

@@ -267,7 +267,7 @@ def judge_user_photo(
 
     ⚠️ **순서가 의미를 갖는다.** 몸이 돌아간 상태의 자세 점수는 믿을 수 없고,
        안내 문구가 각각 달라야 한다 — 사용자가 취해야 할 행동이 다르기 때문이다.
-         FRAMING "비슷한 거리에서 다시" / FACING "정면을 보고 서주세요"
+         FRAMING "비슷한 거리에서 다시" / FACING "레퍼런스와 같은 방향으로"
          POSE    "포즈를 맞춰주세요"
 
     ⚠️ 거리(framing)는 **f_hard 로만 막는다.** f_min 은 촬영 화면 유도용이다.
@@ -281,7 +281,14 @@ def judge_user_photo(
     #    "잘못 보낸 것"이고, 사용자에게 재촬영을 시킬 일이 아니라 프론트가 고칠 일이다.
     _ensure_range("pose_similarity", pose_similarity, 0.0, 100.0)
     _ensure_range("framing_score", framing_score, 0.0, 1.0)
-    _ensure_range("facing_delta", facing_delta, 0.0, 1.0)
+    # ⚠️ 상한이 1.0 이었는데 **버그였다.** facing_delta 는 레퍼런스 비율로
+    #    나눈 값이라, 레퍼런스가 많이 돌아가 있으면(비율이 작으면) 1 을 넘는다.
+    #    측면 레퍼런스에 정면으로 선 사용자가 "방향이 다릅니다" 대신
+    #    "잘못 보낸 값" 400 을 받고 있었다 — 고칠 수 없는 에러를 본 셈이다.
+    #
+    #    10.0 은 판정 기준이 아니라 **단위 착오를 잡는 sanity bound** 다.
+    #    (퍼센트로 보내면 25 가 오므로 여전히 걸린다)
+    _ensure_range("facing_delta", facing_delta, 0.0, 10.0)
 
     ensure_single_person(multi_person)
     ensure_same_scale_basis(reference_scale_basis, str(scale_basis))
@@ -312,9 +319,15 @@ def judge_user_photo(
 
     # ⚠️ 몸이 돌아가면 어깨폭이 좁아 보여 실루엣 굵기가 왜곡된다.
     #    각도만으로는 안 잡힌다 — 팔을 내린 자세는 돌아서도 각도가 거의 같다.
+    #
+    # ⚠️ **이 값은 "정면인가"가 아니라 "레퍼런스와 같은 방향인가"다.**
+    #    facing_delta = |사용자 어깨폭비 − 레퍼런스 어깨폭비| / 레퍼런스 어깨폭비 로
+    #    **상대 비교**다. 레퍼런스가 측면이면 사용자도 측면이어야 0 이 나온다.
+    #    그래서 문구에 "정면"을 쓰면 안 된다 — 측면 레퍼런스를 쓰는 사용자가
+    #    올바르게 섰는데 "정면을 보라"는, 따라도 통과 못 하는 안내를 받는다.
     if facing_delta > settings.pose_facing_max_delta:
         raise pose_mismatch(
-            "몸이 옆으로 돌아가 있습니다. 정면을 보고 서주세요.",
+            "레퍼런스와 몸의 방향이 다릅니다. 같은 방향으로 서주세요.",
             reason="FACING",
             detail=detail,
         )

@@ -153,6 +153,8 @@ CREATE TABLE photo (
                             CHECK (pose_scale_basis IN ('TORSO', 'HIP_KNEE')),
     pose_similarity         NUMERIC(5,2)  CHECK (pose_similarity BETWEEN 0 AND 100),
     framing_score           NUMERIC(4,3)  CHECK (framing_score BETWEEN 0 AND 1),
+    facing_delta            NUMERIC(6,3)  CHECK (facing_delta >= 0),
+    pose_oks                NUMERIC(4,3)  CHECK (pose_oks BETWEEN 0 AND 1),
     pose_person_area_ratio  REAL          CHECK (pose_person_area_ratio BETWEEN 0 AND 1),
     multi_person            BOOLEAN       NOT NULL DEFAULT false,
     was_mirrored            BOOLEAN       NOT NULL DEFAULT false,
@@ -161,6 +163,10 @@ CREATE TABLE photo (
     CONSTRAINT photo_session_kind_uniq UNIQUE (session_id, kind)
 );
 
+COMMENT ON COLUMN photo.facing_delta IS
+    '레퍼런스와 몸 방향의 차이. 상한 없음 — 레퍼런스가 많이 돌아가 있으면 1을 넘는다.';
+COMMENT ON COLUMN photo.pose_oks IS
+    'OKS-inspired 유사도. 판정에 쓰지 않고 pose_similarity 와 비교하려고 모으는 중.';
 COMMENT ON COLUMN photo.pose_person_area_ratio IS
     'MediaPipe 기준 추정치(프레이밍 판정용). 정확한 인물 면적은 segmentation.person_pixel_count.';
 COMMENT ON COLUMN photo.pose_landmarks IS

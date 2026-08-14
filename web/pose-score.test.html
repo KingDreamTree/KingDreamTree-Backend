@@ -45,7 +45,8 @@
 </table>
 
 <script type="module">
-import { poseScore, framingScore, facingDelta, evaluate, oksScore, KEYPOINT_SIGMA, OKS_KEYPOINTS, IDX }
+import { poseScore, framingScore, facingDelta, evaluate, oksScore,
+         KEYPOINT_SIGMA, COCO_17, COCO_BODY_12, COCO_FROM_MEDIAPIPE, IDX }
   from "./pose-score.js";
 
 // 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md)
@@ -271,7 +272,7 @@ const tests = [
     why: "쓸 관절이 min_visible_angles 미만이면 0 + NOT_ENOUGH_JOINTS",
     expect: "NOT_ENOUGH_JOINTS",
     run: () => {
-      const hide = OKS_KEYPOINTS.slice(0, OKS_KEYPOINTS.length - 2);
+      const hide = COCO_BODY_12.slice(0, COCO_BODY_12.length - 2);
       return oksScore(REF, build(BASE, {}, hide), C).reason;
     },
   },
@@ -282,10 +283,32 @@ const tests = [
     run: () => KEYPOINT_SIGMA[IDX.hipL] > KEYPOINT_SIGMA[IDX.wristL],
   },
   {
-    name: "OKS — 얼굴 관절은 안 쓴다",
-    why: "★ 코(0)가 들어가면 고개만 돌려도 점수를 지배한다. 진단하지 않는 부위",
+    name: "OKS — 기본값은 얼굴을 뺀 12개",
+    why: "★ 얼굴이 몸의 신호를 희석한다 (왼팔 35°: 17개 0.912 / 12개 0.876)",
     expect: false,
-    run: () => OKS_KEYPOINTS.includes(0),
+    run: () => COCO_BODY_12.includes(COCO_FROM_MEDIAPIPE.nose),
+  },
+  {
+    name: "OKS — COCO 17개 대응표가 맞는가",
+    why: "★ 눈은 가운데(2,5)여야 한다. inner(1,4)를 쓰면 조용히 어긋난다",
+    expect: "0,2,5,7,8,11,12,13,14,15,16,23,24,25,26,27,28",
+    run: () => COCO_17.join(","),
+  },
+  {
+    name: "OKS — 얼굴을 넣어도 돌아간다",
+    why: "친구 스펙(17개 전부)도 인자로 지원. 값이 나오면 통과",
+    expect: true,
+    run: () => oksScore(REF, build(shift(20)), C, { keypoints: COCO_17 }).oks > 0,
+  },
+  {
+    name: "OKS — 팔 하나 움직여도 나머지는 안 흔들린다",
+    why: "★★ bbox 정규화의 함정. 몸통 기준이라 왼팔만 틀면 0.9 위여야 한다",
+    expect: true,
+    run: () => {
+      const u = build({ ...BASE, upperArmL: BASE.upperArmL + 20,
+                                 lowerArmL: BASE.lowerArmL + 20 });
+      return oksScore(REF, u, C).oks > 0.9;
+    },
   },
   {
     name: "OKS — 판정에는 쓰지 않는다",

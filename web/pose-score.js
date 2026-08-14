@@ -223,43 +223,113 @@ export function facingDelta(ref, user) {
 // --------------------------------------------------------------------------
 
 /**
- * 관절별 사람 라벨링 편차 σ. **COCO keypoint 평가 기준의 공개 수치다.**
+ * MediaPipe 33개 랜드마크 ↔ COCO 17개 keypoint 대응표.
  *
- * 출처 — pycocotools `cocoeval.py`
- *   kpt_oks_sigmas = [.26,.25,.25,.35,.35,.79,.79,.72,.72,.62,.62,
- *                     1.07,1.07,.87,.87,.89,.89] / 10
- *   (nose, eyeL/R, earL/R, shoulderL/R, elbowL/R, wristL/R,
- *    hipL/R, kneeL/R, ankleL/R 순)
+ * COCO 순서(pycocotools 와 같다):
+ *   nose, eyeL, eyeR, earL, earR, shoulderL/R, elbowL/R, wristL/R,
+ *   hipL/R, kneeL/R, ankleL/R
  *
- * 이 숫자가 뜻하는 것 — **같은 사진을 사람 여럿에게 라벨 붙이게 했을 때
- * 서로 어긋난 정도.** 손목(0.062)은 사람끼리 잘 맞고, 골반(0.107)은 잘 안 맞는다.
- * 즉 "이 정도 차이는 사람이 봐도 갈린다"를 관절마다 다르게 적용할 수 있다.
+ * ⚠️ MediaPipe 는 눈을 3점(inner/center/outer)으로 찍는다. COCO 의 "eye" 에
+ *    해당하는 건 가운데(2, 5)다. inner(1,4)나 outer(3,6)를 쓰면 미묘하게
+ *    어긋나는데 **에러가 안 난다.**
  *
- * ⚠️ **얼굴 관절(코·눈·귀)은 일부러 뺐다.** 두 가지 이유다.
- *    1. 우리가 비교하는 건 몸통·팔·다리 9부위다. 얼굴은 진단하지 않는다.
- *    2. 얼굴 σ 는 0.026 으로 몸의 1/4 이라, 고개만 살짝 돌려도 점수를
- *       지배해버린다. 진단과 무관한 것 때문에 멀쩡한 사진이 떨어진다.
- *    SEGMENTS 에서 얼굴 각도를 뺀 것과 같은 판단이다.
- *
- * ⚠️ **MediaPipe 랜드마크는 COCO 관절과 정의가 완전히 같지 않다.**
- *    (BlazePose 는 어깨·골반을 자체 기준으로 찍는다) 그래서 이 σ 는
- *    **그대로 옮겨온 값이 아니라 근사다.** "COCO σ 를 썼습니다"까지는
- *    말할 수 있어도 "COCO 와 동일합니다"는 과장이다.
- *    → MoveNet(COCO 17개 그대로 출력)으로 갈면 이 단서가 사라진다.
+ * ⚠️ 대응이 되는 것과 **정의가 같은 것은 다르다.** BlazePose 는 어깨·골반을
+ *    GHUM 기준으로 찍고, COCO 는 라벨러가 눈으로 찍는다. 위치가 체계적으로
+ *    조금씩 다르다. 그래서 아래 σ 를 최종값으로 쓰면 안 된다.
  */
-export const KEYPOINT_SIGMA = {
-  [IDX.shoulderL]: 0.079, [IDX.shoulderR]: 0.079,
-  [IDX.elbowL]: 0.072, [IDX.elbowR]: 0.072,
-  [IDX.wristL]: 0.062, [IDX.wristR]: 0.062,
-  [IDX.hipL]: 0.107, [IDX.hipR]: 0.107,
-  [IDX.kneeL]: 0.087, [IDX.kneeR]: 0.087,
-  [IDX.ankleL]: 0.089, [IDX.ankleR]: 0.089,
+export const COCO_FROM_MEDIAPIPE = {
+  nose: 0,
+  eyeL: 2, eyeR: 5,
+  earL: 7, earR: 8,
+  shoulderL: 11, shoulderR: 12,
+  elbowL: 13, elbowR: 14,
+  wristL: 15, wristR: 16,
+  hipL: 23, hipR: 24,
+  kneeL: 25, kneeR: 26,
+  ankleL: 27, ankleR: 28,
 };
 
-/** 위 표의 관절 번호. 화면에 관절별 점수를 보여줄 때 이름도 같이 쓴다. */
-export const OKS_KEYPOINTS = Object.keys(KEYPOINT_SIGMA).map(Number);
+/** COCO 17개 전부. 얼굴 포함. */
+export const COCO_17 = Object.values(COCO_FROM_MEDIAPIPE);
 
-const NAME_OF_IDX = Object.fromEntries(Object.entries(IDX).map(([k, v]) => [v, k]));
+/**
+ * 얼굴 5개를 뺀 12개. **기본값은 이쪽이다.**
+ *
+ * ⚠️ 이전 주석에 "얼굴 σ 가 작아 점수를 지배한다"고 적었는데 **틀렸다.**
+ *    실측 — 고개를 60° 돌려도 17개 점수는 0.949 다. 지배하지 않는다.
+ *
+ * 실제 이유는 반대다. **얼굴이 몸의 신호를 희석한다.**
+ *    왼팔 35° 차이:  17개 0.912  /  12개 0.876
+ *    얼굴 5점은 몸이 어떻든 거의 1.0 이라 평균을 끌어올린다.
+ *    우리가 잡아야 할 건 몸의 차이인데 그게 묽어진다.
+ *
+ * ⚠️ 다만 **차이가 크지 않다**(0.037). COCO_17 로 바꿔도 크게 안 달라진다 —
+ *    그래서 인자로 넘길 수 있게 뒀다. "얼굴을 빼야만 동작한다"는 아니다.
+ */
+export const COCO_BODY_12 = [
+  COCO_FROM_MEDIAPIPE.shoulderL, COCO_FROM_MEDIAPIPE.shoulderR,
+  COCO_FROM_MEDIAPIPE.elbowL, COCO_FROM_MEDIAPIPE.elbowR,
+  COCO_FROM_MEDIAPIPE.wristL, COCO_FROM_MEDIAPIPE.wristR,
+  COCO_FROM_MEDIAPIPE.hipL, COCO_FROM_MEDIAPIPE.hipR,
+  COCO_FROM_MEDIAPIPE.kneeL, COCO_FROM_MEDIAPIPE.kneeR,
+  COCO_FROM_MEDIAPIPE.ankleL, COCO_FROM_MEDIAPIPE.ankleR,
+];
+
+/**
+ * 관절별 편차 σ — **COCO 값을 임시로 넣어둔 것이다. 우리 값이 아니다.**
+ *
+ * 출처: pycocotools `cocoeval.py` kpt_oks_sigmas
+ *   [.26,.25,.25,.35,.35,.79,.79,.72,.72,.62,.62,1.07,1.07,.87,.87,.89,.89]/10
+ *
+ * σ 가 뜻하는 것 — 같은 사진을 여러 사람에게 라벨 붙이게 했을 때 어긋난 정도.
+ * 손목(0.062)은 사람끼리 잘 맞고 골반(0.107)은 잘 안 맞는다.
+ *
+ * ⚠️⚠️ **최종본으로 쓰면 안 된다. 두 가지가 어긋나 있다.**
+ *
+ *   1. **관절 정의** — BlazePose 어깨·골반 ≠ COCO 어깨·골반
+ *   2. **크기 기준** — COCO σ 는 √(세그멘테이션 면적) 기준이다.
+ *      우리는 몸통 길이 기준이라 눈금이 다르다 (SCALE_FROM_TORSO 참고)
+ *
+ * σ 는 원래 **데이터셋마다 구하는 상수**다(COCO 문서에 명시돼 있다).
+ * 우리 σ 는 **가만히 선 사용자를 N프레임 기록해서** 구한다 —
+ *
+ *      σᵢ = √( 평균( |pᵢ − p̄ᵢ|² ) / 2 )        정규화 좌표에서
+ *
+ * (2 로 나누는 건 2D 라 축마다 σ 면 거리제곱의 기댓값이 2σ² 이기 때문)
+ *
+ * 그 값이 나오면 위의 어긋남 두 가지가 **동시에 사라진다** — 우리 검출기,
+ * 우리 관절 정의, 우리 크기 기준으로 잰 값이 되기 때문이다.
+ * 그리고 우리에게는 그쪽이 더 맞다: 우리 서비스에 사람 라벨러는 없고,
+ * 실제 잡음원은 MediaPipe 흔들림과 사용자의 미세한 움직임이다.
+ */
+export const KEYPOINT_SIGMA = {
+  [COCO_FROM_MEDIAPIPE.nose]: 0.026,
+  [COCO_FROM_MEDIAPIPE.eyeL]: 0.025, [COCO_FROM_MEDIAPIPE.eyeR]: 0.025,
+  [COCO_FROM_MEDIAPIPE.earL]: 0.035, [COCO_FROM_MEDIAPIPE.earR]: 0.035,
+  [COCO_FROM_MEDIAPIPE.shoulderL]: 0.079, [COCO_FROM_MEDIAPIPE.shoulderR]: 0.079,
+  [COCO_FROM_MEDIAPIPE.elbowL]: 0.072, [COCO_FROM_MEDIAPIPE.elbowR]: 0.072,
+  [COCO_FROM_MEDIAPIPE.wristL]: 0.062, [COCO_FROM_MEDIAPIPE.wristR]: 0.062,
+  [COCO_FROM_MEDIAPIPE.hipL]: 0.107, [COCO_FROM_MEDIAPIPE.hipR]: 0.107,
+  [COCO_FROM_MEDIAPIPE.kneeL]: 0.087, [COCO_FROM_MEDIAPIPE.kneeR]: 0.087,
+  [COCO_FROM_MEDIAPIPE.ankleL]: 0.089, [COCO_FROM_MEDIAPIPE.ankleR]: 0.089,
+};
+
+/** 뒤집은 표 — 화면에 관절별 점수를 이름으로 보여줄 때 쓴다. */
+const COCO_NAME_OF = Object.fromEntries(
+  Object.entries(COCO_FROM_MEDIAPIPE).map(([k, v]) => [v, k])
+);
+
+/**
+ * 몸통 길이를 √(세그멘테이션 면적) 눈금에 맞추는 배율.
+ *
+ * COCO 의 s 는 사람 세그멘테이션 면적의 제곱근이다. 우리는 자세 관문 시점에
+ * 세그멘테이션이 없으므로(그건 업로드 후 GPU 에서 난다) 몸통 길이를 쓴다.
+ * 서 있는 사람 기준 √(면적) ≈ 몸통 × 1.56 이라 그 값을 넣었다.
+ *
+ * ⚠️ **임시 눈금 맞춤이다.** 우리 σ 를 직접 재면 이 배율이 σ 안으로
+ *    흡수되어 사라진다. 그때 이 상수는 1 로 두면 된다.
+ */
+export const SCALE_FROM_TORSO = 1.56;
 
 /**
  * 자세 하나를 **위치·크기를 지운 좌표**로 바꾼다.
@@ -267,16 +337,25 @@ const NAME_OF_IDX = Object.fromEntries(Object.entries(IDX).map(([k, v]) => [v, k
  * COCO 의 OKS 는 같은 사진 안에서 정답과 예측을 견주므로 좌표계가 이미 같다.
  * 우리는 **다른 사진 두 장**을 견주므로 먼저 맞춰놓아야 한다.
  *
- *   중심 = 쓰는 관절들의 사각형 중심
- *   크기 s = √(사각형 넓이)
+ *   중심 = 어깨 중점과 골반 중점의 가운데
+ *   크기 = 몸통 길이 × SCALE_FROM_TORSO
  *
- * ⚠️ **COCO 의 s 는 사람 세그멘테이션 면적이다.** 우리는 자세 관문 시점에
- *    세그멘테이션이 없다(그건 업로드 후 GPU 에서 난다). 그래서 키포인트
- *    사각형 넓이로 대신했다 — 세그가 없을 때 쓰는 통상적인 대체다.
- *    배율이 정확히 같지는 않으므로 **σ 의 절대 눈금은 실측으로 확인해야 한다.**
+ * ⚠️⚠️ **크기 기준을 bbox 로 잡으면 안 된다. 실측으로 확인한 함정이다.**
+ *    팔 하나만 20° 움직여도 사각형이 커지고 중심이 밀린다 —
+ *
+ *        s  0.390 → 0.455        중심x  0.500 → 0.464
+ *
+ *    그러면 **가만히 있던 나머지 관절까지 전부 어긋난 것으로 계산된다.**
+ *    같은 자세(왼팔만 20°)를 두 방식으로 재면
+ *
+ *        bbox 기준   0.595      ← 팔 하나 움직였는데 "거의 딴 자세"
+ *        몸통 기준   0.946      ← 실제로 어긋난 만큼만
+ *
+ *    몸통 길이는 팔다리를 어떻게 벌리든 변하지 않는다. framingScore 가
+ *    같은 이유로 이미 몸통 길이를 쓰고 있다 — 기준을 맞춘 것이다.
  *
  * ⚠️ **회전은 맞추지 않는다.** Procrustes 처럼 돌려서 겹치면 몸이 돌아간 것과
- *    기울어진 것이 지워진다 — 그건 우리가 FACING 으로 **일부러 잡는** 신호다.
+ *    기울어진 것이 지워진다 — 그건 FACING 이 **일부러 잡는** 신호다.
  *    위치와 크기만 지운다. (그래서 FRAMING 도 별도 관문으로 남는다)
  *
  * ⚠️ aspect — MediaPipe 좌표는 x 를 너비로, y 를 높이로 각각 나눈 값이라
@@ -284,58 +363,62 @@ const NAME_OF_IDX = Object.fromEntries(Object.entries(IDX).map(([k, v]) => [v, k
  *    이걸 안 맞추면 조용히 틀린다. 화면비(가로/세로)를 넘겨야 한다.
  */
 function normalizeForOks(lm, indexes, aspect) {
-  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-  const pts = [];
+  const at = (i) => ({ x: lm[i].x * aspect, y: lm[i].y });
+  const sh = mid(at(IDX.shoulderL), at(IDX.shoulderR));
+  const hp = mid(at(IDX.hipL), at(IDX.hipR));
 
-  for (const i of indexes) {
-    const x = lm[i].x * aspect;
-    const y = lm[i].y;
-    pts.push({ x, y });
-    if (x < x0) x0 = x;
-    if (x > x1) x1 = x;
-    if (y < y0) y0 = y;
-    if (y > y1) y1 = y;
-  }
+  const torso = Math.hypot(sh.x - hp.x, sh.y - hp.y);
+  // ⚠️ 0 이면 나눌 수 없다. 그냥 두면 NaN 이 되어 점수가 늘 0 으로 나온다.
+  if (!(torso > 0)) return null;
 
-  // ⚠️ 한 줄로 늘어선 자세(넓이 0)는 나눌 수 없다. 0 으로 나누면 조용히 NaN 이
-  //    되어 점수가 항상 0 으로 나온다 — 판정 불가로 명시해서 돌려보낸다.
-  const area = (x1 - x0) * (y1 - y0);
-  if (!(area > 0)) return null;
-
-  const s = Math.sqrt(area);
-  const cx = (x0 + x1) / 2;
-  const cy = (y0 + y1) / 2;
-  return pts.map((p) => ({ x: (p.x - cx) / s, y: (p.y - cy) / s }));
+  const s = torso * SCALE_FROM_TORSO;
+  const cx = (sh.x + hp.x) / 2;
+  const cy = (sh.y + hp.y) / 2;
+  return indexes.map((i) => {
+    const p = at(i);
+    return { x: (p.x - cx) / s, y: (p.y - cy) / s };
+  });
 }
 
 /**
- * 두 자세가 얼마나 같은가를 **사람끼리 어긋나는 정도로 나눠서** 잰다.
+ * 두 자세가 얼마나 같은가를 **관절별 편차로 나눠서** 잰다.
  *
  *   OKS = 평균  exp( −d² / (2 · (2σ)²) )
  *
- * d 는 크기를 지운 좌표에서의 관절 간 거리, σ 는 그 관절의 사람 편차다.
+ * d 는 위치·크기를 지운 좌표에서의 관절 간 거리, σ 는 그 관절의 편차다.
  * **d 가 2σ 만큼 벌어지면 그 관절 점수는 약 0.61 이 된다.**
+ * 1 에 가까울수록 같은 자세, 0 에 가까울수록 다른 자세다.
  *
- * 왜 이걸 쓰는가 — 지금 poseScore 는 각도 차이를 TOL=45° 로 나눈다.
- * 45 라는 숫자에 근거가 없고, 관절을 전부 똑같이 취급한다. OKS 는
- * **관절마다 다르게 취급하고, 그 차등이 측정된 숫자에서 온다.**
+ * 왜 이걸 쓰는가 — poseScore 는 각도 차이를 TOL=45° 로 나눈다. 45 에 근거가
+ * 없고, 관절을 전부 똑같이 취급한다. OKS 는 **관절마다 다르게 취급하고,
+ * 그 차등이 측정된 숫자에서 온다.**
  *
  * ⚠️ **아직 이걸로 막지 않는다.** poseScore 와 나란히 계산해서 비교만 한다.
- *    잡음이 얼마인지 재기 전에 관문을 갈아끼우면 나아졌는지 알 방법이 없다.
- *    (scripts/measure_pose_tolerance.py, 그리고 하한 실측)
+ *    σ 를 우리 값으로 재기 전에 관문을 갈아끼우면 나아졌는지 알 방법이 없다.
  *
+ * ⚠️ **이 값 하나로 F·R 을 대신할 수 없다.** 위 정규화가 크기와 위치를
+ *    **지워버리기 때문**이다. "너무 가까이 서 있다"를 OKS 는 원리상 못 잡는다.
+ *
+ * @param opts.keypoints  기본 COCO_BODY_12. 얼굴까지 보려면 COCO_17
  * @param opts.refAspect  레퍼런스 사진의 가로/세로
  * @param opts.userAspect 사용자 화면의 가로/세로
  * @returns {{oks:number, reason:string|null, used:number, per:object}}
  */
-export function oksScore(ref, user, criteria, { refAspect = 1, userAspect = 1 } = {}) {
+export function oksScore(
+  ref,
+  user,
+  criteria,
+  { keypoints = COCO_BODY_12, refAspect = 1, userAspect = 1 } = {}
+) {
   const c = requireCriteria(criteria);
 
-  const used = OKS_KEYPOINTS.filter((i) => visibleIn([ref, user], [i], c.min_visibility));
+  const used = keypoints.filter((i) => visibleIn([ref, user], [i], c.min_visibility));
   if (used.length < c.min_visible_angles) {
     return { oks: 0, reason: "NOT_ENOUGH_JOINTS", used: used.length, per: {} };
   }
 
+  // ⚠️ 정규화 기준(어깨·골반)이 안 보이면 크기를 잴 수 없다. 위의 visible
+  //    검사와 별개다 — 무릎·발목만 보여도 used 는 채워지기 때문이다.
   const A = normalizeForOks(ref, used, refAspect);
   const B = normalizeForOks(user, used, userAspect);
   if (!A || !B) {
@@ -349,7 +432,7 @@ export function oksScore(ref, user, criteria, { refAspect = 1, userAspect = 1 } 
     const d2 = (A[k].x - B[k].x) ** 2 + (A[k].y - B[k].y) ** 2;
     const kappa = 2 * KEYPOINT_SIGMA[idx];
     const v = Math.exp(-d2 / (2 * kappa * kappa));
-    per[NAME_OF_IDX[idx]] = Math.round(v * 1000) / 1000;
+    per[COCO_NAME_OF[idx] ?? idx] = Math.round(v * 1000) / 1000;
     sum += v;
   });
 

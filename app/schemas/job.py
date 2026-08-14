@@ -42,9 +42,6 @@ class JobListResponse(BaseModel):
     items: list[JobSummary]
 
 
-class JobEnqueued(BaseModel):
-    """비동기 작업을 등록했을 때의 공통 응답(202)."""
-
-    job_id: UUID
-    kind: JobKind
-    status: JobStatus = JobStatus.PENDING
+# ⚠️ 공통 JobEnqueued(202) 모델은 두지 않는다. 잡을 만드는 라우트들이
+#    각자의 응답 모델에 job_id 를 직접 넣는다 — 응답에 photo_id·width 처럼
+#    잡과 무관한 값이 같이 나가기 때문이다. (2026-08-14 제거)

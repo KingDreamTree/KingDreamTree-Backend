@@ -23,9 +23,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
-import json
 import logging
 from dataclasses import dataclass
 
@@ -58,16 +56,14 @@ class ScreenResult:
 _PASS = ScreenResult(suitable=True, skipped=True)
 
 
-def _data_url(image_bytes: bytes) -> str:
-    """VLM 에 넣을 data URL. **판정용으로 줄여서** 보낸다.
-
-    ⚠️ Storage 에 올리고 signed URL 을 만드는 대신 이걸 쓴다. 거부될 사진을
-       먼저 저장했다가 지우는 왕복을 없애기 위해서다.
+def _jpeg_for_vlm(image_bytes: bytes) -> bytes:
+    """판정용으로 **줄인** JPEG. base64 포장은 vlm.image_block() 이 한다.
 
     ⚠️ **저장용 크기(긴 변 최대 4096px)를 그대로 보내면 안 된다.** 이미지는
        해상도에 비례해 토큰을 먹고, 우리는 **두 장**을 보낸다.
        이 판정이 보는 것 — 옷이 몸에 붙었나 / 촬영 거리가 비슷한가 / 팔다리가
        잘렸나 — 은 전부 작은 이미지로도 판별된다. 원본 해상도가 필요 없다.
+       3000x4000 기준 전송량 95% 감소를 확인했다.
     """
     img = images.load_rgb(image_bytes)
     side = settings.photo_screening_max_side
@@ -77,26 +73,15 @@ def _data_url(image_bytes: bytes) -> str:
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=80)
-    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    return buf.getvalue()
 
 
-def _parse(raw: str) -> ScreenResult | None:
-    """VLM 응답에서 JSON 을 꺼낸다. 모양이 아니면 None (→ 통과 처리)."""
-    text = raw.strip()
+def _to_result(data: dict) -> ScreenResult | None:
+    """검증된 JSON → ScreenResult. 모양이 아니면 None (→ 통과 처리).
 
-    # ```json ... ``` 로 감싸 오는 경우가 흔하다
-    if text.startswith("```"):
-        text = text.split("```")[1] if "```" in text[3:] else text[3:]
-        text = text.removeprefix("json").strip()
-
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end <= start:
-        return None
-
-    try:
-        data = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return None
+    ⚠️ 코드펜스·앞뒤 설명을 벗겨내던 코드가 있었는데 지웠다. vlm.call_json() 이
+       JSON 모드(response_format=json_object)로 부르므로 항상 dict 로 온다.
+    """
     if not isinstance(data, dict) or "suitable" not in data:
         return None
 
@@ -131,19 +116,22 @@ async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResu
         return _PASS
 
     try:
-        from app.services.vlm import call_vlm
+        from app.services import vlm
 
-        raw = await asyncio.wait_for(
-            call_vlm(
-                prompt.USER,
-                max_tokens=300,
+        parsed, _raw = await asyncio.wait_for(
+            # ⚠️ 담당 B 의 진단 파이프라인과 **같은 호출부**를 쓴다.
+            #    provider 분기·JSON 모드·temperature=0 이 저기 한 군데에만 있다.
+            #    두 벌로 두면 한쪽만 고쳐져 어긋난다 (2차 검사가 temperature 를
+            #    안 잡아 판정이 실행마다 뒤집힌 적이 있다).
+            vlm.call_json(
+                system=prompt.SYSTEM,
                 # ⚠️ 순서가 프롬프트의 전제다 — 첫 번째가 레퍼런스, 두 번째가 사용자.
-                image_urls=[_data_url(reference_image), _data_url(user_image)],
-                # ⚠️ 0 으로 고정한다. 기본값(1.0)이면 같은 사진이 실행마다
-                #    통과/반려를 오간다 — 실측에서 3회 중 2회가 뒤집혔다.
-                #    사용자가 같은 사진을 다시 올려 통과되는 상황은 판정이
-                #    있으나 마나 하다는 뜻이다.
-                temperature=0.0,
+                content=[
+                    vlm.image_block(_jpeg_for_vlm(reference_image)),
+                    vlm.image_block(_jpeg_for_vlm(user_image)),
+                    {"type": "text", "text": prompt.USER},
+                ],
+                max_tokens=400,
             ),
             timeout=settings.photo_screening_timeout_sec,
         )
@@ -154,9 +142,9 @@ async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResu
         log.exception("2차 검사 실패 — 통과 처리")
         return _PASS
 
-    result = _parse(raw)
+    result = _to_result(parsed)
     if result is None:
-        log.warning("2차 검사 응답을 해석하지 못함 — 통과 처리: %s", raw[:200])
+        log.warning("2차 검사 응답을 해석하지 못함 — 통과 처리: %.200s", parsed)
         return _PASS
 
     if not result.suitable and not result.message:

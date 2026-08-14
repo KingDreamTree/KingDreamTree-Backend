@@ -27,6 +27,8 @@ import io
 import logging
 from dataclasses import dataclass
 
+from PIL import Image
+
 from app.config import settings
 from app.prompts import photo_screening as prompt
 from app.services import images
@@ -47,7 +49,7 @@ class ScreenResult:
     message: str = ""
     confidence: str | None = None
     skipped: bool = False
-    #: 모델이 1단계에서 관찰한 값과 적용한 규칙 번호. 사용자에게는 안 나가고
+    #: 모델이 1단계에서 관찰한 값과 처음 깨진 조건. 사용자에게는 안 나가고
     #  로그·튜닝용이다. ⚠️ 오판정이 났을 때 "무엇을 잘못 봤는지"를 여기서 본다.
     observed: dict | None = None
     rule: int | None = None
@@ -56,7 +58,7 @@ class ScreenResult:
 _PASS = ScreenResult(suitable=True, skipped=True)
 
 
-def _jpeg_for_vlm(image_bytes: bytes) -> bytes:
+def _jpeg_for_vlm(image: bytes | Image.Image) -> bytes:
     """판정용으로 **줄인** JPEG. base64 포장은 vlm.image_block() 이 한다.
 
     ⚠️ **저장용 크기(긴 변 최대 4096px)를 그대로 보내면 안 된다.** 이미지는
@@ -65,7 +67,10 @@ def _jpeg_for_vlm(image_bytes: bytes) -> bytes:
        잘렸나 — 은 전부 작은 이미지로도 판별된다. 원본 해상도가 필요 없다.
        3000x4000 기준 전송량 95% 감소를 확인했다.
     """
-    img = images.load_rgb(image_bytes)
+    # ⚠️ 이미 디코딩된 이미지를 받으면 다시 디코딩하지 않는다.
+    #    호출부(routes/photos.py)는 업로드를 이미 열어둔 상태다. bytes 로 주고받으면
+    #    인코딩 → 디코딩을 원본 크기로 한 번씩 더 하게 된다.
+    img = image if isinstance(image, Image.Image) else images.load_rgb(image)
     side = settings.photo_screening_max_side
     if max(img.size) > side:
         scale = side / max(img.size)
@@ -97,7 +102,7 @@ def _to_result(data: dict) -> ScreenResult | None:
     )
 
 
-async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResult:
+async def screen(user_image: bytes | Image.Image, reference_image: bytes | None) -> ScreenResult:
     """두 사진이 비교 가능한지 판정한다.
 
     **예외를 던지지 않는다** — 어떤 실패든 통과로 처리한다.

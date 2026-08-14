@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # 구 service_role key. ⚠️ RLS를 전부 우회한다. 서버 사이드 전용.
     supabase_service_role_key: str = ""
 
+    #: 프론트가 붙는 오리진. 쉼표로 여러 개, "*" 면 전부 허용.
+    #  ⚠️ 없으면 브라우저 요청이 전부 막힌다 (서버는 정상인데 화면에서만 실패).
+    #  ⚠️ 로그인이 없어 CORS 가 데이터를 지켜주지는 않는다 — user_id 를 아는 사람은
+    #     어느 오리진에서든 읽을 수 있다. 오리진 제한은 운영 편의일 뿐이다.
+    cors_origins: str = "*"
+
     # ------------------------------------------------------------------ #
     # Storage 버킷 (전부 private)
     # ------------------------------------------------------------------ #
@@ -49,7 +55,22 @@ class Settings(BaseSettings):
     # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
     #    프론트가 GET /pose-criteria 로 이 값들을 받아 쓰므로, 여기만 고치면 양쪽이 같이 움직인다.
     pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=45 기준 평균 오차 13.5°
-    framing_f_min: float = 0.65  # F_MIN: 인물 bbox IoU 하한
+    #: F_MIN — **유도용**. 촬영 화면에서 "조금 뒤로 물러나세요"를 띄우고 자동 촬영
+    #  조건에 넣는 선. ⚠️ 서버는 이걸로 거부하지 않는다.
+    framing_f_min: float = 0.65
+    #: F_HARD — **거부용**. 이보다 나쁘면 서버가 막는다 (거리 2.5배 차이).
+    #  ⚠️ 왜 유도와 거부를 나누는가 —
+    #     부위 굵기를 몸통 길이로 나눠 비교하므로 **거리 차이는 계산에서 상쇄된다.**
+    #     사용자가 2배 가까이 서면 팔뚝도 2배, 몸통도 2배라 비율은 같다.
+    #     거리가 진짜 문제가 되는 경우는 둘인데 각각 다른 곳이 이미 잡는다:
+    #       원근 왜곡  → 2차 검사 PERSPECTIVE_MISMATCH
+    #       픽셀 부족  → 부위별 TOO_SMALL
+    #     그런데도 촬영 시점에 막으면, 고쳐도 이득이 없는 이유로 사용자를 돌려보내
+    #     이탈만 만든다. 촬영 중 유도는 공짜지만(한 걸음 물러나면 된다) 이미 찍힌
+    #     사진을 막는 건 처음부터 다시 하라는 뜻이다.
+    #  ⚠️ 이 선을 남겨두는 이유 — 2차 검사는 실패하면 통과시킨다(fail-open).
+    #     OpenAI 가 죽었을 때 아무것도 안 걸러지는 상태는 피한다.
+    framing_hard_min: float = 0.40
     pose_tol_deg: float = 45.0  # TOL: 관절 하나가 0점이 되는 각도 차
     pose_hard_tol_deg: float = 60.0  # HARD: 하나라도 넘으면 즉시 탈락 (그 부위는 못 씀)
     pose_facing_max_delta: float = 0.25  # R_MAX: 어깨폭/몸통길이 비율 차 상한 (몸 돌아감)
@@ -145,8 +166,11 @@ class Settings(BaseSettings):
     # VLM provider (담당 B 영역)
     # ------------------------------------------------------------------ #
     vlm_provider: str = ""
-    anthropic_api_key: str = ""
     openai_api_key: str = ""
+    # ⚠️ ANTHROPIC_API_KEY 는 2026-08-14 에 뺐다. vlm.py 가 진단 파이프라인용으로
+    #    재작성되면서 openai 전용이 됐다(_call_json). claude 경로가 코드에 없으므로
+    #    키만 남겨두면 "VLM_PROVIDER=claude 로 바꾸면 되겠지"라는 오해를 만든다.
+    #    되살리려면 vlm.py 에 분기를 다시 구현해야 한다.
 
     # ------------------------------------------------------------------ #
     # ExerciseDB (운동 카탈로그, 담당 B 영역)
@@ -162,6 +186,10 @@ class Settings(BaseSettings):
     # 개발 모드
     # ------------------------------------------------------------------ #
     use_mock: bool = False
+
+    def cors_origin_list(self) -> list[str]:
+        """쉼표로 구분된 CORS_ORIGINS 를 목록으로."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()] or ["*"]
 
 
 settings = Settings()

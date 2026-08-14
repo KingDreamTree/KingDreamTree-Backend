@@ -37,6 +37,10 @@ router = APIRouter(tags=["segmentation"])
 REASON_MESSAGE: dict[str, str] = {
     InvalidReason.TOO_SMALL: "{name}{이가} 거의 보이지 않습니다. 옷에 가려졌을 수 있어요.",
     InvalidReason.TOO_SMALL_RATIO: "{name}{이가} 너무 작게 나왔습니다. 조금 더 가까이 서주세요.",
+    # ⚠️ 지금은 아무도 TRUNCATED 를 invalid_reason 으로 넣지 않는다. 잘림은 무효 사유가
+    #    아니라 별도 표시(PaletteEntry.is_truncated)로 나간다 — 전신 사진은 발이
+    #    바닥 경계에 닿는 게 정상이라 무효로 치면 너무 많이 빠진다.
+    #    기준을 바꾸게 되면 여기 문구가 그대로 쓰인다.
     InvalidReason.TRUNCATED: "{name}{이가} 화면에서 잘렸습니다. 전신이 나오게 찍어주세요.",
     InvalidReason.NOT_COMPARABLE: "{name}{은는} 비교 대상이 아닙니다.",
 }
@@ -64,14 +68,22 @@ def _message_for(name_ko: str, reason: str | None) -> str:
     )
 
 
-def _build(photo: dict[str, Any]) -> SegmentationResponse | None:
-    """photo 행 하나 → 팔레트가 조립된 응답. 세그가 아직이면 None."""
+def _build(
+    photo: dict[str, Any],
+    master: dict[str, dict[str, Any]] | None = None,
+) -> SegmentationResponse | None:
+    """photo 행 하나 → 팔레트가 조립된 응답. 세그가 아직이면 None.
+
+    ⚠️ master 를 받으면 다시 조회하지 않는다. 세션 조회는 이 함수를 두 번 부르는데,
+       부위 마스터는 두 사진에 대해 같은 값이라 두 번 읽을 이유가 없다.
+    """
     photo_id = UUID(str(photo["photo_id"]))
     segmentation = db.get_segmentation(photo_id)
     if segmentation is None:
         return None
 
-    master = {row["class_name"]: row for row in db.list_body_parts()}
+    if master is None:
+        master = {row["class_name"]: row for row in db.list_body_parts()}
     parts = db.list_part_segments(UUID(str(segmentation["segmentation_id"])))
 
     palette: list[PaletteEntry] = []
@@ -92,6 +104,7 @@ def _build(photo: dict[str, Any]) -> SegmentationResponse | None:
                 pixel_count=part["pixel_count"],
                 area_ratio=part["area_ratio"],
                 bbox=BBox(x=part["bbox_x"], y=part["bbox_y"], w=part["bbox_w"], h=part["bbox_h"]),
+                is_truncated=bool(part.get("is_truncated")),
             )
         )
 
@@ -178,8 +191,10 @@ async def get_session_segmentation(session: OwnedSession) -> SessionSegmentation
     reference_photo = db.get_photo(session_id, PhotoKind.REFERENCE)
     user_photo = db.get_photo(session_id, PhotoKind.USER)
 
-    reference = _build(reference_photo) if reference_photo else None
-    user = _build(user_photo) if user_photo else None
+    # 두 사진이 같은 마스터를 쓴다 — 한 번만 읽는다.
+    master = {row["class_name"]: row for row in db.list_body_parts()}
+    reference = _build(reference_photo, master) if reference_photo else None
+    user = _build(user_photo, master) if user_photo else None
 
     ref_valid = _valid_comparable(reference)
     user_valid = _valid_comparable(user)

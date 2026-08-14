@@ -13,7 +13,7 @@ VLM 입력은 **크롭이 아니라 원본 + 하이라이트**다. 부위를 잘
 
 2. **맵 리사이즈에 보간을 쓰면 안 된다. NEAREST 뿐이다.**
    같은 맵을 BILINEAR 로 늘렸더니 라벨 종류가 23 → 28 로 늘었다.
-   없던 Apparel·Eyeglasses·Upper_Clothing·Sock 이 경계에서 생성됐다.
+   없던 Apparel·Eyeglass·Upper_Clothing·Sock 이 경계에서 생성됐다.
    **에러 없이 조용히 틀린다** — 존재하지 않는 부위가 진단에 들어간다.
 
 3. **라벨 인덱스를 하드코딩하지 않는다.** 모델이 바뀌면 재배열된다.

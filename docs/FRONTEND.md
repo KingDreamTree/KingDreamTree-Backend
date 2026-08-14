@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| **최종 수정일** | 2026-08-13 |
+| **최종 수정일** | 2026-08-14 |
 | **Base URL** | `/api/v1` |
 | **구현 완료** | F02 사용자 · F03 세션 · F04 레퍼런스 · F05 사용자 사진 · F06 세그멘테이션 조회 · **F07 인바디** · F13 잡 폴링 · F14 signed URL · F15 삭제 · 부위 마스터 |
 | **미구현** | 진단(F08·F09) · 루틴(F10~F12) |
@@ -32,6 +32,7 @@
 
 ```
 앱 최초 진입   POST /users              → user_id 를 로컬에 보관
+              GET  /pose-criteria      → 자세 판정 기준 (하드코딩 금지)
 앱 재진입      GET  /users/me           → 저장된 id 가 유효한지 확인
               GET  /sessions/active    → steps 를 보고 어느 화면으로 갈지 결정
 
@@ -72,7 +73,31 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 
 실시간 촬영뿐 아니라 **갤러리 업로드 경로에서도** 프론트가 MediaPipe를 돌려야 합니다. 서버는 값을 받기만 합니다.
 
-**⚠️ 임계값을 프론트에 하드코딩하지 마세요.** `THRESHOLD`(90) / `F_MIN`(0.80)은 서버 `.env`에 있는 튜닝 대상입니다. 하드코딩하면 서버에서 값을 조정한 순간 두 곳이 어긋납니다. 422 응답의 `detail.threshold` / `detail.f_min` 으로 함께 내려가니 그 값을 쓰세요.
+### 무엇을 계산해서 보내나 — 세 값
+
+| 값 | 범위 | 무엇 |
+|---|---|---|
+| `pose_similarity` | 0~100 | 관절 **각도** 유사도 |
+| `framing_score` | 0~1 | 인물 bbox IoU |
+| `facing_delta` | 0~1 | 어깨폭/몸통길이 비율 차 — 몸이 돌아간 정도 |
+
+**📄 산식·근거·바로 쓸 수 있는 JS 구현은 [`docs/pose-scoring.md`](pose-scoring.md) 에 있습니다.**
+
+⚠️ **좌표를 직접 비교하면 안 됩니다.** 사용자가 레퍼런스보다 한 발 뒤에 서면 모든 좌표가 달라지지만 자세는 같습니다. 좌표로 점수를 매기면 자세가 아니라 **서 있는 위치를 재게 됩니다.** 그래서 각도를 씁니다 — 위치·거리·사람 크기에 불변입니다.
+
+### ⚠️ 임계값을 하드코딩하지 마세요 — 서버가 내려줍니다
+
+```
+GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
+
+{ "tol_deg": 45, "hard_tol_deg": 60, "threshold": 70,
+  "f_min": 0.65, "r_max": 0.25,
+  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 15 }
+```
+
+하드코딩하면 서버에서 조정한 순간 어긋나고, **"실시간 촬영은 자동으로 통과"라는 전제가 깨집니다** — 화면에선 통과인데 저장이 거부됩니다.
+
+`n_hold`는 자동 촬영용입니다. 조건을 만족한 상태가 **15프레임(≈0.5초) 이어질 때** 셔터를 누르세요. 손이 지나가다 우연히 맞는 순간에 찍히면 안 됩니다.
 
 ---
 
@@ -132,6 +157,7 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 | `capture_source` | O | `CAPTURE`(앱 내 촬영) \| `UPLOAD`(파일 선택) |
 | `pose_similarity` | O | 0~100 |
 | `framing_score` | O | 0~1 |
+| `facing_delta` | X | 0~1. 안 보내면 통과 처리되지만 **몸이 돌아간 사진을 못 거릅니다** |
 | `pose_scale_basis` | O | ⚠️ **레퍼런스와 같아야 합니다.** 다르면 422 |
 
 **⚠️ 레퍼런스가 먼저 등록돼 있어야 합니다.** 없으면 409 `PRECONDITION_NOT_MET`.
@@ -162,7 +188,7 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 ```json
 { "error": { "code": "POSE_MISMATCH",
              "message": "사용자에게 그대로 보여줘도 되는 문구",
-             "detail": { "pose_similarity": 71.2, "threshold": 90.0, "reason": "POSE" } } }
+             "detail": { "pose_similarity": 62.4, "threshold": 70.0, "reason": "POSE" } } }
 ```
 
 `message` 는 그대로 노출해도 되게 쓰여 있습니다.
@@ -175,7 +201,8 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 | 409 | `PRECONDITION_NOT_MET` | 선행 단계 미완료 (예: 레퍼런스 없이 사용자 사진) |
 | 413 | `FILE_TOO_LARGE` | 10MB 초과 |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | 이미지로 열리지 않는 파일 (해상도가 과도하게 큰 경우 포함) |
-| 422 | `POSE_MISMATCH` | **`detail.reason` 별로 문구를 나눌 것** (아래) |
+| 422 | `POSE_MISMATCH` | **1차 검사** 미달. `detail.reason` 별로 문구를 나눌 것 (아래) |
+| 422 | `UNSUITABLE_PHOTO` | **2차 검사** 미달. `message`를 그대로 보여주고 재촬영 유도 |
 | 422 | `MULTI_PERSON` | "혼자 나오도록 촬영해주세요" |
 
 **`POSE_MISMATCH` 의 `detail.reason`**
@@ -184,9 +211,24 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 |---|---|---|
 | `POSE` | 자세를 바꿔야 함 | "레퍼런스와 포즈를 맞춰주세요" |
 | `FRAMING` | 카메라와의 거리·위치를 바꿔야 함 | "몸이 화면에 다 나오도록 서주세요" |
+| `FACING` | 몸이 옆으로 돌아감 | "정면을 보고 서주세요" |
 | `NO_PERSON` | 사람이 안 잡힘 | "전신이 보이도록 다시 촬영해주세요" |
 
-셋은 **서로 다른 지시**입니다. 하나로 뭉뚱그리면 사용자가 뭘 고쳐야 할지 모릅니다.
+넷은 **서로 다른 지시**입니다. 하나로 뭉뚱그리면 사용자가 뭘 고쳐야 할지 모릅니다.
+
+### 2차 검사 — `UNSUITABLE_PHOTO`
+
+1차(자세)를 통과해도 **옷에 몸이 묻히거나 레퍼런스와 촬영 거리가 딴판이면** 부위 비교가 무의미합니다. 서버가 업로드 시점에 AI로 판정합니다.
+
+```json
+{ "error": { "code": "UNSUITABLE_PHOTO",
+             "message": "옷이 헐렁해 몸의 윤곽이 보이지 않습니다. 몸에 붙는 옷으로 다시 촬영해주세요.",
+             "detail": { "reason": "LOOSE_CLOTHING", "confidence": "HIGH" } } }
+```
+
+`message`를 **그대로 보여주면 됩니다.** `detail.reason` 은 `LOOSE_CLOTHING` / `PERSPECTIVE_MISMATCH` / `CROPPED` / `NO_PERSON` / `MULTI_PERSON` / `TOO_DARK` / `OTHER`.
+
+⚠️ **이 검사 때문에 업로드 응답이 2~5초 걸립니다.** AI 호출을 기다리기 때문입니다. 로딩 표시가 필요합니다 — 그 자리에서 재촬영을 유도하는 게 목적이라 일부러 동기로 만들었습니다.
 
 **⚠️ 판정에 실패한 사진은 저장되지 않습니다.** 재촬영 UI가 반드시 필요합니다.
 

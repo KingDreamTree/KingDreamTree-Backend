@@ -205,6 +205,31 @@
     <div id="routine"></div>
   </div>
 
+  <!-- 5.5 피드백 루프 (F12) -->
+  <div class="card step" id="s55">
+    <h2>5.5 운동 완료 → 피드백 → 루틴 반영 (F12)</h2>
+    <div id="todaybox" class="dim" style="margin-bottom:10px">
+      전 구간을 먼저 실행하면 여기가 열립니다.
+    </div>
+    <div class="row">
+      <div class="col" style="flex:2">
+        <label>오늘 운동 후 피드백</label>
+        <textarea id="fb" rows="2" style="width:100%; padding:8px; background:#0c0e13;
+          color:var(--tx); border:1px solid var(--line); border-radius:6px; font-size:13px;
+          font-family:inherit">스쿼트 할 때 무릎이 좀 아팠어요</textarea>
+      </div>
+    </div>
+    <div style="margin-top:10px">
+      <button id="sendfb" disabled>운동 완료 + 피드백 보내기</button>
+      <span class="dim" style="margin-left:8px">
+        피드백이 비어 있으면 완료 기록만 남고 루틴은 안 바뀝니다.
+      </span>
+    </div>
+    <pre id="fblog" style="margin-top:12px; max-height:200px" hidden></pre>
+    <div id="revision" style="margin-top:12px"></div>
+    <div id="diff" style="margin-top:12px"></div>
+  </div>
+
   <!-- 6. 원본 -->
   <div class="card step" id="s6">
     <h2>6. 원본 응답 (JSON)</h2>
@@ -221,6 +246,9 @@ const API = () => $("api").value.replace(/\/+$/, "");
 let H = {};                       // X-User-Id 헤더
 let landmarker = null;
 const photo = { ref: null, usr: null };   // {file, img, lm}
+
+// 피드백 루프(F12)가 쓰는 상태. 전 구간 실행이 끝나야 채워진다.
+const F12 = { sid: null, routine: null };
 
 // ── 로그 ────────────────────────────────────────────────────────────────
 const lines = [];
@@ -525,6 +553,127 @@ $("run").onclick = async () => {
 };
 
 $("reset").onclick = () => location.reload();
+
+// ── F12 피드백 루프 ─────────────────────────────────────────────────────────
+//
+// 운동 완료 기록 → (피드백이 있으면) ROUTINE_PATCH → **새 버전** 생성·활성화.
+//
+// ⚠️ 새 버전은 month_routine 행이 **따로** 만들어진다. 그래서 적용 뒤에는
+//    active 를 다시 조회해야 한다 — 예전 객체를 그대로 쓰면 바뀌기 전 루틴을
+//    계속 보여주게 된다.
+//
+// ⚠️ 진행도는 세션 전체에서 센다. 버전이 갈려도 이어져야 하기 때문이다
+//    (routine_repo.count_session_logs 주석 — 2주기까지 간 사용자가 피드백
+//    한 번에 1주기로 되감기던 문제를 고친 자리다). 화면에서도 그걸 확인한다.
+
+const flog = (msg, cls = "") => {
+  $("fblog").hidden = false;
+  $("fblog").innerHTML += (cls ? `<span class="${cls}">${msg}</span>` : msg) + "\n";
+  $("fblog").scrollTop = $("fblog").scrollHeight;
+};
+
+async function refreshToday() {
+  try {
+    const t = await api("GET", `/api/v1/sessions/${F12.sid}/routines/today`);
+    const p = t.progress;
+    $("todaybox").innerHTML =
+      `다음 차례 — <b>${p.cycle_no}주기 Day ${t.day.day_order}</b> ` +
+      `<span class="dim">${t.day.title ?? ""}</span> · ` +
+      `진행 <b>${p.completed_count}/${p.total_count}</b> (${p.percent}%)`;
+    return t;
+  } catch (e) {
+    $("todaybox").innerHTML = `<span class="warn">오늘의 루틴을 못 읽었습니다: ${e.message}</span>`;
+    return null;
+  }
+}
+
+$("sendfb").onclick = async () => {
+  $("sendfb").disabled = true;
+  $("fblog").innerHTML = "";
+  try {
+    const today = await refreshToday();
+    if (!today) throw new Error("오늘의 루틴이 없습니다.");
+
+    const before = await api("GET", `/api/v1/sessions/${F12.sid}/routines/active`);
+    const text = $("fb").value.trim();
+
+    flog(`[1] Day ${today.day.day_order} 완료 기록${text ? " + 피드백" : " (피드백 없음)"}`);
+    const res = await api("POST", `/api/v1/sessions/${F12.sid}/workout-logs`, {
+      json: { day_order: today.day.day_order, cycle_no: today.cycle_no,
+              feedback_text: text || null },
+    });
+    flog(`      진행 ${res.progress.completed_count}/${res.progress.total_count}` +
+         ` (${res.progress.percent}%) · 다음 ${res.progress.cycle_no}주기 Day ` +
+         `${res.progress.next_day_order}`, "ok");
+
+    // ⚠️ 피드백이 없으면 job_id 가 null 이다 — 패치할 게 없으니 잡도 안 생긴다.
+    if (!res.job_id) {
+      flog("\n[2] 루틴 변경 없음 — 완료 기록만 남았습니다.", "dim");
+      await refreshToday();
+      return;
+    }
+
+    flog("\n[2] ROUTINE_PATCH — 피드백 해석 → 새 버전");
+    await waitJob(res.job_id, "ROUTINE_PATCH");
+
+    const revs = await api("GET", `/api/v1/sessions/${F12.sid}/revisions`);
+    const after = await api("GET", `/api/v1/sessions/${F12.sid}/routines/active`);
+    renderRevision(revs?.[0], before, after);
+
+    const changed = after.month_routine_id !== before.month_routine_id;
+    flog(changed
+      ? `      v${before.version} → v${after.version} 새 버전 활성`
+      : "      변경 없음 — 버전은 그대로", changed ? "ok" : "dim");
+
+    // 진행도가 되감기지 않았는지 — 이 화면의 핵심 확인 지점
+    const p = after.progress;
+    flog(`      진행 유지 확인: ${p.completed_count}/${p.total_count} (${p.percent}%) · ` +
+         `${p.cycle_no}주기 Day ${p.next_day_order}`,
+         p.completed_count >= res.progress.completed_count ? "ok" : "bad");
+    if (p.completed_count < res.progress.completed_count)
+      flog("      ⚠️ 새 버전에서 진행도가 줄었습니다 — 되감기 회귀!", "bad");
+
+    renderRoutine(after, null);
+    await refreshToday();
+  } catch (e) {
+    flog(`\n실패: ${explain(e)}`, "bad");
+  } finally {
+    $("sendfb").disabled = false;
+  }
+};
+
+function renderRevision(rev, before, after) {
+  if (!rev) { $("revision").innerHTML = ""; return; }
+  const cx = rev.contraindications_added || [];
+  $("revision").innerHTML = `
+    <div style="border-left:3px solid var(--accent); padding-left:10px">
+      <div><b>해석</b> — ${rev.interpretation || "—"}</div>
+      ${rev.feedback_text ? `<div class="dim">원문: "${rev.feedback_text}"</div>` : ""}
+      ${cx.length ? `<div class="warn">주의 부위 등록: ${
+        cx.map((c) => `${c.body_part}(${c.severity})`).join(", ")}</div>` : ""}
+      <div class="dim">변경 ${(rev.changes || []).length}건</div>
+    </div>`;
+
+  // ⚠️ 코드가 강제한 금기 반영(enforce_contraindication)은 LLM 이 부른 도구가
+  //    아니다. 섞어서 보여주면 "LLM 이 다 했다"로 오해되므로 나눠 표시한다.
+  const byFn = {};
+  for (const c of rev.changes || []) (byFn[c.function] ??= []).push(c.args || {});
+  const label = { adjust_intensity: "강도 조정", replace_exercise: "운동 교체",
+                  flag_contraindication: "주의 부위 등록",
+                  enforce_contraindication: "코드가 강제한 금기 반영" };
+  $("diff").innerHTML =
+    Object.entries(byFn).map(([fn, items]) => `
+      <div style="margin-top:8px"><b>${label[fn] || fn}</b> ${items.length}건
+        <table><tbody>${items.map((a) => `<tr>
+          <td class="dim" style="width:22%">Day ${a.day_order ?? "—"}</td>
+          <td style="width:30%">${a.exercise_name || a.old_exercise_name ||
+                                  a.body_part || ""}</td>
+          <td>${a.reason || ""}${
+            a.sets_before != null ? ` <span class="pill">${a.sets_before}→${a.sets_after}세트</span>` : ""}${
+            a.removed ? ' <span class="pill">제외됨</span>' : ""}</td>
+        </tr>`).join("")}</tbody></table></div>`).join("") ||
+    `<div class="dim">적용된 변경이 없습니다.</div>`;
+}
 
 // ── 렌더 ────────────────────────────────────────────────────────────────
 // ⚠️ 세그 응답은 **부위 배열이 아니다.** 사진별 맵 정보 + comparable 요약이다

@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     # Supabase
     # ------------------------------------------------------------------ #
     supabase_url: str = ""
-    # 구 anon key. 프론트가 Supabase에 직접 붙지 않으므로 서버에서는 쓰지 않는다.
-    supabase_anon_key: str = ""
+    # ⚠️ SUPABASE_ANON_KEY 는 2026-08-14 에 뺐다. 프론트가 Supabase 에 직접
+    #    붙지 않아 서버에서 쓸 일이 없다. .env 에 남겨두면 "채워야 하나?" 싶어진다.
     # 구 service_role key. ⚠️ RLS를 전부 우회한다. 서버 사이드 전용.
     supabase_service_role_key: str = ""
 
@@ -46,9 +46,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값
     # ------------------------------------------------------------------ #
-    pose_threshold: float = 90.0  # THRESHOLD: 최종 유사도 하한 (%)
-    framing_f_min: float = 0.80  # F_MIN: 프레이밍 Jaccard 하한
-    pose_tol_deg: float = 40.0  # TOL: 관절 각도 허용 오차 (도)
+    # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
+    #    프론트가 GET /pose-criteria 로 이 값들을 받아 쓰므로, 여기만 고치면 양쪽이 같이 움직인다.
+    pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=45 기준 평균 오차 13.5°
+    framing_f_min: float = 0.65  # F_MIN: 인물 bbox IoU 하한
+    pose_tol_deg: float = 45.0  # TOL: 관절 하나가 0점이 되는 각도 차
+    pose_hard_tol_deg: float = 60.0  # HARD: 하나라도 넘으면 즉시 탈락 (그 부위는 못 씀)
+    pose_facing_max_delta: float = 0.25  # R_MAX: 어깨폭/몸통길이 비율 차 상한 (몸 돌아감)
+    pose_min_visible_angles: int = 4  # 유효 각도가 이보다 적으면 판정 불가
+    pose_min_visibility: float = 0.5  # 이 미만인 관절은 각도 계산에서 뺀다
     pose_n_hold: int = 15  # N_HOLD: 자동 촬영 유지 프레임 수 (프론트 참고용)
 
     # ------------------------------------------------------------------ #
@@ -61,6 +67,24 @@ class Settings(BaseSettings):
     #     전송량과 저장량을 묶어두는 안전장치다.
     map_max_side: int = 1024
     min_comparable_parts: int = 3  # 비교 가능 부위가 이보다 적으면 재촬영 안내
+
+    #: 업로드 시 VLM 으로 "이 사진으로 실루엣 비교가 되는가"를 판정할지.
+    #  ⚠️ 동기 호출이라 업로드 응답이 2~5초 느려진다. 그래도 동기인 이유는
+    #     목적이 재촬영 유도이기 때문 — 비동기면 사용자가 다음 화면으로 넘어간
+    #     뒤에 알림이 뜬다.
+    photo_screening_enabled: bool = True
+    #: ⚠️ 넘기면 통과시킨다(fail-open). 업로드가 통째로 막히는 것보다 낫다는 판단.
+    photo_screening_timeout_sec: float = 10.0
+    #: 판정에 보낼 이미지의 긴 변 상한. 저장용 원본을 그대로 보내면 토큰이 낭비된다 —
+    #  옷 밀착도·촬영 거리·잘림은 작은 이미지로도 판별되고, 두 장을 보내므로 두 배다.
+    photo_screening_max_side: int = 768
+
+    #: 옷 픽셀을 인접한 부위로 흡수해 통계를 낼지 (app/services/part_merge.py).
+    #  ⚠️ **is_valid 판정보다 먼저** 적용된다. 옷에 가려 TOO_SMALL 로 죽던 부위가
+    #     살아난다. 대신 헐렁한 옷 실루엣도 유효 부위가 되므로,
+    #     body_part_segment 의 clothing 기여도를 함께 보고 판단할 것.
+    #  ⚠️ 저장되는 맵 파일은 병합하지 않는다 — 맵은 추론 결과의 원본이다.
+    seg_merge_clothing: bool = True
 
     # ------------------------------------------------------------------ #
     # 잡 큐 / 워커
@@ -76,13 +100,15 @@ class Settings(BaseSettings):
     job_stale_after_sec: int = 900  # 15분
     #: 회수 검사 주기. 매 폴링마다 돌리면 쓸데없는 쿼리가 쌓인다.
     job_reclaim_interval_sec: int = 60
-    # ⚠️ t3.large는 GPU가 없고 메모리 8GB다. 세그 워커를 2개 이상 돌리면 OOM.
-    seg_worker_concurrency: int = 1
-    # vlm_worker_concurrency 는 제거했다 (2026-08-14).
-    #   부위별 병렬 호출을 폐기하고 전 부위를 한 번에 진단하게 바뀌면서
-    #   "동시에 몇 부위를 부를지"라는 값 자체가 의미를 잃었다. 잡 1개가 전 부위를
-    #   처리하므로 조절할 동시성이 없다. 안 쓰는 값을 남겨두면 다음 사람이
-    #   "3으로 올리면 빨라지나"를 시도하게 된다. (llm-strategy.md §F08)
+    # ⚠️ SEG_WORKER_CONCURRENCY / VLM_WORKER_CONCURRENCY 는 2026-08-14 에 지웠다.
+    #    각각 이유가 다르다.
+    #    - VLM: 부위별 병렬 호출을 폐기하고 전 부위를 한 번에 진단하게 바뀌면서
+    #      "동시에 몇 부위를 부를지"라는 값 자체가 의미를 잃었다. 잡 1개가 전 부위를
+    #      처리하므로 조절할 동시성이 없다. (llm-strategy.md §F08)
+    #    - SEG: **애초에 배선돼 있지 않았다.** run.py 는 단일 루프라 몇을 넣든
+    #      워커는 하나다. 값이 있으면 "3개가 돈다"고 믿게 되므로 미사용보다 나쁘다.
+    #    ⚠️ 동시 실행을 실제로 구현한 뒤에 되살릴 것. 그때 참고할 제약:
+    #       t3.large 는 GPU 가 없고 메모리 8GB 라 세그 워커 2개면 OOM.
 
     # ------------------------------------------------------------------ #
     # Sapiens2 (세그멘테이션 워커 전용 — API 프로세스는 로드하지 않는다)
@@ -104,15 +130,11 @@ class Settings(BaseSettings):
     #  ⚠️ CPU float16은 대부분 더 느리다. CPU에서는 float32를 쓸 것.
     sapiens_dtype: str = "auto"
 
-    #: VRAM이 부족할 때 CPU로 레이어를 흘려보낼지 (accelerate device_map).
-    #  ⚠️ 켜면 VRAM보다 큰 모델도 돌아가지만 레이어가 CPU↔GPU를 오가 느려진다.
-    #     8GB VRAM에서 5b(fp16 ~9.5GB)를 보려는 경우가 이에 해당한다.
-    #     운영(RunPod 24GB)에서는 꺼둘 것 — 켜져 있어도 다 올라가면 성능 손해는 없다.
-    sapiens_offload: bool = False
-
-    #: 오프로딩 시 GPU에 최대 몇 GiB까지 올릴지. 0이면 자동(전체의 90%).
-    #  ⚠️ 전부 다 쓰면 활성값 자리가 없어 OOM이 난다. 여유를 남겨야 한다.
-    sapiens_gpu_max_gib: float = 0
+    # ⚠️ SAPIENS_OFFLOAD / SAPIENS_GPU_MAX_GIB 는 2026-08-14 에 뺐다.
+    #    VRAM 보다 큰 모델을 CPU 로 흘려보내는 설정이었는데, 우리 두 환경 어디서도
+    #    타지 않는다 — RunPod 는 24GB 라 다 올라가고, 로컬은 CPU 라 조건(cuda)에
+    #    걸리지 않는다. 한 번도 실행되지 않는 분기를 모델 로딩 경로에 두고 있었다.
+    #    docs/removed-code.md 참고.
 
     #: 라벨 목록이 확인되지 않은 모델이면 워커 기동을 거부할지.
     #  ⚠️ false로 두면 클래스 순서가 다른 모델도 그냥 돈다. 부위가 통째로
@@ -133,3 +155,35 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _warn_unknown_env_keys() -> None:
+    """.env 에 있지만 Settings 가 모르는 키를 경고한다.
+
+    ⚠️ extra="ignore" 라서 오타나 옛 이름은 **아무 말 없이 무시된다.**
+       실제로 SAPIENS_REQUIRE_VERIFIED_LABELS(→ SAPIENS_STRICT_LABELS 로 개명)가
+       .env 에 남은 채 한동안 아무 일도 안 하고 있었다. 설정한 사람은 켜둔 줄 안다.
+       막지는 않는다(다른 도구가 같은 .env 를 쓸 수 있다) — 보이게만 한다.
+    """
+    import logging
+    import pathlib
+    import re
+
+    path = pathlib.Path(Settings.model_config["env_file"])
+    if not path.is_file():
+        return
+
+    known = set(Settings.model_fields)
+    unknown = [
+        m.group(1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (m := re.match(r"^([A-Z_][A-Z0-9_]*)=", line.strip()))
+        and m.group(1).lower() not in known
+    ]
+    if unknown:
+        logging.getLogger("config").warning(
+            ".env 에 모르는 키가 있습니다 (무시됨): %s", ", ".join(unknown)
+        )
+
+
+_warn_unknown_env_keys()

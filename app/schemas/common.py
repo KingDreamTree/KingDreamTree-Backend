@@ -1,22 +1,11 @@
 """공통 응답 스키마."""
 
-from typing import Any
-
 from pydantic import BaseModel, Field
 
 
-class ErrorBody(BaseModel):
-    code: str = Field(description="에러 코드", examples=["POSE_MISMATCH"])
-    message: str = Field(description="사용자에게 그대로 보여줘도 되는 문구")
-    detail: dict[str, Any] | None = Field(default=None, description="추가 정보")
-
-
-class ErrorResponse(BaseModel):
-    """모든 에러 응답의 형태."""
-
-    error: ErrorBody
-
-
+# ⚠️ 에러 응답 스키마(ErrorBody/ErrorResponse)는 여기 두지 않는다.
+#    형태를 실제로 만들어 내보내는 곳은 app/errors.py 의 ApiError.to_dict() 하나다.
+#    같은 모양을 두 군데 적으면 한쪽만 고쳐져 어긋난다. (2026-08-14 제거)
 class SignedUrlItem(BaseModel):
     bucket: str
     path: str

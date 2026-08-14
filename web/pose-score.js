@@ -175,11 +175,16 @@ export function framingScore(ref, user, criteria) {
 }
 
 // --------------------------------------------------------------------------
-// R — 정면성 차이 (0~1)
+// R — 몸통 방향 차이 (0~. ⚠️ 1 을 넘을 수 있다)
 // --------------------------------------------------------------------------
 
 /**
  * 어깨폭 ÷ 몸통길이 비율이 레퍼런스와 얼마나 다른가.
+ *
+ * ⚠️ **"정면인가"를 재는 게 아니다.** 레퍼런스와의 **차이**다.
+ *    레퍼런스가 측면이면 사용자도 측면일 때 0 이 나온다. 절대 기준이 없다.
+ *    문구에 "정면"을 쓰면 측면 레퍼런스를 쓰는 사용자가 올바르게 섰는데도
+ *    따라도 통과 못 하는 안내를 받게 된다.
  *
  * ⚠️ 각도만으로는 몸이 돌아간 것을 못 잡는다. 팔을 내린 자세는 옆으로 돌아도
  *    팔다리 각도가 거의 같다. 그런데 어깨폭이 좁아 보여 실루엣 굵기가 왜곡된다.
@@ -207,10 +212,297 @@ export function shoulderRatio(lm) {
   return torsoLen > 0 ? shoulderWidth / torsoLen : 0;
 }
 
+/**
+ * 몸이 **어느 쪽으로** 돌았는지가 확실한가, 확실하면 어느 쪽인가.
+ *
+ * ⚠️ 어깨폭 비율만으로는 좌우를 구분할 수 없다. 비율이 cos θ 에 비례하는데
+ *    **cos 는 좌우 대칭**이라 +30° 와 −30° 가 같은 값이 된다. 실측 —
+ *
+ *        레퍼런스 +45°, 사용자 −45°  →  facing_delta 0.000  →  통과
+ *
+ *    **90° 어긋난 사람이 만점으로 통과한다.** 그 사진으로 낸 부위 비교는 틀린다.
+ *
+ * 그래서 깊이(z)로 **어느 어깨가 카메라에 가까운지**를 본다.
+ *
+ * ⚠️ **MediaPipe 의 z 는 정밀도가 낮다.** 그래서 값으로 쓰지 않고 **부호만**,
+ *    그것도 **확실할 때만** 쓴다. 어중간하면 "모르겠다"로 두고 기존 계산을 그대로 둔다.
+ *    z 를 각도로 환산해서 쓰면(atan) 매 프레임 흔들려 점수가 튄다.
+ *
+ * ⚠️ DEADBAND=0.25 는 회전 약 14° 에 해당한다(spread ≈ tan θ). 이보다 덜 돌면
+ *    부호를 안 믿는다. 그래도 손해가 없다 — 양쪽이 14° 씩 반대로 돌아야 28° 차이인데,
+ *    그건 지금도 통과하는 범위다(0° vs 30° 가 0.134 로 통과).
+ *
+ * ⚠️ z 를 안 주는 구현이면 0(모르겠다)을 돌려준다 → 기존 동작 그대로.
+ */
+const TURN_DEADBAND = 0.25;
+
+function turnSign(lm) {
+  const sl = lm[IDX.shoulderL];
+  const sr = lm[IDX.shoulderR];
+  if (typeof sl?.z !== "number" || typeof sr?.z !== "number") return 0;
+
+  const width = Math.hypot(sl.x - sr.x, sl.y - sr.y);
+  if (!(width > 0)) return 0;
+
+  // z 는 작을수록 카메라에 가깝다. 깊이 차를 어깨폭으로 나눠 크기에 무관하게 만든다.
+  const spread = (sl.z - sr.z) / width;
+  if (Math.abs(spread) < TURN_DEADBAND) return 0; // 모르겠다
+  return spread < 0 ? 1 : -1;
+}
+
 export function facingDelta(ref, user) {
   const r = shoulderRatio(ref);
   if (r <= 0) return 0; // 잴 수 없으면 통과 쪽으로 (서버도 같은 판단)
-  return Math.abs(shoulderRatio(user) - r) / r;
+  const u = shoulderRatio(user);
+
+  // ⚠️ **반대쪽으로 돈 게 확실할 때만** 더한다. 빼면 서로 상쇄돼 0 이 된다.
+  //    둘 다 확실히 돌았고(0 이 아니고) 방향이 다를 때만 걸리므로,
+  //    정면 근처에서는 이 가지로 들어오지 않는다 — 점수가 튀지 않는다.
+  const sr = turnSign(ref);
+  const su = turnSign(user);
+  if (sr !== 0 && su !== 0 && sr !== su) return (u + r) / r;
+
+  return Math.abs(u - r) / r;
+}
+
+// --------------------------------------------------------------------------
+// K — OKS-inspired 자세 유사도 · 0~1
+//
+// ⚠️ **COCO OKS 를 그대로 쓴 게 아니다.** COCO OKS 는 같은 이미지 안에서
+//    정답과 검출을 견주는 구조인데, 우리는 **다른 사진 두 장**을 견준다.
+//    관절 정의(BlazePose≠COCO)도, 크기 기준(몸통≠세그 면적)도 다르다.
+//    말할 수 있는 선은 **"OKS 의 관절별 오차 정규화 개념을 차용했다"** 까지다.
+// --------------------------------------------------------------------------
+
+/**
+ * MediaPipe 33개 랜드마크 ↔ COCO 17개 keypoint 대응표.
+ *
+ * COCO 순서(pycocotools 와 같다):
+ *   nose, eyeL, eyeR, earL, earR, shoulderL/R, elbowL/R, wristL/R,
+ *   hipL/R, kneeL/R, ankleL/R
+ *
+ * ⚠️ MediaPipe 는 눈을 3점(inner/center/outer)으로 찍는다. COCO 의 "eye" 에
+ *    해당하는 건 가운데(2, 5)다. inner(1,4)나 outer(3,6)를 쓰면 미묘하게
+ *    어긋나는데 **에러가 안 난다.**
+ *
+ * ⚠️ 대응이 되는 것과 **정의가 같은 것은 다르다.** BlazePose 는 어깨·골반을
+ *    GHUM 기준으로 찍고, COCO 는 라벨러가 눈으로 찍는다. 위치가 체계적으로
+ *    조금씩 다르다. 그래서 아래 σ 를 최종값으로 쓰면 안 된다.
+ */
+export const COCO_FROM_MEDIAPIPE = {
+  nose: 0,
+  eyeL: 2, eyeR: 5,
+  earL: 7, earR: 8,
+  shoulderL: 11, shoulderR: 12,
+  elbowL: 13, elbowR: 14,
+  wristL: 15, wristR: 16,
+  hipL: 23, hipR: 24,
+  kneeL: 25, kneeR: 26,
+  ankleL: 27, ankleR: 28,
+};
+
+/** COCO 17개 전부. 얼굴 포함. */
+export const COCO_17 = Object.values(COCO_FROM_MEDIAPIPE);
+
+/**
+ * 얼굴 5개를 뺀 12개. **기본값은 이쪽이다.**
+ *
+ * ⚠️ 이전 주석에 "얼굴 σ 가 작아 점수를 지배한다"고 적었는데 **틀렸다.**
+ *    실측 — 고개를 60° 돌려도 17개 점수는 0.949 다. 지배하지 않는다.
+ *
+ * 실제 이유는 반대다. **얼굴이 몸의 신호를 희석한다.**
+ *    왼팔 35° 차이:  17개 0.912  /  12개 0.876
+ *    얼굴 5점은 몸이 어떻든 거의 1.0 이라 평균을 끌어올린다.
+ *    우리가 잡아야 할 건 몸의 차이인데 그게 묽어진다.
+ *
+ * ⚠️ 다만 **차이가 크지 않다**(0.037). COCO_17 로 바꿔도 크게 안 달라진다 —
+ *    그래서 인자로 넘길 수 있게 뒀다. "얼굴을 빼야만 동작한다"는 아니다.
+ */
+export const COCO_BODY_12 = [
+  COCO_FROM_MEDIAPIPE.shoulderL, COCO_FROM_MEDIAPIPE.shoulderR,
+  COCO_FROM_MEDIAPIPE.elbowL, COCO_FROM_MEDIAPIPE.elbowR,
+  COCO_FROM_MEDIAPIPE.wristL, COCO_FROM_MEDIAPIPE.wristR,
+  COCO_FROM_MEDIAPIPE.hipL, COCO_FROM_MEDIAPIPE.hipR,
+  COCO_FROM_MEDIAPIPE.kneeL, COCO_FROM_MEDIAPIPE.kneeR,
+  COCO_FROM_MEDIAPIPE.ankleL, COCO_FROM_MEDIAPIPE.ankleR,
+];
+
+/**
+ * 관절별 편차 σ — **COCO 값을 임시로 넣어둔 것이다. 우리 값이 아니다.**
+ *
+ * 출처: pycocotools `cocoeval.py` kpt_oks_sigmas
+ *   [.26,.25,.25,.35,.35,.79,.79,.72,.72,.62,.62,1.07,1.07,.87,.87,.89,.89]/10
+ *
+ * σ 가 뜻하는 것 — 같은 사진을 여러 사람에게 라벨 붙이게 했을 때 어긋난 정도.
+ * 손목(0.062)은 사람끼리 잘 맞고 골반(0.107)은 잘 안 맞는다.
+ *
+ * ⚠️ **σ 는 "관절 중요도"가 아니다.** "이 관절이 진단에 더 중요하다"가 아니라
+ *    "이 관절은 원래 위치를 잘 못 짚는다"는 뜻이다. 우리가 실제로 원하는
+ *    부위별 중요도는 **downstream(진단하는 9부위)에서 와야 하고**, 그건 다른 축이다.
+ *    지금은 그 둘이 구분 없이 섞여 있다.
+ *
+ * ⚠️⚠️ **최종본으로 쓰면 안 된다. 두 가지가 어긋나 있다.**
+ *
+ *   1. **관절 정의** — BlazePose 어깨·골반 ≠ COCO 어깨·골반
+ *   2. **크기 기준** — COCO σ 는 √(세그멘테이션 면적) 기준이다.
+ *      우리는 몸통 길이 기준이라 눈금이 다르다 (SCALE_FROM_TORSO 참고)
+ *
+ * σ 는 원래 **데이터셋마다 구하는 상수**다(COCO 문서에 명시돼 있다).
+ * ⚠️ **30초 jitter 를 σ 라고 부르면 안 된다.** jitter 는 한 사람·한 자세·한 조명의
+ *    **시간적 흔들림**이고, σ 는 데이터 분포 전체에 걸친 **위치 불확실성**이다.
+ *    jitter 는 σ 의 **하한**이지 σ 가 아니다. (앞서 "같은 실험"이라고 적었는데 틀렸다)
+ *
+ * 그래도 재는 것이 출발점은 된다 —
+ *
+ *      σᵢ = √( 평균( |pᵢ − p̄ᵢ|² ) / 2 )        정규화 좌표에서
+ *
+ * (2 로 나누는 건 2D 라 축마다 σ 면 거리제곱의 기댓값이 2σ² 이기 때문)
+ *
+ * 그 값이 나오면 위의 어긋남 두 가지가 **동시에 사라진다** — 우리 검출기,
+ * 우리 관절 정의, 우리 크기 기준으로 잰 값이 되기 때문이다.
+ * 그리고 우리에게는 그쪽이 더 맞다: 우리 서비스에 사람 라벨러는 없고,
+ * 실제 잡음원은 MediaPipe 흔들림과 사용자의 미세한 움직임이다.
+ */
+export const KEYPOINT_SIGMA = {
+  [COCO_FROM_MEDIAPIPE.nose]: 0.026,
+  [COCO_FROM_MEDIAPIPE.eyeL]: 0.025, [COCO_FROM_MEDIAPIPE.eyeR]: 0.025,
+  [COCO_FROM_MEDIAPIPE.earL]: 0.035, [COCO_FROM_MEDIAPIPE.earR]: 0.035,
+  [COCO_FROM_MEDIAPIPE.shoulderL]: 0.079, [COCO_FROM_MEDIAPIPE.shoulderR]: 0.079,
+  [COCO_FROM_MEDIAPIPE.elbowL]: 0.072, [COCO_FROM_MEDIAPIPE.elbowR]: 0.072,
+  [COCO_FROM_MEDIAPIPE.wristL]: 0.062, [COCO_FROM_MEDIAPIPE.wristR]: 0.062,
+  [COCO_FROM_MEDIAPIPE.hipL]: 0.107, [COCO_FROM_MEDIAPIPE.hipR]: 0.107,
+  [COCO_FROM_MEDIAPIPE.kneeL]: 0.087, [COCO_FROM_MEDIAPIPE.kneeR]: 0.087,
+  [COCO_FROM_MEDIAPIPE.ankleL]: 0.089, [COCO_FROM_MEDIAPIPE.ankleR]: 0.089,
+};
+
+/** 뒤집은 표 — 화면에 관절별 점수를 이름으로 보여줄 때 쓴다. */
+const COCO_NAME_OF = Object.fromEntries(
+  Object.entries(COCO_FROM_MEDIAPIPE).map(([k, v]) => [v, k])
+);
+
+/**
+ * 몸통 길이를 √(세그멘테이션 면적) 눈금에 맞추는 배율.
+ *
+ * COCO 의 s 는 사람 세그멘테이션 면적의 제곱근이다. 우리는 자세 관문 시점에
+ * 세그멘테이션이 없으므로(그건 업로드 후 GPU 에서 난다) 몸통 길이를 쓴다.
+ * 서 있는 사람 기준 √(면적) ≈ 몸통 × 1.56 이라 그 값을 넣었다.
+ *
+ * ⚠️ **임시 눈금 맞춤이다.** 우리 σ 를 직접 재면 이 배율이 σ 안으로
+ *    흡수되어 사라진다. 그때 이 상수는 1 로 두면 된다.
+ */
+export const SCALE_FROM_TORSO = 1.56;
+
+/**
+ * 자세 하나를 **위치·크기를 지운 좌표**로 바꾼다.
+ *
+ * COCO 의 OKS 는 같은 사진 안에서 정답과 예측을 견주므로 좌표계가 이미 같다.
+ * 우리는 **다른 사진 두 장**을 견주므로 먼저 맞춰놓아야 한다.
+ *
+ *   중심 = 어깨 중점과 골반 중점의 가운데
+ *   크기 = 몸통 길이 × SCALE_FROM_TORSO
+ *
+ * ⚠️⚠️ **크기 기준을 bbox 로 잡으면 안 된다. 실측으로 확인한 함정이다.**
+ *    팔 하나만 20° 움직여도 사각형이 커지고 중심이 밀린다 —
+ *
+ *        s  0.390 → 0.455        중심x  0.500 → 0.464
+ *
+ *    그러면 **가만히 있던 나머지 관절까지 전부 어긋난 것으로 계산된다.**
+ *    같은 자세(왼팔만 20°)를 두 방식으로 재면
+ *
+ *        bbox 기준   0.595      ← 팔 하나 움직였는데 "거의 딴 자세"
+ *        몸통 기준   0.946      ← 실제로 어긋난 만큼만
+ *
+ *    몸통 길이는 팔다리를 어떻게 벌리든 변하지 않는다. framingScore 가
+ *    같은 이유로 이미 몸통 길이를 쓰고 있다 — 기준을 맞춘 것이다.
+ *
+ * ⚠️ **회전은 맞추지 않는다.** Procrustes 처럼 돌려서 겹치면 몸이 돌아간 것과
+ *    기울어진 것이 지워진다 — 그건 FACING 이 **일부러 잡는** 신호다.
+ *    위치와 크기만 지운다. (그래서 FRAMING 도 별도 관문으로 남는다)
+ *
+ * ⚠️ aspect — MediaPipe 좌표는 x 를 너비로, y 를 높이로 각각 나눈 값이라
+ *    화면비가 1 이 아니면 x·y 의 눈금이 다르다. 거리를 재는 계산에서는
+ *    이걸 안 맞추면 조용히 틀린다. 화면비(가로/세로)를 넘겨야 한다.
+ */
+function normalizeForOks(lm, indexes, aspect) {
+  const at = (i) => ({ x: lm[i].x * aspect, y: lm[i].y });
+  const sh = mid(at(IDX.shoulderL), at(IDX.shoulderR));
+  const hp = mid(at(IDX.hipL), at(IDX.hipR));
+
+  const torso = Math.hypot(sh.x - hp.x, sh.y - hp.y);
+  // ⚠️ 0 이면 나눌 수 없다. 그냥 두면 NaN 이 되어 점수가 늘 0 으로 나온다.
+  if (!(torso > 0)) return null;
+
+  const s = torso * SCALE_FROM_TORSO;
+  const cx = (sh.x + hp.x) / 2;
+  const cy = (sh.y + hp.y) / 2;
+  return indexes.map((i) => {
+    const p = at(i);
+    return { x: (p.x - cx) / s, y: (p.y - cy) / s };
+  });
+}
+
+/**
+ * 두 자세가 얼마나 같은가를 **관절별 편차로 나눠서** 잰다.
+ *
+ *   OKS = 평균  exp( −d² / (2 · (2σ)²) )
+ *
+ * d 는 위치·크기를 지운 좌표에서의 관절 간 거리, σ 는 그 관절의 편차다.
+ * **d 가 2σ 만큼 벌어지면 그 관절 점수는 약 0.61 이 된다.**
+ * 1 에 가까울수록 같은 자세, 0 에 가까울수록 다른 자세다.
+ *
+ * 왜 이걸 쓰는가 — poseScore 는 각도 차이를 TOL=45° 로 나눈다. 45 에 근거가
+ * 없고, 관절을 전부 똑같이 취급한다. OKS 는 **관절마다 다르게 취급하고,
+ * 그 차등이 측정된 숫자에서 온다.**
+ *
+ * ⚠️ **아직 이걸로 막지 않는다.** poseScore 와 나란히 계산해서 비교만 한다.
+ *    σ 를 우리 값으로 재기 전에 관문을 갈아끼우면 나아졌는지 알 방법이 없다.
+ *
+ * ⚠️ **이 값 하나로 F·R 을 대신할 수 없다.** 위 정규화가 크기와 위치를
+ *    **지워버리기 때문**이다. "너무 가까이 서 있다"를 OKS 는 원리상 못 잡는다.
+ *
+ * @param opts.keypoints  기본 COCO_BODY_12. 얼굴까지 보려면 COCO_17
+ * @param opts.refAspect  레퍼런스 사진의 가로/세로
+ * @param opts.userAspect 사용자 화면의 가로/세로
+ * @returns {{oks:number, reason:string|null, used:number, per:object}}
+ */
+export function oksScore(
+  ref,
+  user,
+  criteria,
+  { keypoints = COCO_BODY_12, refAspect = 1, userAspect = 1 } = {}
+) {
+  const c = requireCriteria(criteria);
+
+  const used = keypoints.filter((i) => visibleIn([ref, user], [i], c.min_visibility));
+  if (used.length < c.min_visible_angles) {
+    return { oks: 0, reason: "NOT_ENOUGH_JOINTS", used: used.length, per: {} };
+  }
+
+  // ⚠️ 정규화 기준(어깨·골반)이 안 보이면 크기를 잴 수 없다. 위의 visible
+  //    검사와 별개다 — 무릎·발목만 보여도 used 는 채워지기 때문이다.
+  const A = normalizeForOks(ref, used, refAspect);
+  const B = normalizeForOks(user, used, userAspect);
+  if (!A || !B) {
+    return { oks: 0, reason: "NOT_ENOUGH_JOINTS", used: used.length, per: {} };
+  }
+
+  const per = {};
+  let sum = 0;
+
+  used.forEach((idx, k) => {
+    const d2 = (A[k].x - B[k].x) ** 2 + (A[k].y - B[k].y) ** 2;
+    const kappa = 2 * KEYPOINT_SIGMA[idx];
+    const v = Math.exp(-d2 / (2 * kappa * kappa));
+    per[COCO_NAME_OF[idx] ?? idx] = Math.round(v * 1000) / 1000;
+    sum += v;
+  });
+
+  return {
+    oks: Math.round((sum / used.length) * 1000) / 1000,
+    reason: null,
+    used: used.length,
+    per,
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -227,7 +519,7 @@ export const MESSAGES = {
   //: 유도용 — 막지는 않는다. 촬영 화면에서만 띄운다.
   TOO_CLOSE: "조금 뒤로 물러나 주세요.",
   TOO_FAR: "조금 앞으로 와 주세요.",
-  FACING: "정면을 보고 서주세요.",
+  FACING: "레퍼런스와 몸의 방향이 다릅니다. 같은 방향으로 서주세요.",
   POSE: "레퍼런스와 포즈를 맞춰주세요.",
   OK: "좋습니다. 그대로 유지해주세요.",
 };
@@ -255,12 +547,20 @@ export const MESSAGES = {
  *    "포즈를 맞춰주세요"라고 답하는데, 실제 문제는 몸이 안 보이는 것이라
  *    사용자가 엉뚱한 걸 고치게 된다.
  */
-export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
+export function evaluate(
+  ref,
+  user,
+  criteria,
+  { multiPerson = false, refAspect = 1, userAspect = 1 } = {}
+) {
   const c = requireCriteria(criteria);
 
   const pose = poseScore(ref, user, c);
   const framing = framingScore(ref, user, c);
   const facing = facingDelta(ref, user);
+  // ⚠️ **관찰만 한다.** 아래 판정에 쓰지 않는다 — 잡음을 재기 전에 관문을
+  //    갈아끼우면 나아졌는지 나빠졌는지 판단할 기준이 없다.
+  const oks = oksScore(ref, user, c, { refAspect, userAspect });
   const torsoRatio =
     torsoLength(user, c.min_visibility) / (torsoLength(ref, c.min_visibility) || 1);
 
@@ -296,11 +596,15 @@ export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
     reason: guideReason,
     blockReason,
     message: MESSAGES[guideReason ?? "OK"],
+    /** OKS — 관찰용. 판정에 쓰지 않는다. 서버로도 보내지 않는다. */
+    oks: oks.oks,
     detail: {
       usedAngles: pose.usedAngles,
       diffs: pose.diffs,
       poseReason: pose.reason,
       torsoRatio: Math.round(torsoRatio * 100) / 100,
+      oksUsed: oks.used,
+      oksPer: oks.per,
     },
   };
 }

@@ -266,8 +266,23 @@ async def upload_user_photo(
     ],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
     facing_delta: Annotated[
-        float, Form(description="0~1. 어깨폭/몸통길이 비율 차. 몸이 돌아간 정도")
+        float,
+        Form(
+            description=(
+                "레퍼런스와 몸 방향의 차이. |어깨폭비 차| / 레퍼런스 어깨폭비. "
+                "⚠️ '정면인가'가 아니라 상대값이며, 레퍼런스가 많이 돌아가 있으면 1을 넘는다"
+            )
+        ),
     ] = 0.0,
+    pose_oks: Annotated[
+        float | None,
+        Form(
+            description=(
+                "OKS-inspired 자세 유사도 0~1. ⚠️ **판정에 쓰지 않는다.** "
+                "지금 쓰는 pose_similarity(각도 기반)와 비교하려고 같이 저장만 한다"
+            )
+        ),
+    ] = None,
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
     multi_person: Annotated[bool, Form()] = False,
     is_mirrored: Annotated[bool, Form()] = False,
@@ -321,6 +336,11 @@ async def upload_user_photo(
             "pose_scale_basis": str(pose_scale_basis),
             "pose_similarity": pose_similarity,
             "framing_score": framing_score,
+            # ⚠️ 판정에 쓰면서 저장은 안 하고 있었다. 그러면 "FACING 으로 반려된
+            #    사람들이 실제로 몸이 돌아가 있었나"를 나중에 확인할 방법이 없다.
+            #    ⚠️ 다만 **통과한 사진만 저장된다** — 반려 건은 여전히 안 남는다.
+            "facing_delta": facing_delta,
+            "pose_oks": pose_oks,
             "pose_person_area_ratio": pose_person_area_ratio,
             "multi_person": multi_person,
         },

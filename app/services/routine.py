@@ -229,6 +229,14 @@ def _sanitize_selections(
     fixed = 0
     final: dict[str, str] = {}
 
+    def _acceptable(ref: str | None, pool_refs: set[str], today: set[str]) -> bool:
+        return (
+            isinstance(ref, str)
+            and ref in pool_refs
+            and ref not in today
+            and used.get(ref, 0) < MAX_WEEKLY_REPEAT
+        )
+
     for day in days:
         picked_today: set[str] = set()
         for idx, slot in enumerate(day["slots"]):
@@ -239,14 +247,23 @@ def _sanitize_selections(
             allowed = {c["exercise_ref"] for c in pool}
             pick = raw_picks.get(sid)
 
-            ok = (
-                isinstance(pick, str)
-                and pick in allowed
-                and pick not in picked_today
-                and used.get(pick, 0) < MAX_WEEKLY_REPEAT
-            )
-            if not ok:
-                pick = fallback.get(sid)
+            if not _acceptable(pick, allowed, picked_today):
+                # ⚠️ 폴백표는 "LLM 선택이 하나도 없다"는 가정으로 미리 만든 것이라,
+                #    LLM 선택과 **섞이는 순간 그 표의 중복 계산은 무효**가 된다.
+                #    그대로 꽂으면 같은 Day 에 같은 운동이 두 번 들어가거나
+                #    주간 상한을 넘는다 (퍼징으로 실제 재현됨). 그래서 폴백 값도
+                #    지금 상태 기준으로 검사하고, 안 되면 남은 후보에서 다시 고른다.
+                candidate_refs = [fallback.get(sid)] + [c["exercise_ref"] for c in pool]
+                pick = next(
+                    (r for r in candidate_refs if _acceptable(r, allowed, picked_today)),
+                    None,
+                )
+                if pick is None:
+                    # 주간 상한까지 모두 소진 — 상한만 풀어 Day 중복은 끝까지 막는다
+                    pick = next(
+                        (c["exercise_ref"] for c in pool if c["exercise_ref"] not in picked_today),
+                        None,
+                    )
                 if pick is None:
                     continue
                 if raw_picks:  # LLM 이 시도했는데 교정된 경우만 센다

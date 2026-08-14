@@ -150,20 +150,64 @@ BMI를 먼저 보면 그 강점을 스스로 버리는 셈이었다.
 
 ---
 
-## 3. 슬롯 ↔ ExerciseDB 매핑 (코드 고정, `/muscles`·`/bodyparts`로 최종 확정)
+## 3. 슬롯 ↔ ExerciseDB 매핑 — ✅ 2026-08-14 실측 확정
 
-| 템플릿 슬롯 | targetMuscles (API) | bodyParts (API) |
+> 실행: `RAPIDAPI_KEY=... python scripts/fetch_exercisedb.py enums|fetch`
+> 구현: `app/services/exercise_catalog.py` · 검증: `scripts/verify_exercise_catalog.py`
+
+**⚠️ 추정했던 enum 이 여러 곳 틀렸습니다.** 표준 ExerciseDB 문서를 보고 짐작한
+이름이 이 변종에서는 다릅니다 — 하드코딩 전에 실측이 필수였습니다.
+
+| 추정 (구) | 실제 (확정) |
+|---|---|
+| LOWER ARMS | **FOREARMS** |
+| UPPER LEGS | **THIGHS** (QUADRICEPS·HAMSTRINGS 도 별도 bodyPart) |
+| LOWER LEGS | **CALVES** |
+| bodyPart `CARDIO` | **없음** → `exerciseType == "CARDIO"` 로만 판별 |
+| PECTORALIS MAJOR | CLAVICULAR HEAD / STERNAL HEAD 로 분리 |
+| TRAPEZIUS | UPPER / MIDDLE / LOWER FIBERS 로 분리 |
+| RHOMBOIDS | **목록에 없음** |
+
+→ 근육명은 표기 변형이 심해 **`bodyParts` 를 1차 매칭 기준**으로 삼습니다.
+
+| 템플릿 슬롯 | bodyParts (확정) | 후보 수 |
 |---|---|---|
-| 가슴 | PECTORALIS MAJOR | CHEST |
-| 등 | LATISSIMUS DORSI · TRAPEZIUS · RHOMBOIDS | BACK |
-| 어깨 | DELTOID (ANTERIOR/LATERAL) | SHOULDERS |
-| 후면 어깨 | POSTERIOR DELTOID · INFRASPINATUS | SHOULDERS, BACK |
-| 이두/삼두/팔 | BICEPS/TRICEPS BRACHII | UPPER ARMS |
-| 대퇴사두 | QUADRICEPS | UPPER LEGS |
-| 햄스트링·둔근 | HAMSTRINGS · GLUTEUS MAXIMUS | UPPER LEGS, HIPS |
-| 종아리 | GASTROCNEMIUS · SOLEUS | LOWER LEGS |
-| 코어 | RECTUS ABDOMINIS · OBLIQUES | WAIST |
-| (CUT 유산소) | — | CARDIO |
+| 가슴 | CHEST | 16 |
+| 등 | BACK | 22 |
+| 어깨 | SHOULDERS | 12 |
+| 이두 | BICEPS, UPPER ARMS | 23 |
+| 삼두 | TRICEPS, UPPER ARMS | 23 |
+| 팔(전완 포함) | UPPER ARMS, BICEPS, TRICEPS, FOREARMS | 31 |
+| 대퇴사두 | QUADRICEPS, THIGHS | 23 |
+| 햄스트링·둔근 | HAMSTRINGS, HIPS, THIGHS | 42 |
+| 종아리 | CALVES | 13 |
+| 코어 | WAIST | 20 |
+| (CUT 유산소) | — (`exerciseType=CARDIO`) | 14 (머신 9) |
+
+### 실측에서 드러난 것 3가지
+
+**① 수집 가능한 운동은 200개다** (문서의 "1,500+"는 다른 플랜 기준 — 정정).
+`meta.total` 이 200 고정이고 커서를 끝까지 돌려도 200에서 멈춥니다.
+슬롯별 후보가 12~42개라 **선택지로는 충분**합니다.
+
+**② 장비 운동이 79%가 아니라 21%다.** 200개 중 BODY WEIGHT 가 158개.
+헬스장 장비로만 필터하면 이두·삼두 후보가 0개가 됩니다.
+→ **장비를 필터가 아니라 정렬 우선순위로 씁니다.** 헬스장에서 푸시업·플랭크를
+하는 건 이상하지 않고, 초보자에게 맨몸·덤벨 위주는 ACSM 권고와도 부합합니다.
+
+**③ 라벨 오류 35건 (17.5%)** — `exerciseType` 이 STRENGTH 인데 실제로는
+스트레칭입니다 ("Calves Stretch", "Neck Side Stretch" …). 그대로 두면 근력
+슬롯에 스트레칭이 배정됩니다. 이름 기반으로 걸러냈습니다.
+같은 이름이 다른 exerciseId 로 중복 수록된 것도 9건 있어 제거했습니다.
+→ ⚠️ 이건 D8(초보 부적합 제외)과 성격이 다릅니다. 저건 난이도 **판단**이고
+이건 명백한 **오분류 수정**이라 PM 승인 대상이 아닙니다.
+
+### 커서 페이지네이션 함정
+
+`meta.nextCursor` 를 주길래 `cursor=` 로 보내면 **에러 없이 1페이지가 그대로
+돌아옵니다.** 파라미터 이름은 `after` 입니다. 눈치 못 채면 같은 25개를 무한히
+수집하게 되는 조용한 실패라, 수집 스크립트에 동일 페이지 감지를 넣었습니다.
+(`limit` 상한도 25입니다 — 100을 보내도 25개만 옵니다.)
 
 **진단 부위 → 슬롯 연결** (L2 가중이 흐르는 경로):
 Torso→가슴·등·어깨·코어 / Upper_Arm→이두·삼두 / Lower_Arm→팔(전완 포함 운동) /
@@ -246,7 +290,7 @@ LLM 호출은 여전히 1회이고, 이제 그 1회조차 "무엇을 골라도 �
 > 인바디가 정합니다** — 약점 부위에 주당 2~4세트를 더하는데, 이것도 볼륨-근성장
 > 용량반응 연구 범위 안입니다. 체지방이 높으면 — 인바디 실측 기준으로만 — 전신+유산소
 > 모드로 바뀌는데, 부위 운동으로 부위 살을 뺀다는 주장(spot reduction)은 과학적으로
-> 부정돼 있기 때문입니다. 넷째, **구체적 운동은 ExerciseDB 1,500여 개에서 코드가
+> 부정돼 있기 때문입니다. 넷째, **구체적 운동은 ExerciseDB 운동 풀에서 코드가
 > 조건(근육·장비·난이도)에 맞게 거른 후보 중에서 AI가 고릅니다.** AI는 목록 밖 운동을
 > 낼 수 없어서 없는 운동을 지어내는 일이 구조적으로 불가능합니다. 무게는 저희가 추정할
 > 수 없으므로 추정하지 않고, '2회 남기고 멈추는 무게'라는 검증된 자가조절 방식으로

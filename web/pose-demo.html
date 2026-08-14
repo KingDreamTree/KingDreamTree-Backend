@@ -110,6 +110,7 @@
     <button id="connect" class="primary">기준 받아오기</button>
     <button id="start" disabled>카메라 켜기</button>
     <button id="setref" disabled>지금 자세를 레퍼런스로</button>
+    <button id="shoot" disabled>지금 찍기 (점수 무관)</button>
     <label style="font-size:13px"><input type="checkbox" id="mirror" checked> 화면만 좌우 반전</label>
   </div>
 
@@ -254,11 +255,19 @@ $("mirror").onchange = (e) => $("stage").classList.toggle("mirror", e.target.che
 $("stage").classList.add("mirror");
 
 let liveLm = null, personCount = 0;
+// ⚠️ 임계값 측정 실험에는 **통과하지 못한 사진도** 필요하다 (60점·70점짜리).
+//    자동 촬영은 통과했을 때만 걸리므로 그것만으로는 실험을 못 한다.
+$("shoot").onclick = () => {
+  if (!refLm || !liveLm) return;
+  capture(evaluate(refLm, liveLm, criteria, { multiPerson: personCount > 1 }));
+};
+
 $("setref").onclick = () => {
   if (!liveLm) return;
   // ⚠️ 깊은 복사. 다음 프레임에 덮어써지면 자기 자신과 비교하게 된다.
   refLm = liveLm.map((p) => ({ ...p }));
-  setStatus("레퍼런스를 잡았습니다. 이제 움직여보세요 — 아래 안내를 보세요.", "ok");
+  $("shoot").disabled = false;
+  setStatus("레퍼런스를 잡았습니다. ⚠️ 실험 중이면 이 버튼을 다시 누르지 마세요 — 기준이 바뀝니다.", "ok");
 };
 
 // ── 3. 매 프레임 ─────────────────────────────────────────────────────────
@@ -386,7 +395,10 @@ function capture(r) {
 
   // ⚠️ 실제 앱이 서버로 보내는 값 그대로. 통과 여부는 보내지 않는다 —
   //    판정은 서버가 다시 한다.
+  lastScore = r.pose_similarity;
+
   $("vals").innerHTML =
+    (r.blocked ? `<span style="color:var(--bad)">서버는 이 사진을 거부합니다 (${r.blockReason})</span><br>` : "") +
     `업로드할 때 서버로 보내는 값<br>` +
     `pose_similarity = <b>${r.pose_similarity.toFixed(1)}</b><br>` +
     `framing_score&nbsp;&nbsp;&nbsp;= <b>${r.framing_score.toFixed(3)}</b><br>` +
@@ -403,10 +415,13 @@ $("again").onclick = () => {
   setStatus("이어서 진행합니다. 자세를 맞추면 다시 찍힙니다.", "ok");
 };
 
+let lastScore = 0;
+
 $("save").onclick = () => {
   const a = document.createElement("a");
   a.href = $("shot").src;
-  a.download = `pose-${Date.now()}.jpg`;
+  // ⚠️ 파일명에 점수를 넣는다. 임계값 측정 스크립트가 파일명에서 점수를 읽는다.
+  a.download = `${lastScore.toFixed(0)}.jpg`;
   a.click();
 };
 </script>

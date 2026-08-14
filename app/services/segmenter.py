@@ -128,19 +128,12 @@ def load_model(size: str | None = None):
     dtype = resolve_dtype(device)
     processor = AutoImageProcessor.from_pretrained(path)
 
+    # ⚠️ CPU 오프로딩(accelerate device_map) 분기는 2026-08-14 에 뺐다.
+    #    VRAM 보다 큰 모델을 돌리려는 설정이었는데 우리 두 환경 어디서도 안 탔다.
+    #    되살릴 일이 생기면 device_map="auto" + max_memory 를 여기에 넣고,
+    #    **아래 model.to(device) 를 건너뛰어야 한다** — accelerate 가 이미 배치했는데
+    #    .to() 를 부르면 배치가 깨진다. docs/removed-code.md 참고.
     kwargs: dict[str, Any] = {"dtype": dtype}
-    offloading = settings.sapiens_offload and device == "cuda"
-    if offloading:
-        # ⚠️ VRAM보다 큰 모델을 돌리기 위한 설정.
-        #    accelerate가 들어가는 레이어만 GPU에 올리고 나머지는 CPU RAM에 둔다.
-        #    레이어가 CPU↔GPU를 오가므로 느리다. 운영에서는 끄는 게 맞다.
-        #    GPU 여유를 남기지 않으면 활성값 자리가 없어 OOM이 난다.
-        budget = settings.sapiens_gpu_max_gib
-        if budget <= 0:
-            total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            budget = round(total * 0.9, 1)
-        kwargs["device_map"] = "auto"
-        kwargs["max_memory"] = {0: f"{budget}GiB", "cpu": "48GiB"}
 
     try:
         model = AutoModelForSemanticSegmentation.from_pretrained(path, **kwargs)
@@ -148,9 +141,7 @@ def load_model(size: str | None = None):
         kwargs["torch_dtype"] = kwargs.pop("dtype")
         model = AutoModelForSemanticSegmentation.from_pretrained(path, **kwargs)
 
-    if not offloading:
-        # device_map을 쓴 경우 accelerate가 이미 배치했으므로 .to()를 부르면 안 된다.
-        model.to(device)
+    model.to(device)
     model.eval()
 
     _model, _processor, _loaded_key = model, processor, key

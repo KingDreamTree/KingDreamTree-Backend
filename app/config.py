@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     # Supabase
     # ------------------------------------------------------------------ #
     supabase_url: str = ""
-    # 구 anon key. 프론트가 Supabase에 직접 붙지 않으므로 서버에서는 쓰지 않는다.
-    supabase_anon_key: str = ""
+    # ⚠️ SUPABASE_ANON_KEY 는 2026-08-14 에 뺐다. 프론트가 Supabase 에 직접
+    #    붙지 않아 서버에서 쓸 일이 없다. .env 에 남겨두면 "채워야 하나?" 싶어진다.
     # 구 service_role key. ⚠️ RLS를 전부 우회한다. 서버 사이드 전용.
     supabase_service_role_key: str = ""
 
@@ -123,15 +123,11 @@ class Settings(BaseSettings):
     #  ⚠️ CPU float16은 대부분 더 느리다. CPU에서는 float32를 쓸 것.
     sapiens_dtype: str = "auto"
 
-    #: VRAM이 부족할 때 CPU로 레이어를 흘려보낼지 (accelerate device_map).
-    #  ⚠️ 켜면 VRAM보다 큰 모델도 돌아가지만 레이어가 CPU↔GPU를 오가 느려진다.
-    #     8GB VRAM에서 5b(fp16 ~9.5GB)를 보려는 경우가 이에 해당한다.
-    #     운영(RunPod 24GB)에서는 꺼둘 것 — 켜져 있어도 다 올라가면 성능 손해는 없다.
-    sapiens_offload: bool = False
-
-    #: 오프로딩 시 GPU에 최대 몇 GiB까지 올릴지. 0이면 자동(전체의 90%).
-    #  ⚠️ 전부 다 쓰면 활성값 자리가 없어 OOM이 난다. 여유를 남겨야 한다.
-    sapiens_gpu_max_gib: float = 0
+    # ⚠️ SAPIENS_OFFLOAD / SAPIENS_GPU_MAX_GIB 는 2026-08-14 에 뺐다.
+    #    VRAM 보다 큰 모델을 CPU 로 흘려보내는 설정이었는데, 우리 두 환경 어디서도
+    #    타지 않는다 — RunPod 는 24GB 라 다 올라가고, 로컬은 CPU 라 조건(cuda)에
+    #    걸리지 않는다. 한 번도 실행되지 않는 분기를 모델 로딩 경로에 두고 있었다.
+    #    docs/removed-code.md 참고.
 
     #: 라벨 목록이 확인되지 않은 모델이면 워커 기동을 거부할지.
     #  ⚠️ false로 두면 클래스 순서가 다른 모델도 그냥 돈다. 부위가 통째로
@@ -152,3 +148,35 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _warn_unknown_env_keys() -> None:
+    """.env 에 있지만 Settings 가 모르는 키를 경고한다.
+
+    ⚠️ extra="ignore" 라서 오타나 옛 이름은 **아무 말 없이 무시된다.**
+       실제로 SAPIENS_REQUIRE_VERIFIED_LABELS(→ SAPIENS_STRICT_LABELS 로 개명)가
+       .env 에 남은 채 한동안 아무 일도 안 하고 있었다. 설정한 사람은 켜둔 줄 안다.
+       막지는 않는다(다른 도구가 같은 .env 를 쓸 수 있다) — 보이게만 한다.
+    """
+    import logging
+    import pathlib
+    import re
+
+    path = pathlib.Path(Settings.model_config["env_file"])
+    if not path.is_file():
+        return
+
+    known = set(Settings.model_fields)
+    unknown = [
+        m.group(1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if (m := re.match(r"^([A-Z_][A-Z0-9_]*)=", line.strip()))
+        and m.group(1).lower() not in known
+    ]
+    if unknown:
+        logging.getLogger("config").warning(
+            ".env 에 모르는 키가 있습니다 (무시됨): %s", ", ".join(unknown)
+        )
+
+
+_warn_unknown_env_keys()

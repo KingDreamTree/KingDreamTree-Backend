@@ -171,7 +171,14 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
             retryable = _is_retryable(e)
             if not retryable:
                 log.warning("[%s] 재시도해도 같은 결과 — 즉시 종결합니다", job_id)
-            queue.fail(job_id, _user_message(e), retryable=retryable)
+            # ⚠️ 실패를 기록하다 또 터져도 **루프를 멈추지 않는다.** 여기서 예외가
+            #    새어 나가면 잡 하나 때문에 워커가 통째로 내려가고, 이후 들어오는
+            #    모든 잡이 PENDING 에 쌓인다 (실측으로 겪었다 — queue.py `_first`
+            #    주석 참고). 기록에 실패해도 그 잡은 좀비 회수가 다시 주워간다.
+            try:
+                queue.fail(job_id, _user_message(e), retryable=retryable)
+            except Exception:  # noqa: BLE001
+                log.exception("[%s] 실패 기록마저 실패 — 잡을 남겨두고 계속합니다", job_id)
 
     log.info("워커 종료")
     return 0

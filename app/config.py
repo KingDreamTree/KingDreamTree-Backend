@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     photo_screening_enabled: bool = True
     #: ⚠️ 넘기면 통과시킨다(fail-open). 업로드가 통째로 막히는 것보다 낫다는 판단.
     photo_screening_timeout_sec: float = 10.0
+    #: 판정에 보낼 이미지의 긴 변 상한. 저장용 원본을 그대로 보내면 토큰이 낭비된다 —
+    #  옷 밀착도·촬영 거리·잘림은 작은 이미지로도 판별되고, 두 장을 보내므로 두 배다.
+    photo_screening_max_side: int = 768
 
     # ------------------------------------------------------------------ #
     # 잡 큐 / 워커

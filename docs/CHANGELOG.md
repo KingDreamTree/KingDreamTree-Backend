@@ -4,6 +4,38 @@
 
 ---
 
+## 2026-08-15 - 조용한 버그 4건 + e2e 테스트 창 + 진단 기준선 분리 (B)
+
+**잡은 버그** (전부 에러 없이 조용히 새는 종류 — 각 PR 에 재현·실측 기록):
+- #42 통증이 기록만 되고 루틴 미반영 → `services/contraindication.py` 코드 강제
+    (WARN 세트 -1 · BLOCK 제외 · Day 는 안 비움 · 대체 운동은 안 고름).
+    적용은 두 경로(F12-a 워커·F12-b 코치챗) **조기 반환보다 앞**에
+- #50 삭제된 세션의 잡 1개가 워커 프로세스 전체를 죽임 — complete→fail 연쇄
+    IndexError. queue 가 UPDATE 0행을 허용하고 run.py 가 fail 을 try 로 감쌈
+- #53 피드백마다 진행도 0 리셋 — 새 버전엔 workout_log 0건이라서.
+    진행도를 **세션 단위**로 집계 (스키마 변경 없음, workout_log.session_id 활용)
+- #59·#60 진단 기준선 오염 — 인바디 '표준 대비 %'(평균 비교)가 목표 격차
+    판정을 눌렀다. 기준선 분리 + few-shot 교체 + 좌우 실측 코드 계산(_inbody_lr)
+    + 모순 게이트(_coerce_part: 관찰 있으면 blocked 해제) + 범례 줄에 가림 자격
+    명시 + priority_parts 3개 강제. **실사진 세션 라이브 재진단 4회로 검증**
+
+**만든 것**:
+- `web/e2e-test.html` (#46·#49·#52·#55·#57·#58) — 사진 2장 + 인바디(선택) →
+    세그 오버레이(OVERLAY_ALPHA 동일·라벨 보간 금지) → 진단 → 루틴 →
+    F12 피드백 루프 → 코치 대화까지 브라우저 한 페이지. 관문 점수는
+    pose-score.js 를 프론트와 같은 코드로 계산. localStorage 이어쓰기
+- `scripts/verify_contraindication.py` · `verify_worker_resilience.py` 신규,
+    `verify_analysis.py` §8 기준선 분리 24항목 추가
+
+**환경 실측** (#44·#51): 로컬 세그 백본 **1b 확정** — 0.4b 0.6s/2.1GB ·
+1b 1.0s/4.8GB · 5b 376s/12.5GB(12GB 카드에서 OOM 대신 640배 느려짐 —
+WDDM 이 초과분을 공유 메모리로 흘려서 안 죽고 느려진다). Windows HF 다운로드는
+`HF_HUB_DISABLE_XET=1` 필수 (hf_xet 이 조용히 멈춤).
+
+**정리**: 병합 브랜치 로컬·원격 전부 삭제(main 하나), 열린 PR 0, 5b 가중치 삭제.
+
+---
+
 ## 2026-08-14 - F10 루틴 생성 로직 완성 + 운동명 한글화 (B)
 
 **무엇이**:

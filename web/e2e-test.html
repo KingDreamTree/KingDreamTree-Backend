@@ -152,6 +152,27 @@
   <!-- 3. 세그 -->
   <div class="card step" id="s3">
     <h2>3. 세그멘테이션 결과</h2>
+
+    <div class="row" style="margin-bottom:14px">
+      <div class="col">
+        <label>레퍼런스 — 부위 오버레이</label>
+        <canvas id="ovref" style="width:100%; border-radius:6px; background:#000"></canvas>
+      </div>
+      <div class="col">
+        <label>내 사진 — 부위 오버레이</label>
+        <canvas id="ovusr" style="width:100%; border-radius:6px; background:#000"></canvas>
+      </div>
+    </div>
+    <div style="margin-bottom:6px">
+      <label style="display:inline; color:var(--tx)">
+        <input type="checkbox" id="showov" checked style="width:auto"> 색칠 보기
+      </label>
+      <span class="dim" style="margin-left:10px">
+        서버가 VLM 에 보내는 것과 같은 방식(투명도 0.42)으로 칠합니다.
+      </span>
+    </div>
+    <div id="legend" class="dim" style="margin-bottom:14px"></div>
+
     <table><thead><tr>
       <th>부위</th><th>레퍼런스</th><th>내 사진</th><th>비교 가능</th>
     </tr></thead><tbody id="segrows"></tbody></table>
@@ -561,7 +582,113 @@ function renderSeg(seg) {
         <td colspan="3" class="warn">${c.reference_only.join(", ")}</td></tr>` : ""}
     ${c.user_only?.length ? `<tr><td class="dim">내 사진에만</td>
         <td colspan="3" class="warn">${c.user_only.join(", ")}</td></tr>` : ""}`;
+
+  // 부위별 픽셀 비율·무효 사유는 palette 에 있다 — 표로 같이 보여준다.
+  const pal = (seg.user?.palette || []).filter((p) => p.is_comparable);
+  if (pal.length) {
+    $("segrows").insertAdjacentHTML("beforeend",
+      `<tr><th colspan="4" style="padding-top:12px">내 사진 부위별</th></tr>` +
+      pal.map((p) => `<tr>
+        <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;
+             background:${p.color_hex || "#666"};margin-right:6px"></span>${p.name_ko}</td>
+        <td>${(p.area_ratio * 100).toFixed(2)}%</td>
+        <td class="dim">${p.pixel_count.toLocaleString()}px${
+          p.is_truncated ? ' <span class="pill">잘림</span>' : ""}</td>
+        <td class="${p.is_valid ? "ok" : "bad"}">${
+          p.is_valid ? "유효" : (p.invalid_reason || "무효")}</td></tr>`).join(""));
+  }
+
+  drawOverlay("ovref", seg.reference);
+  drawOverlay("ovusr", seg.user);
+  renderLegend(seg.user || seg.reference);
 }
+
+// ── 세그 오버레이 그리기 ────────────────────────────────────────────────────
+//
+// ⚠️ 라벨 맵 PNG 의 **픽셀 값이 곧 클래스 번호**다. 그래서 브라우저가
+//    스케일링하면 값이 섞여 존재하지 않는 클래스가 생긴다 — 반드시
+//    imageSmoothingEnabled=false 로 원본 크기에 그린 뒤 CSS 로만 줄인다.
+//    (서버가 라벨을 NEAREST 로만 리사이즈하는 것과 같은 이유)
+//
+// ⚠️ 투명도 0.42 는 segmap.OVERLAY_ALPHA 와 같은 값이다. 여기서 보이는 것이
+//    VLM 이 보는 것과 달라지면 이 화면으로 판단할 수가 없다.
+const OVERLAY_ALPHA = 0.42;
+const _segCache = {};
+
+const loadImg = (src) => new Promise((res, rej) => {
+  const i = new Image();
+  i.crossOrigin = "anonymous";
+  i.onload = () => res(i);
+  i.onerror = () => rej(new Error("이미지를 불러오지 못했습니다 (서명 URL 만료?)"));
+  i.src = src;
+});
+
+async function drawOverlay(canvasId, side) {
+  const cv = $(canvasId);
+  if (!side) { cv.hidden = true; return; }
+  cv.hidden = false;
+  try {
+    const [photo, map] = await Promise.all([loadImg(side.photo_url), loadImg(side.map_url)]);
+    _segCache[canvasId] = { photo, map, side };
+    paint(canvasId);
+  } catch (e) {
+    log(`      오버레이 그리기 실패(${canvasId}): ${e.message}`, "warn");
+  }
+}
+
+function paint(canvasId) {
+  const c = _segCache[canvasId];
+  if (!c) return;
+  const { photo, map, side } = c;
+  const cv = $(canvasId);
+  cv.width = photo.naturalWidth;
+  cv.height = photo.naturalHeight;
+  const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(photo, 0, 0);
+
+  if (!$("showov").checked) return;
+
+  // 라벨 맵을 원본 크기로 펴서 픽셀 값을 읽는다
+  const tmp = document.createElement("canvas");
+  tmp.width = cv.width; tmp.height = cv.height;
+  const tctx = tmp.getContext("2d", { willReadFrequently: true });
+  tctx.imageSmoothingEnabled = false;
+  tctx.drawImage(map, 0, 0, cv.width, cv.height);
+  const md = tctx.getImageData(0, 0, cv.width, cv.height);
+
+  // label_value → RGB (비교 대상만 칠한다)
+  const rgb = {};
+  for (const p of side.palette || []) {
+    if (!p.is_comparable || !p.color_hex) continue;
+    const h = p.color_hex.replace("#", "");
+    rgb[p.label_value] = [parseInt(h.slice(0, 2), 16),
+                          parseInt(h.slice(2, 4), 16),
+                          parseInt(h.slice(4, 6), 16)];
+  }
+
+  const out = ctx.getImageData(0, 0, cv.width, cv.height);
+  const a = OVERLAY_ALPHA;
+  for (let i = 0; i < md.data.length; i += 4) {
+    const col = rgb[md.data[i]];          // R 채널이 라벨 값
+    if (!col) continue;
+    out.data[i]     = out.data[i]     * (1 - a) + col[0] * a;
+    out.data[i + 1] = out.data[i + 1] * (1 - a) + col[1] * a;
+    out.data[i + 2] = out.data[i + 2] * (1 - a) + col[2] * a;
+  }
+  ctx.putImageData(out, 0, 0);
+}
+
+function renderLegend(side) {
+  $("legend").innerHTML = (side?.palette || [])
+    .filter((p) => p.is_comparable)
+    .map((p) => `<span style="margin-right:12px; white-space:nowrap">
+      <span style="display:inline-block;width:11px;height:11px;border-radius:2px;
+        background:${p.color_hex || "#666"};vertical-align:-1px;margin-right:4px"></span>
+      <span class="${p.is_valid ? "" : "bad"}">${p.name_ko}</span></span>`).join("");
+}
+
+$("showov").onchange = () => { paint("ovref"); paint("ovusr"); };
 
 function renderDiag(d) {
   const o = d.overall || {};

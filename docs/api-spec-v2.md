@@ -332,17 +332,25 @@ X-User-Id → users 존재 확인
 2. 파일 형식·크기 검사 → 랜드마크 형식 검사 (33개, 0~1 정규화 좌표)
 3. `multi_person` → 422 `MULTI_PERSON`
 4. `pose_scale_basis`가 레퍼런스와 다르면 → 422 (`reason="FRAMING"`)
-5. `framing_score < F_MIN` → 422 (`reason="FRAMING"`), `pose_similarity < THRESHOLD` → 422 (`reason="POSE"`)
+5. `framing_score < F_HARD` → 422 (`reason="FRAMING"`), `facing_delta > R_MAX` → 422 (`reason="FACING"`), `pose_similarity < THRESHOLD` → 422 (`reason="POSE"`)
 6. 통과 시에만 저장 → `photo(kind='USER')` → `job(kind='SEG_USER')` 큐잉
 
-**프론트가 계산해야 하는 값**
-- `F = Jaccard(레퍼런스 인물 bbox, 사용자 인물 bbox)` → `framing_score`
+**프론트가 계산해야 하는 값** (구현: `web/pose-score.js`)
 - `P = 관절 각도 유사도` (`TOL` 허용 오차) → `pose_similarity`
+- `F = min(비율, 1/비율)`, 비율 = 사용자 몸통길이 / 레퍼런스 몸통길이 → `framing_score`
+  ⚠️ **bbox Jaccard 가 아닙니다.** bbox 로 재면 팔다리를 움직인 것이 프레이밍
+     문제로 보고돼, 사용자가 물러서도 고칠 수 없는 안내가 나갑니다 (실측 확인).
+- `R = |어깨폭/몸통길이 차| / 레퍼런스 비율` → `facing_delta`
 - 최종 판정은 서버가 하지만, 실시간 화면에서는 프론트가 같은 식으로 미리 보여줍니다
 
 **주의**
-- ⚠️ 프레이밍을 포즈보다 **먼저** 봅니다. 몸이 잘린 상태의 포즈 점수는 신뢰할 수 없고, 안내 문구도 달라야 합니다.
-- ⚠️ `THRESHOLD` / `F_MIN` / `TOL`은 서버 `.env`에 있습니다. **프론트에 임계값을 하드코딩하지 마세요** — 튜닝하면 두 곳이 어긋납니다. 판정 결과는 422의 `detail.threshold` / `detail.f_min`으로 함께 내려갑니다.
+- ⚠️ 순서: 여러 명 → 거리 → 정면성 → 자세. 안내 문구가 각각 달라야 합니다.
+- ⚠️ **거리는 `F_MIN`(0.65)이 아니라 `F_HARD`(0.40)로만 막습니다.** 부위 굵기를
+  몸통 길이로 나눠 비교하므로 거리 차이는 계산에서 상쇄됩니다. `F_MIN`은
+  촬영 화면 안내·자동 촬영 조건에만 씁니다 — 유도선에서 막으면 고쳐도 이득이
+  없는 이유로 사용자를 돌려보내게 됩니다.
+- ⚠️ 임계값은 서버 `.env`에 있고 `GET /api/v1/pose-criteria` 로 내려줍니다.
+  **프론트에 하드코딩하지 마세요** — 튜닝하면 두 곳이 어긋납니다.
 - ⚠️ **레퍼런스가 `HIP_KNEE` 기준이면 사용자도 `HIP_KNEE`로 재야 합니다.** 각자 다른 기준으로 정규화한 점수는 비교가 무의미합니다. 서버가 레퍼런스 값을 강제하고, 다르면 422(`reason="FRAMING"`).
 - ⚠️ 판정에 실패한 사진은 **저장하지 않습니다.** Storage에 고아 파일이 쌓이지 않게 하기 위함입니다.
 

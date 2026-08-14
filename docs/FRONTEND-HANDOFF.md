@@ -1,0 +1,376 @@
+# 프론트엔드 전달 — 백엔드 전체 (A + B 통합)
+
+> **2026-08-14 기준 · 전 기능 구현 완료**
+> 필드 정의의 최종 근거는 항상 **Swagger** 입니다 → http://localhost:8000/docs
+> 이 문서는 "순서와 의미"를, Swagger 는 "형식"을 담당합니다.
+
+---
+
+## 0. 공통 규칙 — 먼저 읽어주세요
+
+### 인증 — 로그인이 없습니다
+
+모든 요청에 **`X-User-Id` 헤더**가 필요합니다 (`POST /users`, `GET /body-parts`,
+`GET /pose-criteria` 제외).
+
+```
+POST /api/v1/users          → { user_id }   최초 1회, 로컬에 저장
+이후 모든 요청 헤더:  X-User-Id: <user_id>
+```
+
+### Base URL
+
+```
+/api/v1
+```
+
+### 에러 형식 — 전부 동일합니다
+
+```json
+{ "error": { "code": "POSE_MISMATCH", "message": "사용자에게 그대로 보여줄 문구", "detail": { } } }
+```
+
+`message` 는 **그대로 노출해도 되게** 쓰여 있습니다. `detail` 은 화면 분기용입니다.
+
+### 무거운 작업은 202 + 폴링
+
+```
+POST → { job_id }   →   GET /jobs/{job_id}  →  status: PENDING | PROCESSING | DONE | FAILED
+```
+
+폴링 대상: 세그멘테이션 · 인바디 OCR · 진단 · 루틴 생성
+**동기(즉답)**: 사진 업로드 판정 · 코치 대화 · 루틴 조회
+
+---
+
+## 1. 전체 플로우
+
+```
+① POST /users                              user_id 발급 (최초 1회)
+② POST /sessions                           session_id 발급
+③ POST /sessions/{id}/photos/reference     레퍼런스 사진
+④ POST /sessions/{id}/photos/user          사용자 사진  → 세그 잡
+⑤ POST /sessions/{id}/inbody               (선택) 인바디 결과지 → OCR 잡
+   PATCH /inbody/{id}                       사용자 확인·수정
+⑥ POST /sessions/{id}/analysis             진단 → 잡 폴링
+   GET  /sessions/{id}/analysis             결과
+⑦ POST /sessions/{id}/routines             루틴 생성 → 잡 폴링
+   GET  /sessions/{id}/routines/today       오늘의 운동
+⑧ POST /sessions/{id}/workout-logs         완료 + 피드백
+   POST /sessions/{id}/coach-chat           코치 대화 (선택)
+```
+
+`GET /sessions/active` 로 **어디까지 왔는지** 한 번에 알 수 있습니다 — 앱 재진입 시 사용.
+
+---
+
+## 2. 사진 촬영 — 여기가 가장 손이 많이 갑니다
+
+### MediaPipe 는 프론트가 돌립니다
+
+> **측정은 프론트, 정책은 서버.**
+> 서버는 MediaPipe 를 실행하지 않습니다. 랜드마크 추출과 점수 계산은 브라우저가 하고,
+> 서버는 받은 값을 `.env` 임계값과 비교해 통과/거부만 판정합니다.
+> 이유: 서버가 다시 측정하면 버전 차이로 값이 어긋나 "화면엔 92%인데 저장 거부"가 납니다.
+
+**참고 구현이 저장소에 있습니다** — 그대로 가져다 쓰세요.
+
+| 파일 | 내용 |
+|---|---|
+| `web/pose-score.js` | `poseScore()` · `framingScore()` · `facingDelta()` — **산식 원본** |
+| `web/pose-demo.html` | 웹캠 실시간 판정 + 자동 셔터 |
+| `web/pose-live.html` | 실시간 점수 표시 |
+| `web/score-photos.html` | 찍어둔 사진에 점수 매기기 |
+
+### 순서 — 레퍼런스가 먼저입니다
+
+```
+GET  /pose-criteria                          판정 기준 (헤더 불필요)
+POST /sessions/{id}/photos/reference          레퍼런스 (판정 없음, 기준이 됨)
+GET  /sessions/{id}/photos/reference          촬영 화면용 기준값 (랜드마크 포함)
+POST /sessions/{id}/photos/user               사용자 (레퍼런스 대비 판정)
+```
+
+사용자 사진 업로드 폼 필드:
+
+```
+file                     이미지 (10MB 이하, jpeg/png/heic/webp)
+pose_landmarks           MediaPipe 33개 랜드마크 JSON 배열
+pose_scale_basis         크기 기준
+pose_similarity          0~100  (poseScore 결과)
+framing_score            0~1    (framingScore 결과)
+facing_delta             몸통 방향 차이 — 저장만, 판정 안 함
+multi_person             여러 명 감지 여부
+is_mirrored              거울 촬영이면 true (서버가 좌우 되돌림)
+```
+
+### 판정 실패 처리 — 안내 문구가 달라야 합니다
+
+| `error.code` / `reason` | 사용자에게 |
+|---|---|
+| `FRAMING` | "비슷한 거리에서 다시 찍어주세요" |
+| `POSE` | "포즈를 맞춰주세요" |
+| `MULTI_PERSON` | "혼자 나오게 찍어주세요" |
+| `SCALE_BASIS_MISMATCH` | 레퍼런스와 기준이 다름 — 레퍼런스 재촬영 |
+
+> ⚠️ **422 면 저장이 안 됩니다.** 재촬영 UI 로 돌아가야 합니다.
+
+### 촬영 안내 문구 (필수)
+
+```
+· 정면으로 서고, 머리부터 발까지 나오게
+· 팔을 몸에서 15~30도 벌려주세요        ← 팔 인식의 핵심
+· 몸에 붙는 옷을 입어주세요
+· 배경이 단순한 곳에서
+```
+
+2번이 특히 중요합니다. 팔이 몸통에 붙으면 **팔이 아예 검출되지 않아** 진단에서 빠집니다.
+
+---
+
+## 3. 세그멘테이션 결과 — 오버레이 그리기
+
+```
+GET /photos/{photo_id}/segmentation      맵 + 팔레트 + 부위별 통계
+GET /sessions/{id}/segmentation          두 장 + 비교 가능 부위
+```
+
+⚠️ **bbox·pixel_count 는 맵 좌표계입니다.** 원본 위에 그리려면 배율을 곱하세요.
+
+```js
+sx = photo.width  / segmentation.map_width
+sy = photo.height / segmentation.map_height   // ⚠️ x·y 를 따로! 종횡비가 다릅니다
+```
+
+`retake_recommended: true` 면 재촬영 유도 UI 를 띄우세요 — 비교 가능 부위가 부족합니다.
+
+---
+
+## 4. 인바디 (선택) — 없어도 전체가 돕니다
+
+```
+POST  /sessions/{id}/inbody      결과지 사진 1~5장 → OCR 잡
+GET   /inbody/{id}               추출값 + 검증 결과
+PATCH /inbody/{id}               사용자 확인·수정
+```
+
+### 확인 화면이 반드시 필요합니다
+
+AI 추출값이라 사용자 확인을 거쳐야 합니다. 화면 설계는 `docs/handoff-to-design.md` 참고.
+
+응답의 `validation` 이 **필드별 경고**를 담습니다:
+
+```json
+{ "weight": { "level": "WARN", "message": "체중 항등식 불일치 — 계산값 72.52 vs 추출값 63.50" } }
+```
+
+> ⚠️ 경고는 "이 칸이 틀렸다"가 아니라 **"이 값들이 서로 안 맞는다"** 입니다.
+> 실제로 틀린 건 다른 칸일 수 있으니 **관련 필드를 묶어서** 보여주세요.
+> 경고가 있어도 다음 단계로 넘어갈 수 있어야 합니다.
+
+`smi` 는 서버 계산값이라 **읽기 전용**입니다. 사용자가 골격근량·신장을 고치면 즉시 재계산됩니다.
+
+건너뛰기 버튼을 항상 노출하세요 — **인바디는 선택**입니다.
+
+---
+
+## 5. 진단
+
+```
+POST /sessions/{id}/analysis            → job_id
+GET  /sessions/{id}/analysis/progress   로딩 화면용 진행률
+GET  /sessions/{id}/analysis            결과
+```
+
+### 응답 읽는 법
+
+```json
+{
+  "similarity_score": 68,
+  "score_source": "RULE",
+  "score_rationale": "판단된 9개 부위의 격차 등급을 등간 사상(등급당 25점)한 평균 — …",
+  "summary": "…",
+  "priority_parts": ["Left_Upper_Arm", "…"],
+  "strengths": [], "cautions": [],
+  "parts": [ { "class_name", "gap_level", "confidence", "assessment", "differences", "blocked_reason" } ]
+}
+```
+
+| 필드 | 화면 |
+|---|---|
+| `similarity_score` + `score_rationale` | 점수 옆에 근거를 **같이** 노출하면 신뢰도가 올라갑니다 |
+| `gap_level: null` + `blocked_reason` | "이 부위는 확인이 어려웠어요" — **숨기지 말고 정직하게** |
+| `confidence: "LOW"` | 흐리게 표시하거나 배지 |
+| `strengths: []` | 빈 배열이 정상입니다. 억지로 채우지 않습니다 |
+
+> ⚠️ `gap_level` 값은 `NONE | SLIGHT | MODERATE | SIGNIFICANT` 입니다.
+> `confidence` 는 `LOW | MEDIUM | HIGH`. 헷갈리기 쉬우니 주의.
+
+### 실패 처리
+
+| 상황 | 응답 |
+|---|---|
+| 비교 부위 3개 미만 | `INSUFFICIENT_PARTS` → 재촬영 유도 |
+| 일부 부위만 실패 | **200**. 실패한 부위만 빠짐 (전체 실패 아님) |
+
+---
+
+## 6. 루틴 — ⚠️ 모델을 정확히 이해해야 합니다
+
+### 1주 단위 × 4주기 반복
+
+```
+루틴 1개  =  Day 1 … Day N     (N = 주당 운동 일수)
+              ↑ 이걸 4주기 반복
+
+주 3일 선택 → Day 3개만 저장 → 4주기 = 총 12회 수행
+```
+
+**28일치가 저장되는 게 아닙니다.** `day_order` 는 요일이 아니라 **주기 내 순서**입니다.
+
+```json
+{
+  "exercise_days_per_week": 3,
+  "total_cycles": 4,
+  "days": [ {"day_order": 1, …}, {"day_order": 2, …}, {"day_order": 3, …} ],
+  "progress": { "completed_count": 5, "total_count": 12, "cycle_no": 2, "next_day_order": 2, "percent": 41 }
+}
+```
+
+화면 표기 예: **"2주차 · Day 2"** = `cycle_no` 2, `day_order` 2
+
+### 진행은 날짜가 아니라 완료 횟수 기준
+
+하루 밀려도 안 깨집니다. `progress.day_source: "COUNT"` 로 방식을 알려줍니다.
+
+### 엔드포인트
+
+```
+POST /sessions/{id}/routines            { "exercise_days_per_week": 3 }  → job_id
+GET  /sessions/{id}/routines/today      오늘 해야 할 Day  ← 홈 화면은 이것만 쓰면 됩니다
+GET  /sessions/{id}/routines/active     전체 (Day 1..N + 진행)
+GET  /sessions/{id}/routines            버전 이력
+GET  /routines/{id}/days/{day_order}    Day 상세
+```
+
+### 운동 항목
+
+```json
+{
+  "name": "레그프레스", "exercise_ref": "exr_…", "image_url": "https://…",
+  "exercise_kind": "STRENGTH",
+  "sets": 4, "reps": 10, "rest_sec": 90, "rir": 2,
+  "muscle_group": "대퇴사두", "boosted_by": "Left_Upper_Leg", "note": "…"
+}
+```
+
+| 필드 | 의미 |
+|---|---|
+| `exercise_ref` · `image_url` | ExerciseDB 원본. **지어낸 운동이 아니라는 근거** — 이미지 노출 권장 |
+| `rir` | "2회 남기고 멈추는 무게". ⚠️ **중량(kg)은 제공하지 않습니다** |
+| `boosted_by` | 이 운동이 어느 진단 부위 때문에 볼륨을 더 받았는지 → "왼팔이 부족해서 세트를 늘렸어요" |
+| `exercise_kind: "CARDIO"` | `sets` 대신 `duration_min` 을 보세요 |
+
+`disclaimer` 를 **반드시 노출**하세요 (의학적 조언 아님).
+
+`notice` 가 있으면 안내 배너로 — 예: 주 7일 선택 시 "6일 근력 + 1일 회복으로 구성했어요".
+
+---
+
+## 7. 운동 완료 · 피드백
+
+### 방법 A — 한 방 피드백
+
+```
+POST /sessions/{id}/workout-logs
+{ "day_order": 1, "cycle_no": 1, "feedback_text": "무릎이 좀 아팠어요" }
+```
+
+`feedback_text` 가 있으면 루틴 패치 잡이 큐잉되고, **새 버전이 생겨 활성 전환**됩니다.
+없으면 완료 기록만 남습니다 (LLM 호출 없음 = 무료).
+
+### 방법 B — 코치 대화 (동기, 폴링 없음)
+
+```
+POST /sessions/{id}/coach-chat
+{ "messages": [ { "role": "user", "content": "스쿼트 할 때 무릎이 아팠어" } ] }
+```
+
+응답:
+
+```json
+{
+  "reply": "무릎이 아프셨군요. 운동을 멈출 정도였나요, 살짝 불편한 정도였나요?",
+  "messages": [ … ],
+  "tool_events": [ { "name": "flag_contraindication", "args": { … } } ],
+  "finalized": null,
+  "turn": 1, "max_turns": 8
+}
+```
+
+**대화 이어가기**: 응답의 `messages` 를 **그대로** 다음 요청에 넣고 새 발화를 append.
+서버는 대화를 저장하지 않습니다 (stateless).
+
+**`finalized` 가 오면 대화 끝**입니다. 요약 카드를 띄우세요:
+
+```json
+{ "summary": "무릎 부담을 줄이는 방향으로 정리했어요…",
+  "changes": [ { "what": "스쿼트 → 레그프레스", "why": "무릎 불편 신고" } ] }
+```
+
+카드에 **[적용] / [그대로 둘게요]** 버튼을 놓고, [적용] 이면:
+
+```
+POST /sessions/{id}/coach-chat/apply
+{ "messages": [ …전체 히스토리… ] }
+```
+
+→ 새 버전 생성 + 활성 전환. `no_change: true` 면 변경이 없었다는 뜻입니다.
+
+> ⚠️ **금기 등록(`flag_contraindication`)은 [적용] 을 기다리지 않고 즉시 반영**됩니다.
+> 안전은 버튼 뒤에 두지 않습니다. `tool_events` 로 배지를 띄워주세요.
+
+### 왜 바뀌었는지 보여주기
+
+```
+GET /sessions/{id}/revisions     변경 이력 + 원본 피드백
+```
+
+---
+
+## 8. 세션 관리
+
+```
+GET  /sessions/active              진행 중 세션 + 단계별 완료 여부  ← 앱 재진입 시
+POST /sessions/{id}/archive        종료 (새 분석 시작하려면 필요)
+GET  /users/me                     저장된 user_id 유효성 확인
+DELETE /users/me                   계정 + 전 데이터 삭제
+```
+
+사용자당 진행 중 세션은 **1개**입니다. 새로 시작하려면 기존 세션을 archive 해야 합니다.
+
+---
+
+## 9. 자주 틀리는 지점 — 체크리스트
+
+- [ ] `X-User-Id` 헤더를 모든 요청에 넣었는가
+- [ ] `day_order` 를 **요일로 착각**하지 않았는가 (주기 내 순서입니다)
+- [ ] 루틴이 **28일이 아니라 N일 × 4주기**임을 화면에 반영했는가
+- [ ] 세그 bbox 를 원본에 그릴 때 **sx·sy 를 따로** 곱했는가
+- [ ] 중량(kg)을 표시하려 하지 않았는가 (`rir` 만 제공)
+- [ ] `gap_level: null` 부위를 **숨기지 않고** 표시했는가
+- [ ] 인바디 **건너뛰기** 버튼이 있는가
+- [ ] 코치 대화에서 `messages` 를 그대로 되돌려 보내는가
+- [ ] `disclaimer` 를 노출했는가
+- [ ] 422(포즈 미달)에서 재촬영 UI 로 돌아가는가
+
+---
+
+## 10. 로컬 실행
+
+```bash
+uvicorn app.main:app --reload --port 8000
+# Swagger: http://localhost:8000/docs
+```
+
+CORS 는 열려 있습니다. 서버 주소·포트가 바뀌면 공유해주세요.

@@ -74,7 +74,8 @@ POST /compare   → 체형 비교 분석 (VLM Call1)
 POST /routine   → 개인화 운동 루틴 생성 (VLM Call2)
 ```
 
-자세한 통합 가이드는 [docs/FRONTEND.md](docs/FRONTEND.md) 참고.  
+자세한 통합 가이드는 [docs/FRONTEND.md](docs/FRONTEND.md) 참고.
+⚠️ 사진 파이프라인(담당 A) 범위만 다룹니다. 인바디·진단·루틴은 Swagger 를 보세요.  
 정확한 요청/응답 스키마는 `/docs` (Swagger) 참고.
 
 ---

@@ -49,7 +49,7 @@ class ScreenResult:
     message: str = ""
     confidence: str | None = None
     skipped: bool = False
-    #: 모델이 1단계에서 관찰한 값과 적용한 규칙 번호. 사용자에게는 안 나가고
+    #: 모델이 1단계에서 관찰한 값과 처음 깨진 조건. 사용자에게는 안 나가고
     #  로그·튜닝용이다. ⚠️ 오판정이 났을 때 "무엇을 잘못 봤는지"를 여기서 본다.
     observed: dict | None = None
     rule: int | None = None

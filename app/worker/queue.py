@@ -195,12 +195,26 @@ def reclaim_stale(
     )
     client = get_client()
 
+    # ⚠️ started_at 이 NULL 인 PROCESSING 도 같이 집는다.
+    #    `lt("started_at", ...)` 는 SQL 에서 NULL 을 걸러낸다. is_stale() 은 그런 잡을
+    #    좀비로 보는데 여기서만 빠져나가면, **어느 쪽에서도 회수되지 않고 영원히
+    #    PROCESSING 으로 남는다** (find_open 은 진행 중으로 안 치고, 여기는 못 잡는다).
+    #    정상 경로에서는 claim() 이 항상 채우지만, 부분 갱신·수동 삽입으로 생길 수 있다.
+    kind_values = [str(k) for k in kinds]
+    base = client.table("job").select("job_id,kind,attempts,started_at")
     candidates = (
+        base.eq("status", JobStatus.PROCESSING)
+        .in_("kind", kind_values)
+        .lt("started_at", cutoff.isoformat())
+        .execute()
+        .data
+    )
+    candidates += (
         client.table("job")
         .select("job_id,kind,attempts,started_at")
         .eq("status", JobStatus.PROCESSING)
-        .in_("kind", [str(k) for k in kinds])
-        .lt("started_at", cutoff.isoformat())
+        .in_("kind", kind_values)
+        .is_("started_at", "null")
         .execute()
         .data
     )

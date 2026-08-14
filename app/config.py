@@ -25,6 +25,12 @@ class Settings(BaseSettings):
     # 구 service_role key. ⚠️ RLS를 전부 우회한다. 서버 사이드 전용.
     supabase_service_role_key: str = ""
 
+    #: 프론트가 붙는 오리진. 쉼표로 여러 개, "*" 면 전부 허용.
+    #  ⚠️ 없으면 브라우저 요청이 전부 막힌다 (서버는 정상인데 화면에서만 실패).
+    #  ⚠️ 로그인이 없어 CORS 가 데이터를 지켜주지는 않는다 — user_id 를 아는 사람은
+    #     어느 오리진에서든 읽을 수 있다. 오리진 제한은 운영 편의일 뿐이다.
+    cors_origins: str = "*"
+
     # ------------------------------------------------------------------ #
     # Storage 버킷 (전부 private)
     # ------------------------------------------------------------------ #
@@ -152,6 +158,10 @@ class Settings(BaseSettings):
     # 개발 모드
     # ------------------------------------------------------------------ #
     use_mock: bool = False
+
+    def cors_origin_list(self) -> list[str]:
+        """쉼표로 구분된 CORS_ORIGINS 를 목록으로."""
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()] or ["*"]
 
 
 settings = Settings()

@@ -87,15 +87,43 @@ MediaPipe는 관절마다 `visibility`(0~1)를 줍니다. 가려진 관절은 �
 
 ## F — 프레이밍 일치 (0~1)
 
-인물을 감싸는 사각형을 두 사진에서 각각 구해 **겹치는 정도(IoU)** 를 봅니다.
-MediaPipe 좌표가 이미 0~1로 정규화돼 있어 사진 크기가 달라도 그대로 비교됩니다.
-
 ```
-F = 교집합 넓이 / 합집합 넓이
+비율 = 사용자 몸통 길이 / 레퍼런스 몸통 길이      (어깨중점 ~ 골반중점)
+F    = min(비율, 1/비율)
 ```
 
-**왜 필요한가** — 레퍼런스는 전신인데 사용자는 상반신만 나오면, 각도는 맞아도
-다리를 아예 비교할 수 없습니다. F는 "둘 다 비슷한 범위를 담았는가"를 봅니다.
+**두 사진이 비슷한 거리에서 찍혔는가**만 봅니다. 1이면 같은 거리입니다.
+
+⚠️ **예전에는 랜드마크 전체의 사각형 겹침(IoU)이었습니다. 그건 틀린 값이었습니다.**
+
+팔다리를 움직이면 사각형이 같이 변합니다. 그래서 **자세가 다른 것을 프레이밍
+문제로 보고했습니다.** 실측입니다 — 전신을 균일하게 틀었을 때:
+
+| 회전 | 자세 점수 | 옛 F (사각형 IoU) | 먼저 걸리는 것 |
+|---|---|---|---|
+| 14° | 72.3 | 0.672 | — |
+| 16° | 68.4 | 0.652 | 자세 |
+| **20°** | 60.5 | **0.615** | **프레이밍** ← 잘못됨 |
+| 30° | 40.7 | 0.539 | 프레이밍 ← 잘못됨 |
+
+16°를 넘으면 사용자에게 **"몸이 화면에 다 나오도록 서주세요"** 가 뜹니다.
+그런데 실제로 고쳐야 할 건 자세입니다. **아무리 뒤로 물러나도 통과하지 못합니다.**
+
+⚠️ **위치는 보지 않습니다.** 사용자가 화면 왼쪽에 서든 오른쪽에 서든 굵기 비교에는
+영향이 없습니다 — 부위 굵기를 몸통 길이로 정규화하기 때문입니다.
+옛 방식은 옆으로 6%만 움직여도 0.58로 떨어져 거부했습니다.
+
+**무엇을 막는가** — 레퍼런스는 전신인데 사용자는 바짝 붙어 찍은 경우.
+
+| 상황 | 새 F | 판정 |
+|---|---|---|
+| 자세만 다름 | 1.000 | 통과 (프레이밍 문제 아님) |
+| 옆으로 20% 이동 | 1.000 | 통과 (위치는 무관) |
+| 20% 더 가까이 | 0.833 | 통과 (계산으로 보정됨) |
+| **2배로 다가섬 (상반신만)** | **0.500** | **거부** |
+
+⚠️ 어깨나 골반이 안 보이면 0입니다. 잴 기준이 없다는 뜻이고, 그때는
+"몸이 화면에 다 나오도록"이 맞는 안내입니다.
 
 ---
 
@@ -134,7 +162,7 @@ P < THRESHOLD     →  재촬영 (자세)
 | `TOL` | **45°** | 팔다리가 "다른 방향"으로 보이기 시작하는 지점. 45° 차이면 육안으로 명백히 다른 자세 | 낮추면 깐깐해져 재촬영이 잦음 |
 | `HARD` | **60°** | 한 관절이 이 이상 어긋나면 그 부위 진단은 못 씀 | — |
 | `THRESHOLD` | **70** | `TOL=45` 기준 **평균 오차 13.5° 이내**. 사람이 따라 하려 애쓸 때 나오는 편차 수준 | 높이면 통과가 어려워짐 |
-| `F_MIN` | **0.65** | 전신 사진 둘이 비슷한 구도면 IoU 0.7~0.9. 0.65는 "한쪽이 눈에 띄게 다른 범위" 선 | — |
+| `F_MIN` | **0.65** | 촬영 거리가 **1.54배**까지 차이나도 통과. 그 이상이면 원근 왜곡이 커진다 | 높이면 서는 위치를 더 엄격히 맞춰야 함 |
 | `R_MAX` | **0.25** | 어깨폭 비율이 25% 넘게 차이나면 몸이 뚜렷하게 돌아간 것 | — |
 
 > ⚠️ **이 값들은 시작점입니다.** "논리적 타당성"은 숫자 자체가 아니라
@@ -170,87 +198,34 @@ GET /api/v1/pose-criteria
 
 ---
 
-## 프론트 참고 구현
+## 프론트 구현
+
+⚠️ **문서에 코드를 옮겨 적지 않습니다.** 사본은 반드시 낡습니다.
+실제로 쓰는 파일은 하나입니다.
+
+```
+web/pose-score.js          의존성 없는 ES 모듈. 그대로 import 해서 쓰세요.
+web/pose-score.test.html   브라우저에서 열면 스스로 검사합니다 (설치 불필요)
+```
 
 ```js
-const IDX = {
-  shoulderL: 11, shoulderR: 12, elbowL: 13, elbowR: 14, wristL: 15, wristR: 16,
-  hipL: 23, hipR: 24, kneeL: 25, kneeR: 26, ankleL: 27, ankleR: 28,
-};
+import { evaluate, createHoldGate, fetchCriteria } from "./pose-score.js";
 
-// 진단 부위와 1:1 대응하는 9개 방향
-const SEGMENTS = [
-  ["upperArmL", IDX.shoulderL, IDX.elbowL],
-  ["lowerArmL", IDX.elbowL,    IDX.wristL],
-  ["upperArmR", IDX.shoulderR, IDX.elbowR],
-  ["lowerArmR", IDX.elbowR,    IDX.wristR],
-  ["upperLegL", IDX.hipL,      IDX.kneeL],
-  ["lowerLegL", IDX.kneeL,     IDX.ankleL],
-  ["upperLegR", IDX.hipR,      IDX.kneeR],
-  ["lowerLegR", IDX.kneeR,     IDX.ankleR],
-];
+const criteria = await fetchCriteria();      // 앱 시작 시 한 번
+const hold = createHoldGate(criteria);
 
-const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-const angleOf = (a, b) => Math.atan2(b.y - a.y, b.x - a.x) * 180 / Math.PI;
+// 매 프레임
+const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
+showGuide(r.message);                        // 사용자에게 보여줄 문구
+if (hold(r.pass)) shutter();                 // 15프레임 이어지면 촬영
 
-// 두 각도의 차이는 항상 0~180 으로 접는다 (350° 와 10° 는 20° 차이다)
-const angleDiff = (p, q) => { const d = Math.abs(p - q) % 360; return d > 180 ? 360 - d : d; };
-
-function poseScore(ref, user, c) {
-  const diffs = [];
-
-  for (const [, a, b] of SEGMENTS) {
-    const ok = [ref[a], ref[b], user[a], user[b]].every(p => p.visibility >= c.min_visibility);
-    if (!ok) continue;                       // 가려진 관절은 뺀다
-    diffs.push(angleDiff(angleOf(ref[a], ref[b]), angleOf(user[a], user[b])));
-  }
-
-  // 몸통 기울기
-  const torso = (lm) => angleOf(mid(lm[IDX.shoulderL], lm[IDX.shoulderR]),
-                                mid(lm[IDX.hipL], lm[IDX.hipR]));
-  diffs.push(angleDiff(torso(ref), torso(user)));
-
-  if (diffs.length < c.min_visible_angles) return { score: 0, reason: "NOT_ENOUGH_JOINTS" };
-  if (diffs.some(d => d > c.hard_tol_deg))  return { score: 0, reason: "JOINT_TOO_FAR" };
-
-  const mean = diffs.reduce((s, d) => s + Math.max(0, 1 - d / c.tol_deg), 0) / diffs.length;
-  return { score: Math.round(mean * 1000) / 10, reason: null };   // 소수 첫째자리
-}
-
-function framingIoU(ref, user) {
-  const box = (lm) => ({
-    x0: Math.min(...lm.map(p => p.x)), x1: Math.max(...lm.map(p => p.x)),
-    y0: Math.min(...lm.map(p => p.y)), y1: Math.max(...lm.map(p => p.y)),
-  });
-  const a = box(ref), b = box(user);
-  const w = Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0));
-  const h = Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  const inter = w * h;
-  const union = (a.x1-a.x0)*(a.y1-a.y0) + (b.x1-b.x0)*(b.y1-b.y0) - inter;
-  return union > 0 ? inter / union : 0;
-}
-
-function facingDelta(ref, user) {
-  const ratio = (lm) => {
-    const sw = Math.hypot(lm[IDX.shoulderL].x - lm[IDX.shoulderR].x,
-                          lm[IDX.shoulderL].y - lm[IDX.shoulderR].y);
-    const s = mid(lm[IDX.shoulderL], lm[IDX.shoulderR]);
-    const h = mid(lm[IDX.hipL], lm[IDX.hipR]);
-    const torsoLen = Math.hypot(s.x - h.x, s.y - h.y);
-    return torsoLen > 0 ? sw / torsoLen : 0;
-  };
-  const r = ratio(ref);
-  return r > 0 ? Math.abs(ratio(user) - r) / r : 0;
-}
+// 업로드할 때 이 세 값을 보냅니다
+//   r.pose_similarity / r.framing_score / r.facing_delta
 ```
 
-업로드할 때 이 세 값을 그대로 보냅니다.
+⚠️ **통과 여부를 프론트가 판단해 보내지 않습니다.** 값만 보내고 판정은 서버가
+다시 합니다. `evaluate` 의 `pass` 는 화면 표시용입니다.
 
-```
-pose_similarity  = poseScore(...).score    // 0~100
-framing_score    = framingIoU(...)         // 0~1
-facing_delta     = facingDelta(...)        // 0~1
-```
-
-⚠️ **최종 통과 여부를 프론트가 판단해 보내지 않습니다.** 값만 보내고 판정은 서버가
-합니다. 화면에는 서버가 내려준 임계값으로 미리 계산해 보여주면 됩니다.
+⚠️ `reason` 이 `NOT_ENOUGH_JOINTS` 면 **업로드하지 마세요.** 서버는 숫자만 받아
+"포즈를 맞춰주세요"라고 답하는데, 실제 문제는 몸이 안 보이는 것이라 사용자가
+엉뚱한 걸 고치게 됩니다.

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>자세 점수 자체 검사</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font: 15px/1.7 system-ui, "Malgun Gothic", sans-serif;
+    max-width: 900px; margin: 0 auto; padding: 32px 20px 80px;
+  }
+  h1 { font-size: 26px; letter-spacing: -.02em; margin: 0 0 6px; }
+  p.lead { color: #666; margin: 0 0 24px; max-width: 62ch; }
+  #summary { font-weight: 700; font-size: 18px; padding: 14px 18px; margin: 0 0 20px; }
+  .ok  { background: #DCEAE3; color: #1D6547; }
+  .bad { background: #F5DFDA; color: #A32E1E; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid #ddd; vertical-align: top; }
+  thead th { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #777; }
+  td.n { font-family: Consolas, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pass { color: #1D6547; font-weight: 700; }
+  .fail { color: #A32E1E; font-weight: 700; }
+  .why { color: #666; font-size: 13px; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #14181B; color: #E3E9EC; }
+    p.lead, thead th, .why { color: #94A2AB; }
+    th, td { border-color: #2A343A; }
+    .ok  { background: #143024; color: #5FB68C; }
+    .bad { background: #371C16; color: #E17F65; }
+  }
+</style>
+</head>
+<body>
+
+<h1>자세 점수 자체 검사</h1>
+<p class="lead">
+  <code>pose-score.js</code> 가 의도대로 도는지 확인합니다.
+  <strong>기대값은 파이썬으로 따로 계산해 넣은 것</strong>이라, 여기서 맞으면 두 구현이 일치한다는 뜻입니다.
+</p>
+
+<div id="summary">실행 중…</div>
+<table>
+  <thead><tr><th>검사</th><th>기대</th><th>실제</th><th>결과</th><th>왜 보는가</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+
+<script type="module">
+import { poseScore, framingScore, facingDelta, evaluate, IDX } from "./pose-score.js";
+
+// 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md)
+const C = {
+  tol_deg: 45, hard_tol_deg: 60, threshold: 70,
+  f_min: 0.65, r_max: 0.25,
+  min_visible_angles: 4, min_visibility: 0.5, n_hold: 15,
+};
+
+// ── 시험용 골격 만들기 ────────────────────────────────────────────────────
+// 어깨·골반을 고정하고 "방향(도)"으로 팔다리를 뻗는다.
+// 이렇게 해야 방향 하나만 바꿔서 그 각도만 달라지게 만들 수 있다.
+const BASE = {
+  upperArmL: 100, lowerArmL: 95, upperArmR: 80, lowerArmR: 85,
+  upperLegL: 95,  lowerLegL: 90, upperLegR: 85, lowerLegR: 90,
+};
+const LEN = { upperArm: .13, lowerArm: .12, upperLeg: .17, lowerLeg: .16 };
+
+function build(dirs = BASE, { dx = 0, dy = 0, scale = 1, visibility = 0.95, hide = [] } = {}) {
+  const P = new Array(33).fill(null);
+  // scale 은 화면 중앙 기준 확대/축소 — "더 가까이/멀리 서서 찍었다"를 흉내낸다
+  const put = (i, x, y) => {
+    P[i] = { index: i, x: (x - .5) * scale + .5 + dx, y: (y - .5) * scale + .5 + dy, z: 0, visibility };
+  };
+  const unput = (i) => ({ x: (P[i].x - dx - .5) / scale + .5, y: (P[i].y - dy - .5) / scale + .5 });
+
+  put(IDX.shoulderL, .42, .30); put(IDX.shoulderR, .58, .30);
+  put(IDX.hipL,      .45, .55); put(IDX.hipR,      .55, .55);
+
+  const ext = (from, to, deg, len) => {
+    const a = deg * Math.PI / 180;
+    const f = unput(from);
+    put(to, f.x + Math.cos(a) * len, f.y + Math.sin(a) * len);
+  };
+  ext(IDX.shoulderL, IDX.elbowL, dirs.upperArmL, LEN.upperArm);
+  ext(IDX.elbowL,    IDX.wristL, dirs.lowerArmL, LEN.lowerArm);
+  ext(IDX.shoulderR, IDX.elbowR, dirs.upperArmR, LEN.upperArm);
+  ext(IDX.elbowR,    IDX.wristR, dirs.lowerArmR, LEN.lowerArm);
+  ext(IDX.hipL,  IDX.kneeL,  dirs.upperLegL, LEN.upperLeg);
+  ext(IDX.kneeL, IDX.ankleL, dirs.lowerLegL, LEN.lowerLeg);
+  ext(IDX.hipR,  IDX.kneeR,  dirs.upperLegR, LEN.upperLeg);
+  ext(IDX.kneeR, IDX.ankleR, dirs.lowerLegR, LEN.lowerLeg);
+
+  for (let i = 0; i < 33; i++) if (!P[i]) put(i, .5, .2);   // 머리·손발 등 나머지
+  for (const i of hide) P[i].visibility = 0.1;              // 가려진 관절
+  return P;
+}
+
+const shift = (d) => Object.fromEntries(Object.entries(BASE).map(([k, v]) => [k, v + d]));
+const REF = build();
+
+// ── 검사 목록 ────────────────────────────────────────────────────────────
+const round1 = (v) => Math.round(v * 10) / 10;
+const tests = [
+  {
+    name: "완전히 같은 자세",
+    why: "기준선. 여기가 100이 아니면 계산 자체가 틀린 것",
+    expect: 100,
+    run: () => poseScore(REF, build(), C).score,
+  },
+  {
+    name: "한 발 뒤로 물러섬 (전체 평행이동)",
+    why: "★ 가장 중요. 위치가 달라져도 자세는 같다 — 좌표 비교였다면 여기서 떨어진다",
+    expect: 100,
+    run: () => poseScore(REF, build(BASE, { dx: .06 }), C).score,
+  },
+  {
+    name: "왼쪽 상완만 30도 틀어짐",
+    why: "하나만 어긋났을 때 부분 감점이 되는가 (1 − 30/45 = 0.33 한 개 + 나머지 8개)",
+    expect: 92.6,
+    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 30 }), C).score,
+  },
+  {
+    name: "전체가 10도씩 틀어짐",
+    why: "고르게 어긋나면 고르게 깎이는가",
+    expect: 80.2,
+    run: () => poseScore(REF, build(shift(10)), C).score,
+  },
+  {
+    name: "왼쪽 상완만 70도 틀어짐",
+    why: "★ 평균만 쓰면 통과해버린다. 한 관절이라도 크게 벌어지면 0이어야 함",
+    expect: 0,
+    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 70 }), C).score,
+  },
+  {
+    name: "위 상황의 사유",
+    why: "왜 0인지 화면에 표시할 수 있어야 함",
+    expect: "JOINT_TOO_FAR",
+    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 70 }), C).reason,
+  },
+  {
+    name: "골반이 가려진 경우",
+    why: "★ 몸통 각도와 허벅지 둘을 빼는가 (8+1 → 6). 예전 구현은 몸통을 무조건 넣어 추측 좌표가 평균에 섞였다",
+    expect: 6,
+    run: () => poseScore(REF, build(BASE, { hide: [IDX.hipL, IDX.hipR] }), C).usedAngles,
+  },
+  {
+    name: "다리가 전부 가려진 경우",
+    why: "★ 남은 각도가 부족하면 점수를 내지 않고 판정 불가로 빠져야 함",
+    expect: "NOT_ENOUGH_JOINTS",
+    run: () => poseScore(REF,
+      build(BASE, { hide: [IDX.hipL, IDX.hipR, IDX.kneeL, IDX.kneeR, IDX.ankleL, IDX.ankleR,
+                           IDX.elbowL, IDX.wristL, IDX.elbowR] }), C).reason,
+  },
+  {
+    name: "프레이밍 — 같은 거리",
+    why: "같은 거리면 1",
+    expect: 1,
+    run: () => round1(framingScore(REF, build(), C)),
+  },
+  {
+    name: "프레이밍 — 자세만 다름",
+    why: "★★ 가장 중요한 교정. 팔다리를 움직인 건 프레이밍 문제가 아니다. 예전 방식(사각형 IoU)은 여기서 0.615 로 떨어져 '몸이 다 나오게 서주세요'라는 엉뚱한 안내를 냈다",
+    expect: 1,
+    run: () => round1(framingScore(REF, build(shift(20)), C)),
+  },
+  {
+    name: "프레이밍 — 옆으로 20% 이동",
+    why: "★ 위치는 상관없다. 굵기를 몸통 길이로 정규화하므로 어디 서 있든 비교가 된다",
+    expect: 1,
+    run: () => round1(framingScore(REF, build(BASE, { dx: .20 }), C)),
+  },
+  {
+    name: "프레이밍 — 2배로 다가섬 (상반신만)",
+    why: "★ 이건 진짜 프레이밍 문제. 거부돼야 함",
+    expect: true,
+    run: () => framingScore(REF, build(BASE, { scale: 2 }), C) < C.f_min,
+  },
+  {
+    name: "프레이밍 — 20% 더 가까이",
+    why: "이 정도는 계산으로 보정되므로 통과",
+    expect: true,
+    run: () => framingScore(REF, build(BASE, { scale: 1.2 }), C) >= C.f_min,
+  },
+  {
+    name: "정면성 — 같은 자세",
+    why: "몸이 안 돌아갔으면 0",
+    expect: 0,
+    run: () => round1(facingDelta(REF, build())),
+  },
+  {
+    name: "정면성 — 어깨폭이 절반",
+    why: "★ 몸이 옆으로 돌면 어깨폭이 줄어든다. 각도로는 못 잡는 것",
+    expect: true,
+    run: () => {
+      const turned = build();
+      turned[IDX.shoulderL].x = .46; turned[IDX.shoulderR].x = .54;   // 어깨폭 0.16 → 0.08
+      return facingDelta(REF, turned) > C.r_max;
+    },
+  },
+  {
+    name: "종합 판정 — 통과",
+    why: "세 값이 다 좋으면 pass",
+    expect: true,
+    run: () => evaluate(REF, build(), C).pass,
+  },
+  {
+    name: "종합 판정 — 여러 명이면 그것부터",
+    why: "★ 서버와 같은 순서여야 함. 다르면 화면과 업로드 결과가 어긋난다",
+    expect: "MULTI_PERSON",
+    run: () => evaluate(REF, build(), C, { multiPerson: true }).reason,
+  },
+  {
+    name: "종합 판정 — 자세만 나쁨",
+    why: "★★ 프레이밍·정면성이 멀쩡하면 POSE 여야 한다. 예전 방식에서는 FRAMING 이 나왔다 — 사용자가 고칠 수 없는 안내였다",
+    expect: "POSE",
+    run: () => evaluate(REF, build(shift(20)), C).reason,
+  },
+  {
+    name: "종합 판정 — 너무 가까이",
+    why: "거리가 문제면 FRAMING",
+    expect: "FRAMING",
+    run: () => evaluate(REF, build(BASE, { scale: 2 }), C).reason,
+  },
+  {
+    name: "기준값을 안 넘기면 에러",
+    why: "★ 조용히 기본값으로 도는 것보다 낫다. 서버와 다른 기준으로 통과를 보여주면 업로드가 전부 거부된다",
+    expect: true,
+    run: () => { try { poseScore(REF, build(), null); return false; } catch { return true; } },
+  },
+];
+
+// ── 실행 ─────────────────────────────────────────────────────────────────
+const rows = document.getElementById("rows");
+let failed = 0;
+
+for (const t of tests) {
+  let actual, ok;
+  try {
+    actual = t.run();
+    ok = Object.is(actual, t.expect) || actual === t.expect;
+  } catch (e) {
+    actual = `에러: ${e.message}`;
+    ok = false;
+  }
+  if (!ok) failed++;
+
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td>${t.name}</td>
+    <td class="n">${t.expect}</td>
+    <td class="n">${actual}</td>
+    <td class="${ok ? "pass" : "fail"}">${ok ? "통과" : "실패"}</td>
+    <td class="why">${t.why}</td>`;
+  rows.appendChild(tr);
+}
+
+const s = document.getElementById("summary");
+s.textContent = failed === 0
+  ? `${tests.length}개 전부 통과`
+  : `${tests.length}개 중 ${failed}개 실패 — pose-score.js 를 고쳐야 합니다`;
+s.className = failed === 0 ? "ok" : "bad";
+</script>
+</body>
+</html>

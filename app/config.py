@@ -166,8 +166,11 @@ class Settings(BaseSettings):
     # VLM provider (담당 B 영역)
     # ------------------------------------------------------------------ #
     vlm_provider: str = ""
-    anthropic_api_key: str = ""
     openai_api_key: str = ""
+    # ⚠️ ANTHROPIC_API_KEY 는 2026-08-14 에 뺐다. vlm.py 가 진단 파이프라인용으로
+    #    재작성되면서 openai 전용이 됐다(_call_json). claude 경로가 코드에 없으므로
+    #    키만 남겨두면 "VLM_PROVIDER=claude 로 바꾸면 되겠지"라는 오해를 만든다.
+    #    되살리려면 vlm.py 에 분기를 다시 구현해야 한다.
 
     # ------------------------------------------------------------------ #
     # 개발 모드

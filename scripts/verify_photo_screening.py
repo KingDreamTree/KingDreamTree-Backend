@@ -124,7 +124,7 @@ async def main() -> int:
                 print(f"\n{path.name}{exp_txt}")
 
             print(f"  [{i + 1}] {mark}  {elapsed:.1f}초  reason={result.reason or '-'}", end="")
-            print(f"  confidence={result.confidence or '-'}")
+            print(f"  rule={result.rule or '-'}  confidence={result.confidence or '-'}")
             if result.message:
                 print(f"      문구: {result.message}")
 

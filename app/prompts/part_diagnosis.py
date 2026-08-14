@@ -295,6 +295,27 @@ def _metrics_block(metrics: dict[str, Any], parts: list[dict[str, Any]]) -> str:
             "— 면적·높이 수치가 실제보다 작게 나옵니다. 이 부위는 수치를 신뢰하지 말고 "
             "confidence 를 낮추세요."
         )
+
+    # 옷 픽셀을 흡수해 살린 부위 — 그 비율만큼은 맨살이 아니라 옷 실루엣이다.
+    # 임계값을 두지 않고 비율 자체를 보여준다. 판단은 모델이 부위별로 한다.
+    clothed = []
+    for n, m in rows.items():
+        ur = (m.get("user") or {}).get("clothing_ratio")
+        rr = (m.get("reference") or {}).get("clothing_ratio")
+        if ur or rr:
+            bits = []
+            if ur:
+                bits.append(f"사용자 {ur:.0%}")
+            if rr:
+                bits.append(f"레퍼런스 {rr:.0%}")
+            clothed.append(f"{n} ({' · '.join(bits)})")
+    if clothed:
+        out.append(
+            f"※ 옷에서 흡수된 픽셀이 포함된 부위: {', '.join(clothed)} "
+            "— 표기된 비율만큼은 맨살이 아니라 옷 위 실루엣입니다. 실루엣·비율 판단에는 "
+            "써도 되지만 근육 윤곽·질감의 근거로 쓰지 마세요. 비중이 크면 confidence 를 "
+            "낮추고, 형태를 읽을 수 없으면 판단 불가를 선언하세요."
+        )
     return "\n".join(out)
 
 

@@ -58,6 +58,71 @@ def _rir_note(reps: int) -> str:
     return f"{reps}회를 마쳤을 때 {DEFAULT_RIR}회 정도 여유가 남는 무게로 하세요."
 
 
+#: 통증 신호. mock 이 "피드백을 읽은 척"이라도 하려면 최소한 이건 반응해야 한다.
+#:
+#: ⚠️ **한국어 활용형을 다 적어야 한다.** "아파"만 넣었다가 "무릎이 아팠어요"를
+#:    놓쳤다 — 통증 피드백인데 금기가 안 잡히는, 안전에 직결되는 누락이었다.
+#:    (실제 LLM 경로는 문맥으로 잡지만 mock 은 이 목록이 전부다)
+_PAIN_TERMS = (
+    "아파",
+    "아팠",
+    "아프",
+    "아픈",
+    "아픔",
+    "통증",
+    "불편",
+    "시큰",
+    "쑤시",
+    "결려",
+    "삐끗",
+)
+
+
+def _mock_patch(feedback_text: str) -> dict[str, Any]:
+    """USE_MOCK 용 패치 결과.
+
+    ⚠️ 고정 상수를 돌려주지 않는다. 통증 피드백인데 금기가 안 잡히는 사고를
+       mock 경로에서도 잡아야 하기 때문이다 — 전 구간 스모크가 mock 으로 도는데
+       거기서 늘 같은 값이 나오면 그 검사는 아무것도 검증하지 못한다.
+    """
+    text = (feedback_text or "").strip()
+    if not text:
+        return {
+            "interpretation": "변경 사항 없음",
+            "changes": [],
+            "contraindications_added": [],
+            "raw_response": {"mock": True},
+        }
+
+    has_pain = any(term in text for term in _PAIN_TERMS)
+    changes: list[dict[str, Any]] = [
+        {
+            "function": "adjust_intensity",
+            "args": {"reason": "사용자 피드백 반영 (mock)", "delta_sets": -1},
+        }
+    ]
+    added: list[dict[str, Any]] = []
+    if has_pain:
+        changes.append(
+            {
+                "function": "flag_contraindication",
+                "args": {"body_part": "무릎", "severity": "WARN", "reason": text[:80]},
+            }
+        )
+        added.append({"body_part": "무릎", "severity": "WARN"})
+
+    return {
+        "interpretation": (
+            "통증 신호를 확인해 금기로 등록했습니다. (mock)"
+            if has_pain
+            else "피드백을 반영해 강도를 조정했습니다. (mock)"
+        ),
+        "changes": changes,
+        "contraindications_added": added,
+        "raw_response": {"mock": True},
+    }
+
+
 # --------------------------------------------------------------------------- #
 # 운동 선택 — LLM(후보 제약) + 결정론 폴백
 # --------------------------------------------------------------------------- #
@@ -361,7 +426,7 @@ async def patch_routine(
         }
     """
     if settings.use_mock:
-        return dict(_MOCK_PATCH_RESULT)
+        return dict(_mock_patch(feedback_text))
 
     from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
 

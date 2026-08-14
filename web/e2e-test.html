@@ -1,0 +1,472 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>전 구간 테스트 — 레퍼런스 + 내 사진 → 진단 → 루틴</title>
+<!--
+  전 구간 테스트 창.
+
+  ━━ 왜 만들었나 ━━
+
+  기존에는 "사진 두 장 넣고 끝까지 나오는 것"을 볼 방법이 없었다.
+      smoke_e2e_segmentation.py   레퍼런스 한 장 → 세그까지
+      smoke_e2e_pair.py           두 장 → "비교 가능한가" 까지 (진단·루틴 없음)
+      smoke_full_flow.py          전 구간이지만 픽스처 + mock
+  실사진으로 진단문과 루틴까지 눈으로 보려면 이 페이지가 필요하다.
+
+  ━━ 자세 값을 브라우저가 재는 이유 ━━
+
+  서버는 자세 점수를 계산하지 않는다. MediaPipe(브라우저)가 랜드마크를 뽑고
+  점수까지 내서 올리면 서버는 그 값으로 관문만 통과시킨다
+  (docs/FRONTEND.md §4). 그래서 이 페이지도 web/pose-score.js 를 그대로 쓴다 —
+  프론트가 쓸 계산과 **같은 코드**여야 여기서 통과한 게 실제로도 통과한다.
+
+  ⚠️ 레퍼런스와 사용자가 다른 사람이면 자세 점수가 낮게 나와 관문에 막히는 게
+     정상이다. 그때 "관문 무시"를 켜면 값을 통과하는 값으로 바꿔 올린다 —
+     파이프라인 뒷단(세그·진단·루틴)을 보려는 것이지 관문을 못 믿는 게 아니다.
+-->
+<style>
+  :root {
+    --bg:#0f1115; --card:#171a21; --line:#272b35; --tx:#e6e8ee; --dim:#9aa3b2;
+    --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#60a5fa;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; padding:24px; background:var(--bg); color:var(--tx);
+         font:14px/1.6 system-ui,-apple-system,"Segoe UI","Malgun Gothic",sans-serif }
+  h1 { font-size:20px; margin:0 0 4px }
+  h2 { font-size:15px; margin:0 0 12px; color:var(--accent) }
+  .sub { color:var(--dim); margin-bottom:20px }
+  .wrap { max-width:1100px; margin:0 auto }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px;
+          padding:16px; margin-bottom:14px }
+  .row { display:flex; gap:14px; flex-wrap:wrap }
+  .col { flex:1; min-width:260px }
+  label { display:block; font-size:12px; color:var(--dim); margin-bottom:5px }
+  input[type=file], input[type=number], select {
+    width:100%; padding:8px; background:#0c0e13; color:var(--tx);
+    border:1px solid var(--line); border-radius:6px; font-size:13px }
+  button { padding:10px 18px; border-radius:6px; border:0; cursor:pointer;
+           background:var(--accent); color:#06101f; font-weight:600; font-size:14px }
+  button:disabled { opacity:.4; cursor:not-allowed }
+  button.ghost { background:#222732; color:var(--tx) }
+  img.prev { width:100%; max-height:230px; object-fit:contain; border-radius:6px;
+             background:#000; margin-top:8px }
+  table { width:100%; border-collapse:collapse; font-size:13px }
+  th,td { padding:6px 8px; border-bottom:1px solid var(--line); text-align:left;
+          vertical-align:top }
+  th { color:var(--dim); font-weight:500 }
+  .ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .dim{color:var(--dim)}
+  pre { background:#0c0e13; border:1px solid var(--line); border-radius:6px;
+        padding:12px; overflow:auto; max-height:340px; font-size:12px;
+        white-space:pre-wrap; word-break:break-all }
+  #log { font-family:ui-monospace,Consolas,monospace; font-size:12px; max-height:260px }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px;
+          border:1px solid var(--line); color:var(--dim) }
+  .gate { background:#1c1710; border:1px solid #4a3a1a; border-radius:8px;
+          padding:10px; margin-top:10px; font-size:12.5px }
+  .step { opacity:.45 }
+  .step.on { opacity:1 }
+  .step h2::before { content:"○ " }
+  .step.done h2::before { content:"● "; color:var(--ok) }
+</style>
+
+<div class="wrap">
+  <h1>전 구간 테스트</h1>
+  <div class="sub">
+    레퍼런스 + 내 사진 → 세그멘테이션 → 진단 → 루틴까지 한 번에.
+    <span class="pill" id="apibadge">API</span>
+  </div>
+
+  <!-- 0. 준비 -->
+  <div class="card step on" id="s0">
+    <h2>0. 준비</h2>
+    <div class="row">
+      <div class="col">
+        <label>API 주소</label>
+        <input id="api" value="http://localhost:8000" style="width:100%">
+      </div>
+      <div class="col">
+        <label>운동 일수 (루틴 생성에 사용)</label>
+        <input id="days" type="number" min="1" max="7" value="3">
+      </div>
+    </div>
+    <div id="mpstat" class="dim" style="margin-top:10px">MediaPipe 불러오는 중…</div>
+  </div>
+
+  <!-- 1. 사진 -->
+  <div class="card step" id="s1">
+    <h2>1. 사진 두 장</h2>
+    <div class="row">
+      <div class="col">
+        <label>레퍼런스 (닮고 싶은 몸)</label>
+        <input type="file" id="ref" accept="image/*" disabled>
+        <img class="prev" id="refimg" hidden>
+        <div id="refinfo" class="dim"></div>
+      </div>
+      <div class="col">
+        <label>내 사진</label>
+        <input type="file" id="usr" accept="image/*" disabled>
+        <img class="prev" id="usrimg" hidden>
+        <div id="usrinfo" class="dim"></div>
+      </div>
+    </div>
+
+    <div class="gate" id="gate" hidden>
+      <b>자세 관문 점수</b> — 브라우저(MediaPipe)가 계산한 값입니다.
+      <table style="margin-top:6px">
+        <tr><th>자세 유사도</th><td id="g_pose"></td>
+            <th>거리(framing)</th><td id="g_fram"></td>
+            <th>방향(facing)</th><td id="g_face"></td></tr>
+      </table>
+      <label style="margin-top:8px; color:var(--tx)">
+        <input type="checkbox" id="bypass" style="width:auto">
+        관문 무시하고 통과하는 값으로 올리기
+      </label>
+      <div class="dim" style="margin-top:4px">
+        레퍼런스와 내가 다른 사람이면 점수가 낮게 나오는 게 <b>정상</b>입니다.
+        뒷단(세그·진단·루틴)을 보려면 켜세요.
+      </div>
+    </div>
+
+    <div style="margin-top:14px">
+      <button id="run" disabled>전 구간 실행</button>
+      <button id="reset" class="ghost">초기화</button>
+    </div>
+  </div>
+
+  <!-- 2. 진행 -->
+  <div class="card step" id="s2">
+    <h2>2. 진행</h2>
+    <pre id="log">대기 중…</pre>
+  </div>
+
+  <!-- 3. 세그 -->
+  <div class="card step" id="s3">
+    <h2>3. 세그멘테이션 결과</h2>
+    <table><thead><tr>
+      <th>부위</th><th>레퍼런스</th><th>내 사진</th><th>비교 가능</th>
+    </tr></thead><tbody id="segrows"></tbody></table>
+  </div>
+
+  <!-- 4. 진단 -->
+  <div class="card step" id="s4">
+    <h2>4. 진단</h2>
+    <div id="score" style="font-size:26px; font-weight:700; margin-bottom:4px"></div>
+    <div id="scorewhy" class="dim" style="margin-bottom:14px"></div>
+    <div id="summary" style="margin-bottom:14px"></div>
+    <table><thead><tr>
+      <th>부위</th><th>격차</th><th>확신</th><th>진단</th>
+    </tr></thead><tbody id="partrows"></tbody></table>
+  </div>
+
+  <!-- 5. 루틴 -->
+  <div class="card step" id="s5">
+    <h2>5. 루틴</h2>
+    <div id="mode" class="dim" style="margin-bottom:10px"></div>
+    <div id="routine"></div>
+  </div>
+
+  <!-- 6. 원본 -->
+  <div class="card step" id="s6">
+    <h2>6. 원본 응답 (JSON)</h2>
+    <pre id="raw"></pre>
+  </div>
+</div>
+
+<script type="module">
+import { poseScore, framingScore, facingDelta } from "./pose-score.js";
+
+const $ = (id) => document.getElementById(id);
+const API = () => $("api").value.replace(/\/+$/, "");
+let H = {};                       // X-User-Id 헤더
+let landmarker = null;
+const photo = { ref: null, usr: null };   // {file, img, lm}
+
+// ── 로그 ────────────────────────────────────────────────────────────────
+const lines = [];
+function log(msg, cls = "") {
+  lines.push(cls ? `<span class="${cls}">${msg}</span>` : msg);
+  $("log").innerHTML = lines.join("\n");
+  $("log").scrollTop = $("log").scrollHeight;
+}
+const step = (id, state) => $(id).classList.add(state);
+
+// ── MediaPipe ───────────────────────────────────────────────────────────
+// ⚠️ score-photos.html 과 같은 모델·같은 CDN 을 쓴다. 다른 걸 쓰면 여기서
+//    통과한 점수가 실제 촬영 화면에서 재현되지 않는다.
+const C = { tol_deg:60, hard_tol_deg:70, threshold:70, f_min:.65, f_hard:.40,
+            min_seg_ratio:.25, min_visible_angles:4, min_visibility:.5, n_hold:10 };
+
+try {
+  const { FilesetResolver, PoseLandmarker } = await import(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath:
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
+      "pose_landmarker_lite/float16/1/pose_landmarker_lite.task", delegate: "GPU" },
+    runningMode: "IMAGE", numPoses: 1,
+  });
+  $("mpstat").innerHTML = '<span class="ok">MediaPipe 준비 완료</span> — 사진을 고르세요.';
+  $("ref").disabled = $("usr").disabled = false;
+  step("s1", "on");
+} catch (e) {
+  $("mpstat").innerHTML = `<span class="bad">MediaPipe 로드 실패: ${e.message}</span>`;
+}
+
+// ── 사진 선택 ───────────────────────────────────────────────────────────
+const loadImage = (file) => new Promise((res, rej) => {
+  const img = new Image();
+  img.onload = () => res(img);
+  img.onerror = rej;
+  img.src = URL.createObjectURL(file);
+});
+
+async function pick(which, input, imgEl, infoEl) {
+  const file = input.files[0];
+  if (!file) return;
+  const img = await loadImage(file);
+  const det = landmarker.detect(img);
+  const lm = det.landmarks[0] ?? null;
+  photo[which] = { file, img, lm };
+
+  imgEl.src = img.src; imgEl.hidden = false;
+  infoEl.innerHTML = lm
+    ? `<span class="ok">사람 검출됨</span> · ${img.naturalWidth}×${img.naturalHeight}`
+    : `<span class="bad">사람을 찾지 못했습니다</span>`;
+  refreshGate();
+}
+
+$("ref").onchange = () => pick("ref", $("ref"), $("refimg"), $("refinfo"));
+$("usr").onchange = () => pick("usr", $("usr"), $("usrimg"), $("usrinfo"));
+
+function refreshGate() {
+  const { ref, usr } = photo;
+  const ready = ref?.lm && usr?.lm;
+  $("run").disabled = !ready;
+  if (!ready) { $("gate").hidden = true; return; }
+
+  const p = poseScore(ref.lm, usr.lm, C);
+  const f = framingScore(ref.lm, usr.lm, C);
+  const d = facingDelta(ref.lm, usr.lm);
+  window._gate = { pose: p.score, framing: f, facing: d };
+
+  const mark = (v, good) => `<span class="${good ? "ok" : "bad"}">${v}</span>`;
+  $("g_pose").innerHTML = mark(p.score.toFixed(1), p.score >= C.threshold);
+  $("g_fram").innerHTML = mark(f.toFixed(2), f >= C.f_min);
+  $("g_face").innerHTML = mark(d.toFixed(2), d <= 0.25);
+  $("gate").hidden = false;
+  if (p.score < C.threshold || f < C.f_min) $("bypass").checked = true;
+}
+
+// ── API ─────────────────────────────────────────────────────────────────
+async function api(method, path, { json, form } = {}) {
+  const opt = { method, headers: { ...H } };
+  if (json) { opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(json); }
+  if (form) opt.body = form;
+  const r = await fetch(API() + path, opt);
+  const ct = r.headers.get("content-type") || "";
+  const body = ct.includes("json") ? await r.json() : await r.text();
+  if (!r.ok) {
+    const e = body?.error || {};
+    throw new Error(`${method} ${path} → ${r.status} ${e.code || ""} ${e.message || body}`);
+  }
+  return body;
+}
+
+const landmarksJson = (lm) => JSON.stringify(
+  lm.map((p, i) => ({ index:i, x:p.x, y:p.y, z:p.z ?? 0,
+                      visibility: p.visibility ?? 1 })));
+
+async function waitJob(jobId, label, timeoutSec = 600) {
+  const t0 = Date.now();
+  let last = null;
+  while ((Date.now() - t0) / 1000 < timeoutSec) {
+    const j = await api("GET", `/api/v1/jobs/${jobId}`);
+    if (j.status !== last) {
+      last = j.status;
+      log(`      ${label}: ${last} (${Math.round((Date.now()-t0)/1000)}s)`, "dim");
+    }
+    if (j.status === "DONE") return j;
+    if (j.status === "FAILED") throw new Error(`${label} 실패 — ${JSON.stringify(j.error)}`);
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+  throw new Error(`${label} 타임아웃 — 워커가 떠 있나요?`);
+}
+
+// ── 전 구간 실행 ────────────────────────────────────────────────────────
+$("run").onclick = async () => {
+  $("run").disabled = true;
+  lines.length = 0;
+  ["s2","s3","s4","s5","s6"].forEach((s) => step(s, "on"));
+  const raw = {};
+
+  try {
+    // 1) 사용자 + 세션
+    log("[1] 사용자·세션 생성");
+    const u = await api("POST", "/api/v1/users");
+    H = { "X-User-Id": u.user_id };
+    const s = await api("POST", "/api/v1/sessions");
+    const SID = s.session_id;
+    log(`      user_id    ${u.user_id}`, "dim");
+    log(`      session_id ${SID}`, "dim");
+
+    // 2) 레퍼런스
+    log("\n[2] 레퍼런스 업로드 → 세그멘테이션");
+    const rf = new FormData();
+    rf.append("file", photo.ref.file);
+    rf.append("pose_landmarks", landmarksJson(photo.ref.lm));
+    rf.append("pose_scale_basis", "TORSO");
+    const rref = await api("POST", `/api/v1/sessions/${SID}/photos/reference`, { form: rf });
+    const rjob = await waitJob(rref.job_id, "SEG_REFERENCE");
+    log(`      검출 ${rjob.result?.detected}클래스 / 비교가능 ${rjob.result?.valid_comparable}`, "ok");
+
+    // 3) 사용자 사진 — 관문 값
+    log("\n[3] 내 사진 업로드 → 세그멘테이션");
+    const g = window._gate;
+    const pass = $("bypass").checked;
+    if (pass) log("      ⚠️ 관문 무시 — 통과하는 값으로 올립니다", "warn");
+    const uf = new FormData();
+    uf.append("file", photo.usr.file);
+    uf.append("capture_source", "UPLOAD");
+    uf.append("pose_landmarks", landmarksJson(photo.usr.lm));
+    uf.append("pose_scale_basis", "TORSO");
+    uf.append("pose_similarity", pass ? 95 : g.pose);
+    uf.append("framing_score",   pass ? 1.0 : g.framing);
+    uf.append("facing_delta",    pass ? 0.0 : g.facing);
+    const uref = await api("POST", `/api/v1/sessions/${SID}/photos/user`, { form: uf });
+    const ujob = await waitJob(uref.job_id, "SEG_USER");
+    log(`      검출 ${ujob.result?.detected}클래스 / 비교가능 ${ujob.result?.valid_comparable}`, "ok");
+    if (ujob.result?.retake_recommended)
+      log("      ⚠️ retake_recommended=true — 화면에선 재촬영을 권합니다", "warn");
+
+    // 4) 세그 결과 표
+    const seg = await api("GET", `/api/v1/sessions/${SID}/segmentation`);
+    raw.segmentation = seg;
+    renderSeg(seg);
+    step("s3", "done");
+
+    // 5) 진단
+    log("\n[4] 진단 (F08 부위별 → F09 종합)");
+    const an = await api("POST", `/api/v1/sessions/${SID}/analysis`, { json: {} });
+    log(`      비교 부위 ${an.part_count}개${an.reused ? " (기존 잡 재사용)" : ""}`, "dim");
+    if (an.part_job_id) await waitJob(an.part_job_id, "VLM_PART");
+
+    // ⚠️ VLM_OVERALL 잡은 부위 진단이 끝난 **뒤에** 등록된다. 그래서 시작 응답의
+    //    overall_job_id 가 비어 있을 수 있다 — 그때는 진행 API 로 완료를 본다.
+    if (an.overall_job_id) {
+      await waitJob(an.overall_job_id, "VLM_OVERALL");
+    } else {
+      log("      종합 진단 대기…", "dim");
+      for (let i = 0; i < 200; i++) {
+        const p = await api("GET", `/api/v1/sessions/${SID}/analysis/progress`);
+        if (p.completed) break;
+        if (p.overall?.status === "FAILED") throw new Error("VLM_OVERALL 실패");
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+    }
+    const diag = await api("GET", `/api/v1/sessions/${SID}/analysis`);
+    raw.analysis = diag;
+    renderDiag(diag);
+    step("s4", "done");
+
+    // 6) 루틴
+    log("\n[5] 루틴 생성");
+    const rt = await api("POST", `/api/v1/sessions/${SID}/routines`,
+                         { json: { exercise_days_per_week: Number($("days").value) } });
+    if (rt.job_id) await waitJob(rt.job_id, "ROUTINE_GEN");
+    const active = await api("GET", `/api/v1/sessions/${SID}/routines/active`);
+    raw.routine = active;
+    renderRoutine(active);
+    step("s5", "done");
+
+    log("\n전 구간 완료", "ok");
+    step("s2", "done");
+  } catch (e) {
+    log(`\n실패: ${e.message}`, "bad");
+  } finally {
+    $("raw").textContent = JSON.stringify(raw, null, 2);
+    step("s6", "done");
+    $("run").disabled = false;
+  }
+};
+
+$("reset").onclick = () => location.reload();
+
+// ── 렌더 ────────────────────────────────────────────────────────────────
+// ⚠️ 세그 응답은 **부위 배열이 아니다.** 사진별 맵 정보 + comparable 요약이다
+//    (SessionSegmentationResponse). 부위별 수치는 진단 단계에서 나온다.
+function renderSeg(seg) {
+  const c = seg.comparable || {};
+  const box = (label, s) => s
+    ? `<tr><td>${label}</td><td>${s.map_width}×${s.map_height}</td>
+       <td>${(s.person_area_ratio*100).toFixed(1)}%</td>
+       <td class="dim">${s.model?.size ?? ""}</td></tr>`
+    : `<tr><td>${label}</td><td colspan="3" class="bad">없음</td></tr>`;
+
+  $("segrows").innerHTML = `
+    <tr><th>사진</th><th>맵 크기</th><th>인물 비율</th><th>모델</th></tr>
+    ${box("레퍼런스", seg.reference)}
+    ${box("내 사진", seg.user)}
+    <tr><td>비교 가능</td>
+        <td class="${c.sufficient ? "ok" : "bad"}">${c.count} / 최소 ${c.min_required}</td>
+        <td colspan="2" class="dim">${(c.class_names || []).join(", ")}</td></tr>
+    ${c.reference_only?.length ? `<tr><td class="dim">레퍼런스에만</td>
+        <td colspan="3" class="warn">${c.reference_only.join(", ")}</td></tr>` : ""}
+    ${c.user_only?.length ? `<tr><td class="dim">내 사진에만</td>
+        <td colspan="3" class="warn">${c.user_only.join(", ")}</td></tr>` : ""}`;
+}
+
+function renderDiag(d) {
+  const o = d.overall || {};
+  $("score").innerHTML = o.similarity_score != null
+    ? `${o.similarity_score}<span style="font-size:14px;color:var(--dim)"> / 100</span>` : "—";
+  $("scorewhy").textContent =
+    `${o.score_rationale || ""}${o.score_source ? `  (${o.score_source})` : ""}`;
+  $("summary").innerHTML = [
+    o.summary ? `<div style="margin-bottom:8px">${o.summary}</div>` : "",
+    o.strengths?.length ? `<div class="ok">좋은 점: ${o.strengths.join(" · ")}</div>` : "",
+    o.cautions?.length ? `<div class="warn">주의: ${o.cautions.join(" · ")}</div>` : "",
+    o.priority_parts?.length
+      ? `<div class="dim">우선 개선: ${o.priority_parts.join(", ")}</div>` : "",
+  ].join("");
+
+  const cls = { NONE:"ok", SLIGHT:"ok", MODERATE:"warn", SIGNIFICANT:"bad" };
+  $("partrows").innerHTML = (d.parts || []).map((p) =>
+    `<tr><td>${p.name_ko || p.class_name}</td>
+     <td class="${cls[p.gap_level] || "dim"}">${p.gap_level ?? "판단 불가"}</td>
+     <td class="dim">${p.confidence ?? "—"}</td>
+     <td>${p.assessment || `<span class="dim">${p.blocked_reason || ""}</span>`}
+         ${p.differences?.length
+            ? `<div class="dim" style="margin-top:3px">${p.differences.join(" · ")}</div>` : ""}
+     </td></tr>`).join("")
+    || `<tr><td colspan="4" class="dim">결과 없음</td></tr>`;
+
+  if (d.excluded?.length)
+    $("partrows").insertAdjacentHTML("beforeend",
+      `<tr><td class="dim">제외됨</td><td colspan="3" class="dim">${
+        d.excluded.map((e) => e.class_name || e).join(", ")}</td></tr>`);
+}
+
+function renderRoutine(r) {
+  $("mode").innerHTML =
+    `v${r.version} · 주 <b>${r.exercise_days_per_week}일</b> × ${r.total_cycles}주기 ` +
+    `<span class="pill">${r.generation_type}</span> ` +
+    `<span class="pill">${r.status}</span>` +
+    (r.goal ? ` · ${r.goal}` : "") +
+    (r.focus_areas?.length ? ` <span class="dim">보강: ${r.focus_areas.join(", ")}</span>` : "") +
+    (r.notice ? `<div class="warn" style="margin-top:4px">${r.notice}</div>` : "");
+
+  $("routine").innerHTML = (r.days || []).map((d) => `
+    <div style="margin-bottom:14px">
+      <b>Day ${d.day_order}</b> <span class="dim">${d.title ?? ""}
+      ${d.estimated_duration_min ? `· 약 ${d.estimated_duration_min}분` : ""}</span>
+      <table><tbody>${(d.exercises || []).map((e) => `
+        <tr><td style="width:34%">${e.name}</td>
+        <td class="dim" style="width:18%">${e.muscle_group ?? e.exercise_kind}</td>
+        <td>${e.sets ? `${e.sets}세트 × ${e.reps}회` : `${e.duration_min ?? "?"}분`}</td>
+        <td class="dim">${e.rir != null ? `RIR ${e.rir}` : ""}
+            ${e.boosted_by ? `<span class="pill">${e.boosted_by} 보강</span>` : ""}</td>
+        </tr>`).join("")}</tbody></table>
+    </div>`).join("") || `<div class="dim">루틴 없음</div>`;
+}
+</script>

@@ -164,7 +164,7 @@ POST /sessions                  → 201, 새 session_id
 |---|---|---|
 | `pose_similarity` | 0~100 | 관절이 **가리키는 방향**의 일치도 |
 | `framing_score` | 0~1 | **촬영 거리** 일치도 (몸통 길이 비율) |
-| `facing_delta` | 0~ | **레퍼런스와 몸 방향의 차이.** ⚠️ '정면인가'가 아니라 상대값이고, **1을 넘을 수 있습니다** (레퍼런스가 많이 돌아가 있을 때) |
+| `facing_delta` | 0~ | **레퍼런스와 몸 방향의 차이.** ⚠️ '정면인가'가 아니라 상대값이고, **1을 넘을 수 있습니다** (레퍼런스가 많이 돌아가 있을 때). ⚠️ **2026-08-14부터 판정에 안 씁니다** — 계속 보내주세요(저장·관찰용), 다만 이 값 때문에 거부되는 일은 없습니다 |
 | `oks` | 0~1 | OKS-inspired 유사도. ⚠️ **판정에 안 씁니다.** 업로드 때 `pose_oks`로 같이 보내주세요 — 어느 산식이 나은지 비교하려고 모으는 중입니다 |
 
 ### ⚠️ 노트북 웹캠에서는 전신이 잘 안 나옵니다
@@ -204,9 +204,9 @@ const hold = createHoldGate(criteria);
 // 매 프레임
 const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 
-showGuide(r.message);        // "같은 방향으로 서주세요" 등, 그대로 노출 가능
+showGuide(r.message);        // "포즈를 맞춰주세요" 등, 그대로 노출 가능
                              // 문구를 바꾸려면 MESSAGES 를 수정하세요 (export 돼 있습니다)
-if (hold(r.pass)) shutter(); // 조건이 15프레임 이어지면 자동 촬영
+if (hold(r.pass)) shutter(); // 최근 13프레임 중 10개 통과면 자동 촬영
 
 // 업로드할 때 이 세 값을 보냅니다
 //   r.pose_similarity / r.framing_score / r.facing_delta

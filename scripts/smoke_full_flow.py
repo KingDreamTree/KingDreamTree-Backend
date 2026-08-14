@@ -227,33 +227,40 @@ def main() -> int:  # noqa: C901 — 단계별 시나리오라 한 줄기로 읽
             )
 
         # ── 4. 진단 (F08 → F09) ─────────────────────────────────────────────
+        # ⚠️ 샘플 파일이 없으면 **실제로 건너뛴다.** 위(2번)에서 "건너뜁니다"라고
+        #    경고만 하고 여기서 그냥 돌려서, 파일 없는 기계에서는 진단이
+        #    Storage 404 로 죽었다 (DB 행은 있는데 업로드를 안 했으니 당연하다).
+        #    경고 문구와 실제 동작이 달랐던 것 — 다른 사람 기계에서만 터진다.
         print("\n4. 진단")
-        part_job = queue.enqueue(session_id, JobKind.VLM_PART)
-        part_result = vlm_handler._diagnose_parts(part_job)
-        # ⚠️ 워커 루프(run.py)가 하는 일을 여기서 대신 해준다. 안 하면 잡이
-        #    PENDING 으로 남아 "중복 호출 가드" 검사가 실제와 다르게 나온다.
-        queue.complete(UUID(str(part_job["job_id"])), part_result)
-        check("부위 진단 완료", part_result["done"] >= 3, str(part_result.get("done")))
-        check("인바디 반영 여부 기록", "inbody" in part_result, part_result.get("inbody"))
+        if not has_files:
+            warn("샘플 파일이 없어 진단 단계를 건너뜁니다", "2번 경고 참고")
+        else:
+            part_job = queue.enqueue(session_id, JobKind.VLM_PART)
+            part_result = vlm_handler._diagnose_parts(part_job)
+            # ⚠️ 워커 루프(run.py)가 하는 일을 여기서 대신 해준다. 안 하면 잡이
+            #    PENDING 으로 남아 "중복 호출 가드" 검사가 실제와 다르게 나온다.
+            queue.complete(UUID(str(part_job["job_id"])), part_result)
+            check("부위 진단 완료", part_result["done"] >= 3, str(part_result.get("done")))
+            check("인바디 반영 여부 기록", "inbody" in part_result, part_result.get("inbody"))
 
-        overall_job = queue.find_open(session_id, JobKind.VLM_OVERALL)
-        check("종합 잡이 부위 진단 뒤에 등록됨", overall_job is not None)
-        if overall_job:
-            overall_result = vlm_handler._diagnose_overall(overall_job)
-            queue.complete(UUID(str(overall_job["job_id"])), overall_result)
-        overall = diagnosis_repo.get_overall(session_id)
-        check("종합 진단 저장", overall is not None and overall["status"] == "DONE")
-        if overall:
-            check(
-                "유사도 점수는 규칙 산출 (RULE)",
-                overall.get("score_source") == "RULE",
-                f"{overall.get('similarity_score')}점 / {overall.get('score_source')}",
-            )
-            check(
-                "우선 개선 부위 존재",
-                bool(overall.get("priority_parts")),
-                str(overall.get("priority_parts")),
-            )
+            overall_job = queue.find_open(session_id, JobKind.VLM_OVERALL)
+            check("종합 잡이 부위 진단 뒤에 등록됨", overall_job is not None)
+            if overall_job:
+                overall_result = vlm_handler._diagnose_overall(overall_job)
+                queue.complete(UUID(str(overall_job["job_id"])), overall_result)
+            overall = diagnosis_repo.get_overall(session_id)
+            check("종합 진단 저장", overall is not None and overall["status"] == "DONE")
+            if overall:
+                check(
+                    "유사도 점수는 규칙 산출 (RULE)",
+                    overall.get("score_source") == "RULE",
+                    f"{overall.get('similarity_score')}점 / {overall.get('score_source')}",
+                )
+                check(
+                    "우선 개선 부위 존재",
+                    bool(overall.get("priority_parts")),
+                    str(overall.get("priority_parts")),
+                )
 
         # ── 5. 루틴 생성 (F10) ──────────────────────────────────────────────
         print("\n5. 루틴 생성")
@@ -278,9 +285,14 @@ def main() -> int:  # noqa: C901 — 단계별 시나리오라 한 줄기로 읽
         else:
             check("CUT 이면 근력일마다 유산소", len(cardio) == 3, f"{len(cardio)}개")
 
-        check("진단 가중 반영", bool(gen.get("boosts")), str(gen.get("boosts")))
-        boosted = [e for d in days for e in d["exercises"] if e.get("boosted_by")]
-        check("가중 근거가 행에 남음", bool(boosted), f"{len(boosted)}개 슬롯")
+        # ⚠️ 가중은 진단 결과에서 온다. 진단을 건너뛴 실행에서 이걸 실패로 세면
+        #    "루틴이 깨졌다"로 읽힌다 — 실제로는 잴 게 없었을 뿐이다.
+        if has_files:
+            check("진단 가중 반영", bool(gen.get("boosts")), str(gen.get("boosts")))
+            boosted = [e for d in days for e in d["exercises"] if e.get("boosted_by")]
+            check("가중 근거가 행에 남음", bool(boosted), f"{len(boosted)}개 슬롯")
+        else:
+            warn("진단을 건너뛰어 가중 검사도 생략", "루틴 자체는 아래에서 계속 검사한다")
         # 진단이 안 된 부위도 기본 볼륨을 받아야 한다 (D10)
         groups = {e["muscle_group"] for d in days for e in d["exercises"] if e["muscle_group"]}
         check("하체도 기본 볼륨 (D10)", {"대퇴사두", "햄스트링·둔근"} & groups, str(sorted(groups)))

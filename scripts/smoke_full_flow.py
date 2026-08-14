@@ -79,6 +79,12 @@ _PARTS: list[tuple[str, int, int]] = [
 #:    바깥을 가리켜서 **내 컴퓨터에서만 돌았다** — A 는 pull 해도 파일이 없어
 #:    진단 단계를 통째로 건너뛰었고, 그 사실이 경고 한 줄로만 표시됐다.
 #:    테스트 픽스처는 코드와 같이 버전 관리돼야 한다.
+#:
+#: ⚠️ sample-photo.jpg 는 **합성 이미지**다 (scripts/make_fixture_photo.py).
+#:    실사진을 커밋하면 재배포가 되고, 사람이 찍힌 사진은 히스토리에 영구히
+#:    남는다. 진단 품질은 라벨 맵이 결정하므로 배선 검증에는 이걸로 충분하다.
+#:    `--live-llm` 으로 진단문 품질을 볼 때만 실사진이 필요한데, 그건 각자
+#:    로컬에 두고 쓴다 (커밋하지 않는다).
 _FIXTURES = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 _SAMPLE_PHOTO = _FIXTURES / "sample-photo.jpg"
 _SAMPLE_MAP = _FIXTURES / "sample-map.png"

@@ -10,8 +10,9 @@
     2) Supabase Storage 버킷 4개가 있어야 한다.
        (photos / segmentations / body-parts / inbody-temp)
 
-⚠️ label_map 의 픽셀 인덱스(1~9)는 임시값이다.
-   A가 RunPod 실측값을 공유하면 COMPARABLE_PARTS 의 pixel_value 컬럼만 교체한다.
+⚠️ **여기서 만드는 데이터는 전부 가짜다.** 사각형을 그린 것이지 사람 몸이 아니다.
+   진단 품질·정확도 평가에 쓰면 안 되고, 용도는 API 배선과 잡 흐름 확인뿐이다.
+   품질 확인은 실제 사진과 실제 추론으로만 한다.
 """
 
 import io
@@ -36,9 +37,13 @@ PHOTO_W, PHOTO_H = 400, 600  # 더미 사진 해상도
 
 # (class_name, pixel_value, bbox_x, bbox_y, bbox_w, bbox_h)
 #
-# pixel_value 는 Sapiens2 alpha 순서의 **실측 확정값**이다 (PR #7, 2026-08-13).
-# alpha = goliath 28개의 index 2 자리에 Eyeglasses 가 끼어들어 그 이후가 +1 밀린 것.
-#   → app/services/sapiens_labels.py 의 VERIFIED_ORDER 가 유일한 출처
+# ⚠️ **이 파일의 데이터는 전부 가짜다.** 사각형 몇 개를 그린 것이고 사람 몸이
+#    아니다. 픽셀 수·bbox·인바디 수치 어느 것도 실제 측정이 아니므로 진단 품질
+#    평가에 쓰면 안 된다. 용도는 API 배선·잡 흐름 확인뿐이다.
+#
+# pixel_value 만은 Sapiens2 의 클래스 인덱스와 맞춰 둔다. 모델이 Torso 를 22 번으로
+# 내보내는데 픽스처가 1 번으로 넣으면, 이걸로 검증한 코드가 실제 추론에서 어긋난다.
+#   → app/services/sapiens_labels.py 의 LABEL_NAMES 가 유일한 출처
 #
 # ⚠️ 여기가 라벨 값을 하드코딩하는 **유일한 곳**이다. 런타임 코드는 절대 이러지
 #    않는다 — segmentation.label_map 을 DB 에서 읽는다. 더미 픽스처는 DB 에 넣을

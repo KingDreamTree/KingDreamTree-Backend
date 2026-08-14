@@ -312,14 +312,22 @@ export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
 export function createHoldGate(criteria) {
   const need = requireCriteria(criteria).n_hold ?? 15;
   let streak = 0;
-  return (ok) => {
+
+  const gate = (ok) => {
     streak = ok ? streak + 1 : 0;
+    gate.progress = Math.min(1, streak / need);
     if (streak >= need) {
       streak = 0; // 한 번 찍고 나면 다시 쌓는다
+      gate.progress = 0;
       return true;
     }
     return false;
   };
+
+  /** 0~1. 화면에 "곧 찍힙니다" 막대를 그릴 때 쓴다. */
+  gate.progress = 0;
+  gate.n_hold = need;
+  return gate;
 }
 
 // --------------------------------------------------------------------------

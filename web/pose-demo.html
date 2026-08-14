@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>자세 판정 체험</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #EDEFF1; --card: #fff; --ink: #14181C; --muted: #66727A; --rule: #D5DBDF;
+    --ok: #1D6547; --okbg: #DCEAE3; --bad: #A32E1E; --badbg: #F5DFDA;
+    --warn: #7E5A11; --warnbg: #F0E7D0; --accent: #1C5F5A;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0F1316; --card:#171D21; --ink:#E3E9EC; --muted:#8794 9E; --muted:#87949E;
+            --rule:#263036; --ok:#5FB68C; --okbg:#143024; --bad:#E17F65; --badbg:#371C16;
+            --warn:#CFA349; --warnbg:#322611; --accent:#62B3AC; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.6 system-ui,"Malgun Gothic",sans-serif; padding:20px; }
+  .wrap { max-width:1080px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+  h1 { font-size:22px; margin:0; letter-spacing:-.02em; }
+  .sub { color:var(--muted); font-size:14px; margin:0; }
+
+  .bar { background:var(--card); border:1px solid var(--rule); padding:12px 16px;
+         display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; padding:8px 14px; border:1px solid var(--rule);
+           background:var(--card); color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  input[type=text] { font:inherit; padding:7px 10px; border:1px solid var(--rule);
+                     background:var(--card); color:var(--ink); width:260px; }
+
+  #status { padding:10px 16px; font-size:14px; }
+  #status.ok { background:var(--okbg); color:var(--ok); }
+  #status.bad { background:var(--badbg); color:var(--bad); }
+  #status.warn { background:var(--warnbg); color:var(--warn); }
+
+  .grid { display:grid; grid-template-columns: minmax(0,1.35fr) minmax(280px,1fr); gap:16px; }
+  @media (max-width:860px) { .grid { grid-template-columns:1fr; } }
+
+  .stage { position:relative; background:#000; aspect-ratio:3/4; overflow:hidden; }
+  .stage video, .stage canvas { position:absolute; inset:0; width:100%; height:100%; }
+  .stage video { object-fit:cover; }
+  .mirror { transform: scaleX(-1); }
+
+  .guide { position:absolute; left:0; right:0; bottom:0; padding:14px 16px;
+           background:rgba(0,0,0,.62); color:#fff; font-size:19px; font-weight:700; }
+  .hold { position:absolute; left:0; right:0; bottom:0; height:4px; background:#5FB68C;
+          width:0%; transition:width .05s linear; }
+
+  .panel { background:var(--card); border:1px solid var(--rule); padding:16px;
+           display:flex; flex-direction:column; gap:14px; }
+  .metric { display:flex; flex-direction:column; gap:5px; }
+  .metric .top { display:flex; justify-content:space-between; align-items:baseline; }
+  .metric .nm { font-weight:700; font-size:14px; }
+  .metric .vl { font-family:Consolas,monospace; font-size:20px; font-variant-numeric:tabular-nums; }
+  .metric .ds { font-size:12px; color:var(--muted); }
+  .track { height:8px; background:var(--rule); position:relative; }
+  .fill { height:100%; background:var(--ok); }
+  .fill.bad { background:var(--bad); }
+  .mark { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--ink); opacity:.55; }
+
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td { padding:3px 0; }
+  td.j { color:var(--muted); }
+  td.d { font-family:Consolas,monospace; text-align:right; width:56px; font-variant-numeric:tabular-nums; }
+  td.b { width:45%; }
+  .jbar { height:6px; background:var(--rule); }
+  .jfill { height:100%; background:var(--ok); }
+  .jfill.mid { background:var(--warn); }
+  .jfill.bad { background:var(--bad); }
+
+  .hint { background:var(--card); border:1px solid var(--rule); padding:14px 16px; font-size:14px; }
+  .hint h3 { margin:0 0 8px; font-size:14px; }
+  .hint ul { margin:0; padding-left:18px; display:flex; flex-direction:column; gap:5px; }
+  .hint b { color:var(--accent); }
+  code { font-family:Consolas,monospace; font-size:.88em; background:var(--bg);
+         border:1px solid var(--rule); padding:1px 5px; }
+  #shot { max-width:160px; border:1px solid var(--rule); display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div>
+    <h1>자세 판정 체험</h1>
+    <p class="sub">웹캠으로 <code>web/pose-score.js</code> 를 실제로 돌려봅니다. 판정 기준은 서버에서 받아옵니다.</p>
+  </div>
+
+  <div id="status" class="warn">준비 중…</div>
+
+  <div class="bar">
+    <label>API 주소 <input type="text" id="api" value="http://localhost:8000/api/v1"></label>
+    <button id="connect" class="primary">기준 받아오기</button>
+    <button id="start" disabled>카메라 켜기</button>
+    <button id="setref" disabled>지금 자세를 레퍼런스로</button>
+    <label style="font-size:13px"><input type="checkbox" id="mirror" checked> 화면만 좌우 반전</label>
+  </div>
+
+  <div class="grid">
+    <div class="stage" id="stage">
+      <video id="video" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div class="guide" id="guide">카메라를 켜주세요</div>
+      <div class="hold" id="holdbar"></div>
+    </div>
+
+    <div class="panel">
+      <div class="metric">
+        <div class="top"><span class="nm">자세 (P)</span><span class="vl" id="pv">–</span></div>
+        <div class="track"><div class="fill" id="pf" style="width:0%"></div><div class="mark" id="pm"></div></div>
+        <div class="ds" id="pd">팔다리·몸통이 가리키는 방향의 일치도</div>
+      </div>
+      <div class="metric">
+        <div class="top"><span class="nm">거리 (F)</span><span class="vl" id="fv">–</span></div>
+        <div class="track"><div class="fill" id="ff" style="width:0%"></div><div class="mark" id="fm"></div></div>
+        <div class="ds" id="fd">몸통 길이 비율. 유도선 미달은 안내만, 거부선 미달만 막힘</div>
+      </div>
+      <div class="metric">
+        <div class="top"><span class="nm">정면성 (R)</span><span class="vl" id="rv">–</span></div>
+        <div class="track"><div class="fill" id="rf" style="width:0%"></div><div class="mark" id="rm"></div></div>
+        <div class="ds">어깨폭 ÷ 몸통길이 의 차이. 낮을수록 정면</div>
+      </div>
+
+      <div>
+        <div class="nm" style="font-weight:700;font-size:14px;margin-bottom:6px">관절별 차이</div>
+        <table id="joints"><tbody></tbody></table>
+      </div>
+
+      <div style="font-size:13px;color:var(--muted)" id="meta">–</div>
+      <img id="shot" alt="자동 촬영된 프레임">
+    </div>
+  </div>
+
+  <div class="hint">
+    <h3>이걸 해보세요 — 산식이 무엇에 반응하는지 바로 보입니다</h3>
+    <ul>
+      <li><b>옆으로 걸어보세요</b> → 자세 점수가 <b>안 변합니다</b>. 방향만 보기 때문입니다 (좌표를 비교했다면 여기서 떨어집니다)</li>
+      <li><b>뒤로 물러났다 앞으로</b> → 자세는 그대로, <b>거리(F)만</b> 움직입니다</li>
+      <li><b>한쪽 팔만 들어보세요</b> → 그 관절 막대만 길어지고 점수가 조금 깎입니다</li>
+      <li><b>팔을 크게 휘둘러 60°를 넘겨보세요</b> → 나머지가 다 맞아도 <b>0점</b>이 됩니다</li>
+      <li><b>몸을 옆으로 돌려보세요</b> → 각도는 거의 그대로인데 <b>정면성(R)만</b> 치솟습니다</li>
+      <li><b>자세를 맞추고 가만히</b> → 아래 초록 막대가 차오르고 자동 촬영됩니다</li>
+    </ul>
+  </div>
+
+  <div class="hint">
+    <h3>여는 방법</h3>
+    <ul>
+      <li>이 폴더를 서버로 띄웁니다 — <code>python -m http.server 5500 -d web</code></li>
+      <li>브라우저에서 <code>http://localhost:5500/pose-demo.html</code></li>
+      <li>다른 터미널에서 API 서버 — <code>uvicorn app.main:app --reload</code></li>
+    </ul>
+  </div>
+</div>
+
+<script type="module">
+import { evaluate, createHoldGate, fetchCriteria, IDX, SEGMENTS } from "./pose-score.js";
+
+const $ = (id) => document.getElementById(id);
+const status = $("status");
+const setStatus = (msg, kind = "warn") => { status.textContent = msg; status.className = kind; };
+
+let criteria = null, landmarker = null, refLm = null, hold = null, running = false;
+
+// ── 1. 서버에서 기준 받아오기 ────────────────────────────────────────────
+$("connect").onclick = async () => {
+  try {
+    setStatus("기준을 받아오는 중…", "warn");
+    criteria = await fetchCriteria($("api").value.trim());
+    hold = createHoldGate(criteria);
+    $("pm").style.left = criteria.threshold + "%";
+    $("fm").style.left = (criteria.f_min * 100) + "%";
+    $("rm").style.left = (criteria.r_max * 100) + "%";
+    $("pd").textContent = `통과선 ${criteria.threshold}점 · 한 관절이라도 ${criteria.hard_tol_deg}° 넘으면 0점`;
+    $("fd").textContent = `유도선 ${criteria.f_min} · 거부선 ${criteria.f_hard ?? "-"} (거부선 미만일 때만 서버가 막습니다)`;
+    setStatus(`기준을 받았습니다 — ${JSON.stringify(criteria)}`, "ok");
+    $("start").disabled = false;
+  } catch (e) {
+    setStatus(
+      `기준을 받지 못했습니다: ${e.message}\n` +
+      `API 서버가 켜져 있는지 확인하세요 — uvicorn app.main:app --reload`, "bad");
+  }
+};
+
+// ── 2. 카메라 + MediaPipe ────────────────────────────────────────────────
+$("start").onclick = async () => {
+  $("start").disabled = true;
+  try {
+    setStatus("MediaPipe 를 내려받는 중… (처음 한 번, 몇 초 걸립니다)", "warn");
+    const { FilesetResolver, PoseLandmarker } = await import(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14"
+    );
+    const vision = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
+    );
+    landmarker = await PoseLandmarker.createFromOptions(vision, {
+      baseOptions: {
+        modelAssetPath:
+          "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+        delegate: "GPU",
+      },
+      runningMode: "VIDEO",
+      numPoses: 2,          // 여러 명 감지를 보여주기 위해 2
+    });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 960, height: 1280, facingMode: "user" },
+    });
+    const v = $("video");
+    v.srcObject = stream;
+    await v.play();
+
+    running = true;
+    setStatus("카메라가 켜졌습니다. 전신이 나오게 서서 “지금 자세를 레퍼런스로”를 누르세요.", "ok");
+    $("setref").disabled = false;
+    requestAnimationFrame(loop);
+  } catch (e) {
+    setStatus(`카메라를 켜지 못했습니다: ${e.message}`, "bad");
+    $("start").disabled = false;
+  }
+};
+
+$("mirror").onchange = (e) => $("stage").classList.toggle("mirror", e.target.checked);
+$("stage").classList.add("mirror");
+
+let liveLm = null, personCount = 0;
+$("setref").onclick = () => {
+  if (!liveLm) return;
+  // ⚠️ 깊은 복사. 다음 프레임에 덮어써지면 자기 자신과 비교하게 된다.
+  refLm = liveLm.map((p) => ({ ...p }));
+  setStatus("레퍼런스를 잡았습니다. 이제 움직여보세요 — 아래 안내를 보세요.", "ok");
+};
+
+// ── 3. 매 프레임 ─────────────────────────────────────────────────────────
+const ctx = $("overlay").getContext("2d");
+
+function draw(lm, w, h) {
+  const c = $("overlay");
+  if (c.width !== w) { c.width = w; c.height = h; }
+  ctx.clearRect(0, 0, w, h);
+  if (!lm) return;
+
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "rgba(95,182,140,.95)";
+  for (const [, a, b] of SEGMENTS) {
+    ctx.beginPath();
+    ctx.moveTo(lm[a].x * w, lm[a].y * h);
+    ctx.lineTo(lm[b].x * w, lm[b].y * h);
+    ctx.stroke();
+  }
+  // 몸통
+  const mid = (p, q) => [((p.x + q.x) / 2) * w, ((p.y + q.y) / 2) * h];
+  ctx.strokeStyle = "rgba(255,255,255,.8)";
+  ctx.beginPath();
+  ctx.moveTo(...mid(lm[IDX.shoulderL], lm[IDX.shoulderR]));
+  ctx.lineTo(...mid(lm[IDX.hipL], lm[IDX.hipR]));
+  ctx.stroke();
+
+  ctx.fillStyle = "rgba(255,255,255,.9)";
+  for (const i of Object.values(IDX)) {
+    ctx.beginPath();
+    ctx.arc(lm[i].x * w, lm[i].y * h, 4, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+const JOINT_KO = {
+  upperArmL: "왼팔 상완", lowerArmL: "왼팔 전완",
+  upperArmR: "오른팔 상완", lowerArmR: "오른팔 전완",
+  upperLegL: "왼쪽 허벅지", lowerLegL: "왼쪽 종아리",
+  upperLegR: "오른쪽 허벅지", lowerLegR: "오른쪽 종아리",
+  torso: "몸통 기울기",
+};
+
+function loop() {
+  if (!running) return;
+  const v = $("video");
+  if (v.readyState >= 2) {
+    const res = landmarker.detectForVideo(v, performance.now());
+    personCount = res.landmarks.length;
+    liveLm = res.landmarks[0] ?? null;
+    draw(liveLm, v.videoWidth, v.videoHeight);
+
+    if (refLm && liveLm) {
+      const r = evaluate(refLm, liveLm, criteria, { multiPerson: personCount > 1 });
+      render(r);
+      const fired = hold(r.pass);
+      $("holdbar").style.width = (fired ? 1 : hold.progress) * 100 + "%";
+      if (fired) capture();
+    } else {
+      $("guide").textContent = refLm ? "사람이 보이지 않습니다" : "“지금 자세를 레퍼런스로”를 누르세요";
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+function render(r) {
+  $("guide").textContent = r.message + (r.blocked ? "  (지금 올리면 서버가 거부합니다)" : "");
+  $("guide").style.background = r.pass ? "rgba(29,101,71,.85)"
+                              : r.blocked ? "rgba(163,46,30,.85)" : "rgba(126,90,17,.85)";
+
+  const set = (v, f, val, pct, bad) => {
+    $(v).textContent = val;
+    $(f).style.width = Math.max(0, Math.min(100, pct)) + "%";
+    $(f).className = "fill" + (bad ? " bad" : "");
+  };
+  set("pv", "pf", r.pose_similarity.toFixed(1), r.pose_similarity, r.pose_similarity < criteria.threshold);
+  set("fv", "ff", r.framing_score.toFixed(3), r.framing_score * 100, r.framing_score < (criteria.f_hard ?? 0.4));
+  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100, r.facing_delta > criteria.r_max);
+
+  const rows = Object.entries(r.detail.diffs)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, d]) => {
+      const cls = d > criteria.hard_tol_deg ? "bad" : d > criteria.tol_deg / 2 ? "mid" : "";
+      const w = Math.min(100, (d / criteria.hard_tol_deg) * 100);
+      return `<tr><td class="j">${JOINT_KO[k] ?? k}</td>
+        <td class="b"><div class="jbar"><div class="jfill ${cls}" style="width:${w}%"></div></div></td>
+        <td class="d">${d.toFixed(0)}°</td></tr>`;
+    }).join("");
+  $("joints").querySelector("tbody").innerHTML = rows;
+
+  $("meta").textContent =
+    `쓰인 각도 ${r.detail.usedAngles}개 · 몸통 크기비 ${r.detail.torsoRatio} · 사람 ${personCount}명` +
+    (r.blockReason ? ` · 서버 거부 사유 ${r.blockReason}` : "");
+}
+
+function capture() {
+  const v = $("video");
+  const c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.getContext("2d").drawImage(v, 0, 0);
+  const img = $("shot");
+  img.src = c.toDataURL("image/jpeg", 0.85);
+  img.style.display = "block";
+  setStatus("자동 촬영됨 — 조건을 만족한 상태가 n_hold 프레임 이어졌습니다.", "ok");
+}
+</script>
+</body>
+</html>

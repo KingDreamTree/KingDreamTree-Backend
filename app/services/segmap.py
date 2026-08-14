@@ -153,6 +153,32 @@ def apply_clothing_merge(
     return _merge(labels, label_map, targets)
 
 
+def merge_map(
+    seg_map: Image.Image,
+    label_map: dict[str, str],
+    targets: set[str],
+) -> Image.Image:
+    """오버레이용 병합 맵 — **A 의 통계와 같은 병합 함수를 태운 결과**.
+
+    ⚠️ 실연동(2026-08-14)에서 잡힌 불일치의 수정이다: A 파이프라인은 병합 **후**
+       픽셀로 통계·is_valid 를 저장하는데, B 오버레이는 원본 맵을 그대로 칠했다.
+       그 결과 VLM 이 "소매 끝 조각만 칠해진 상완 그림"과 "병합 후 수치"를 동시에
+       받았다 — 그림과 숫자가 서로 다른 몸을 말하고 있었다.
+       `apply_clothing_merge` 가 정의만 있고 **호출처가 0곳**이었던 것이 원인
+       (A 발견). 이 함수가 오버레이 경로에서 그 병합을 실제로 태운다.
+
+    PIL(L 모드) ↔ numpy 변환만 이 함수의 몫이다. 병합 로직 자체는 part_merge
+    하나뿐이라는 원칙은 그대로다.
+    """
+    import numpy as np
+
+    labels = np.asarray(seg_map, dtype=np.uint8)
+    merged, absorbed = apply_clothing_merge(labels, label_map, targets)
+    if absorbed:
+        log.info("오버레이 병합 — 옷에서 흡수: %s", absorbed)
+    return Image.fromarray(merged, mode="L")
+
+
 # --------------------------------------------------------------------------- #
 # 좌표 변환 — ⚠️ 여기가 조용히 틀리는 지점
 # --------------------------------------------------------------------------- #

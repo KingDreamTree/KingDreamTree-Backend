@@ -31,7 +31,7 @@ from PIL import Image
 
 from app.config import settings
 from app.schemas.enums import DomainStatus, JobKind, PhotoKind, ScoreSource, VlmInputType
-from app.services import diagnosis_repo, inbody_repo, scoring, segmap, storage, vlm
+from app.services import db, diagnosis_repo, inbody_repo, scoring, segmap, storage, vlm
 from app.worker import queue
 from app.worker.registry import register
 
@@ -64,7 +64,15 @@ def _load_side(context: dict[str, Any], kind: PhotoKind) -> tuple[bytes, bytes, 
     map_bytes = storage.download(seg["storage_bucket"], seg["map_path"])
 
     image = segmap.fit_for_vlm(Image.open(io.BytesIO(photo_bytes)).convert("RGB"))
-    seg_map = segmap.load_map(map_bytes)
+
+    # ⚠️ 오버레이는 **병합된 맵**으로 칠한다 (segmap.merge_map docstring 참고).
+    #    A 가 저장하는 통계·is_valid 가 병합 후 픽셀 기준이므로, 그림도 같은
+    #    병합을 태워야 VLM 이 받는 그림과 수치가 같은 몸을 말한다.
+    seg_map = segmap.merge_map(
+        segmap.load_map(map_bytes),
+        seg["label_map"],
+        {p["class_name"] for p in parts},
+    )
 
     overlay, painted = segmap.build_overlay(
         photo=image,
@@ -245,6 +253,22 @@ def _to_diagnosis_rows(
 # --------------------------------------------------------------------------- #
 
 
+def _excluded_parts(session_id: UUID, diagnosed: set[str]) -> list[str]:
+    """비교 대상 마스터에는 있는데 **진단 행조차 없는** 부위.
+
+    미검출(사진에 안 잡힘)이나 교집합 탈락(한쪽만 유효)으로 F08 에 들어가지도
+    못한 부위들이다. F09 에 알려주지 않으면 LLM 이 본 적 없는 부위를 근거로
+    쓴다 — 실연동에서 "하체 균형이 좋습니다"가 나왔는데 하체는 검출조차
+    안 된 상태였다 (A 발견).
+    """
+    try:
+        master = set(db.comparable_class_names())
+    except Exception:  # noqa: BLE001 — 부가 정보다. 실패해도 진단은 진행한다.
+        log.warning("비교 대상 마스터를 읽지 못해 excluded 를 생략합니다.")
+        return []
+    return sorted(master - diagnosed)
+
+
 def _for_overall(row: dict[str, Any]) -> dict[str, Any]:
     """part_diagnosis 행 → F09 프롬프트 입력.
 
@@ -291,7 +315,14 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     score = scored["score"] if scored else None
 
     result = asyncio.run(
-        vlm.diagnose_overall(results=overall_input, failed=failed, inbody=inbody, score=score)
+        vlm.diagnose_overall(
+            results=overall_input,
+            failed=failed,
+            inbody=inbody,
+            score=score,
+            # 검출조차 안 된 비교 대상 — 없으면 LLM 이 본 적 없는 부위를 칭찬한다.
+            excluded=_excluded_parts(session_id, {r["class_name"] for r in rows}),
+        )
     )
 
     diagnosis_repo.upsert_overall(

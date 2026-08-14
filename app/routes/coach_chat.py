@@ -148,10 +148,9 @@ async def apply(session: OwnedSession, body: CoachApplyRequest) -> CoachApplyRes
     days = routine_repo.list_days(month_routine_id)
     catalog = exercise_catalog.load_catalog()
     candidates = coach_chat._candidates_by_group(days, catalog)
-    allowed_refs = {c["exercise_ref"] for group in candidates.values() for c in group}
 
     # 히스토리에서 도구 호출을 **재수집·재검증** — 클라이언트를 믿지 않는 지점.
-    calls, finalized = coach_chat.collect_tool_calls(body.messages, days, allowed_refs)
+    calls, finalized = coach_chat.collect_tool_calls(body.messages, days, candidates)
     if finalized is None:
         raise invalid_request("대화가 아직 마무리되지 않았습니다 (finalize 없음).")
 

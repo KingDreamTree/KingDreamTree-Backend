@@ -245,6 +245,7 @@ def criteria() -> dict[str, float | int]:
         "hard_tol_deg": settings.pose_hard_tol_deg,
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
+        "f_hard": settings.framing_hard_min,
         "r_max": settings.pose_facing_max_delta,
         "min_visible_angles": settings.pose_min_visible_angles,
         "min_visibility": settings.pose_min_visibility,
@@ -264,11 +265,14 @@ def judge_user_photo(
 
     산식은 docs/pose-scoring.md 참조. 여기서는 **임계값 비교만** 한다.
 
-    ⚠️ **순서가 의미를 갖는다.** 프레이밍이 깨졌거나 몸이 돌아간 상태의 자세 점수는
-       믿을 수 없다. 그리고 안내 문구가 각각 달라야 한다 — 사용자가 취해야 할
-       행동이 다르기 때문이다.
-         FRAMING "몸이 다 나오게 서주세요" / FACING "정면을 보고 서주세요"
+    ⚠️ **순서가 의미를 갖는다.** 몸이 돌아간 상태의 자세 점수는 믿을 수 없고,
+       안내 문구가 각각 달라야 한다 — 사용자가 취해야 할 행동이 다르기 때문이다.
+         FRAMING "비슷한 거리에서 다시" / FACING "정면을 보고 서주세요"
          POSE    "포즈를 맞춰주세요"
+
+    ⚠️ 거리(framing)는 **f_hard 로만 막는다.** f_min 은 촬영 화면 유도용이다.
+       거리 차이는 몸통 길이 정규화로 상쇄되므로, 유도선에서 막으면 고쳐도
+       이득이 없는 이유로 사용자를 돌려보내게 된다. 자세한 근거는 config.py 참조.
 
     ⚠️ facing_delta 기본값이 0.0 인 것은 **미전달 시 통과**를 뜻한다.
        프론트가 아직 이 값을 안 보내는 동안 업로드가 막히면 안 된다.
@@ -288,12 +292,20 @@ def judge_user_photo(
         "facing_delta": facing_delta,
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
+        "f_hard": settings.framing_hard_min,
         "r_max": settings.pose_facing_max_delta,
     }
 
-    if framing_score < settings.framing_f_min:
+    # ⚠️ **거리는 유도 기준(f_min)이 아니라 거부 기준(f_hard)으로 막는다.**
+    #    부위 굵기를 몸통 길이로 나눠 비교하므로 거리 차이는 계산에서 상쇄된다 —
+    #    2배 가까이 서면 팔뚝도 2배, 몸통도 2배라 비율은 같다.
+    #    거리가 진짜 문제가 되는 두 경우는 각각 다른 곳이 잡는다:
+    #      원근 왜곡 → 2차 검사 PERSPECTIVE_MISMATCH / 픽셀 부족 → 부위별 TOO_SMALL
+    #    여기서 f_min 으로 막으면 **고쳐도 이득이 없는 이유로 사용자를 돌려보낸다.**
+    #    f_min 은 촬영 화면 유도에만 쓴다(GET /pose-criteria 로 내려준다).
+    if framing_score < settings.framing_hard_min:
         raise pose_mismatch(
-            "몸이 화면에 다 나오도록 서주세요.",
+            "레퍼런스와 촬영 거리가 너무 다릅니다. 비슷한 거리에서 다시 촬영해주세요.",
             reason="FRAMING",
             detail=detail,
         )

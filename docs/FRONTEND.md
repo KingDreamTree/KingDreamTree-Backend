@@ -103,7 +103,7 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 
 { "tol_deg": 45, "hard_tol_deg": 60, "threshold": 70,
-  "f_min": 0.65, "r_max": 0.25,
+  "f_min": 0.65, "f_hard": 0.40, "r_max": 0.25,
   "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 15 }
 ```
 
@@ -255,7 +255,7 @@ POST /sessions                  → 201, 새 session_id
 | reason | 사용자가 해야 할 행동 | 예시 문구 |
 |---|---|---|
 | `POSE` | 자세를 바꿔야 함 | "레퍼런스와 포즈를 맞춰주세요" |
-| `FRAMING` | 카메라와의 거리·위치를 바꿔야 함 | "몸이 화면에 다 나오도록 서주세요" |
+| `FRAMING` | 촬영 거리가 너무 다름 | "비슷한 거리에서 다시 촬영해주세요" |
 | `FACING` | 몸이 옆으로 돌아감 | "정면을 보고 서주세요" |
 | `NO_PERSON` | 사람이 안 잡힘 | "전신이 보이도록 다시 촬영해주세요" |
 

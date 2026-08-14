@@ -85,7 +85,12 @@ def _inbody_for(session_id: UUID) -> tuple[dict[str, Any] | None, str]:
     row = inbody_repo.latest_done(session_id)
     if row is not None:
         return inbody_repo.to_prompt_payload(row), "USED"
-    if not queue.all_settled(session_id, JobKind.OCR_INBODY):
+
+    # ⚠️ queue.all_settled() 를 쓰다가 그 함수가 제거되면서 **인바디 없는 사용자의
+    #    진단이 통째로 죽었다** (AttributeError). 인바디가 있으면 위에서 반환해
+    #    이 줄을 안 타므로, 조각 테스트로는 안 잡히고 전 구간 스모크에서 드러났다.
+    #    find_open 은 좀비 잡을 걸러주므로 오히려 이쪽이 정확하다.
+    if queue.find_open(session_id, JobKind.OCR_INBODY) is not None:
         return None, "SKIPPED_OCR_IN_PROGRESS"
     return None, "NONE"
 

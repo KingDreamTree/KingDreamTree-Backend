@@ -104,19 +104,34 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
         ],
     )
 
-    valid = [p for p in result.parts if p.is_valid]
     invalid_comparable = [
         {"class_name": p.class_name, "reason": p.invalid_reason}
         for p in result.parts
         if not p.is_valid and p.class_name in comparable
     ]
 
+    valid_comparable = sum(1 for p in result.parts if p.is_valid and p.class_name in comparable)
+    clothing = {
+        p.class_name: p.clothing_pixel_count for p in result.parts if p.clothing_pixel_count
+    }
+
     # 프론트가 세그 완료 즉시 "왼쪽 종아리는 노출이 부족합니다" 안내를 낼 수 있게 한다.
+    #
+    # ⚠️ 임계값 판단을 프론트에 흩뿌리지 않는다 — retake_recommended 를 서버가 내려준다.
+    #    pose.py 의 "측정은 프론트, 정책은 서버" 규약과 같은 취지다.
+    #
+    # ⚠️ valid_comparable 은 **옷 병합 후** 기준이라, 옷을 입어도 채워진다.
+    #    실제로 살이 얼마나 드러났는지는 valid_comparable_raw 로만 알 수 있다.
+    #    둘의 차이가 곧 "옷이 얼마나 가렸는가"다.
     return {
         "segmentation_id": created["segmentation_id"],
         "photo_kind": kind,
         "detected": result.detected_class_count,
-        "valid_comparable": len(valid),
+        "valid_comparable": valid_comparable,
+        "valid_comparable_raw": result.valid_comparable_raw,
+        "retake_recommended": valid_comparable < settings.min_comparable_parts,
+        "min_comparable_parts": settings.min_comparable_parts,
+        "clothing_absorbed": clothing,
         "invalid": invalid_comparable,
         "inference_ms": result.inference_ms,
         "model_version": result.model_version,

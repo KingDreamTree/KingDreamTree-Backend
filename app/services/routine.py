@@ -78,7 +78,9 @@ _PAIN_TERMS = (
 )
 
 
-def _mock_patch(feedback_text: str) -> dict[str, Any]:
+def _mock_patch(
+    feedback_text: str, current_routine: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """USE_MOCK 용 패치 결과.
 
     ⚠️ 고정 상수를 돌려주지 않는다. 통증 피드백인데 금기가 안 잡히는 사고를
@@ -95,12 +97,25 @@ def _mock_patch(feedback_text: str) -> dict[str, Any]:
         }
 
     has_pain = any(term in text for term in _PAIN_TERMS)
-    changes: list[dict[str, Any]] = [
-        {
-            "function": "adjust_intensity",
-            "args": {"reason": "사용자 피드백 반영 (mock)", "delta_sets": -1},
-        }
-    ]
+
+    # ⚠️ 실제 루틴의 Day·운동 이름을 써야 검증(validate_tool_call)을 통과한다.
+    #    고정 문자열을 쓰면 mock 경로에서만 조용히 거부돼 적용이 0건이 된다.
+    day = (current_routine or {}).get("days", [{}])[0] if current_routine else {}
+    target = next((e for e in day.get("exercises", []) if e.get("exercise_kind") != "CARDIO"), None)
+    changes: list[dict[str, Any]] = []
+    if target:
+        changes.append(
+            {
+                "function": "adjust_intensity",
+                "args": {
+                    "day_order": day.get("day_order", 1),
+                    "exercise_name": target["name"],
+                    "sets_delta": -1,
+                    "reps_delta": 0,
+                    "reason": "사용자 피드백 반영 (mock)",
+                },
+            }
+        )
     added: list[dict[str, Any]] = []
     if has_pain:
         changes.append(
@@ -426,13 +441,20 @@ async def patch_routine(
     current_routine: dict[str, Any],
     feedback_text: str,
     contraindications: list[dict],
+    candidates_by_group: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     """피드백을 Function Calling으로 해석해 루틴 변경 오퍼레이션 목록을 반환한다.
+
+    ⚠️ 반환된 changes 는 **아직 적용 전**이다. 호출부(핸들러)가
+       coach_chat.apply_changes_to_days 로 적용하고 새 버전을 만든다 —
+       F12-b 와 같은 경로다.
 
     Args:
         current_routine: 현재 활성 루틴 전체 (day_routine + exercises 포함)
         feedback_text: workout_log.feedback_text
         contraindications: analysis_session.contraindications (기존 누적 금기)
+        candidates_by_group: 근육군별 교체 후보. replace_exercise 가 이 안에서만
+                             고르게 한다 (없으면 교체 제안이 전부 거부된다)
 
     Returns:
         {
@@ -443,7 +465,7 @@ async def patch_routine(
         }
     """
     if settings.use_mock:
-        return dict(_mock_patch(feedback_text))
+        return dict(_mock_patch(feedback_text, current_routine))
 
     from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
 

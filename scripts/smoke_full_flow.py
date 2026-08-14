@@ -333,19 +333,43 @@ def main() -> int:  # noqa: C901 — 단계별 시나리오라 한 줄기로 읽
         check("통증 피드백 → 금기 등록", patch.get("contraindications_added", 0) > 0, str(patch))
         check("금기가 세션에 누적", bool(contra), str(contra))
 
-        # ⚠️ 실제 운동 교체는 아직 미구현이다 (새 버전 정책 미확정).
-        #    여기서 "빠졌는지"를 검사하면 영원히 실패하므로, 상태만 알린다.
-        warn("통증 부위 운동 제외는 미구현", "해석·이력·금기까지만 동작 (routine.py 주석)")
+        # 2026-08-14: 해석만 하던 것을 **실제 적용**으로 바꿨다 (F12-b 와 같은 경로).
+        patched_id = UUID(str(patch["month_routine_id"]))
+        if patch.get("no_change"):
+            warn("적용할 루틴 변경 없음", "해석·금기만 기록됨")
+        else:
+            check(
+                "새 FEEDBACK 버전 생성",
+                patched_id != month_routine_id,
+                f"v{patch.get('version')}",
+            )
+            new_active = routine_repo.get_active(session_id)
+            check(
+                "새 버전이 활성",
+                bool(new_active) and str(new_active["month_routine_id"]) == str(patched_id),
+            )
+            check(
+                "이전 버전 Day 보존",
+                len(routine_repo.list_days(month_routine_id)) == 3,
+            )
+            check(
+                "새 버전 Day 수 동일",
+                len(routine_repo.list_days(patched_id)) == 3,
+            )
 
         # ── 8. 실패 시 이전 버전 유지 ───────────────────────────────────────
         print("\n8. 생성 실패 시 이전 버전 보호")
+        # ⚠️ 기준은 "처음 만든 루틴"이 아니라 **지금 활성인 버전**이다.
+        #    피드백이 새 버전을 활성화하므로 month_routine_id 로 비교하면 틀린다.
+        active_before = routine_repo.get_active(session_id)
         broken = routine_repo.create_routine(session_id, days_per_week=4)
         broken_id = UUID(str(broken["month_routine_id"]))
         routine_repo.update_routine(broken_id, {"status": str(DomainStatus.FAILED)})
         still = routine_repo.get_active(session_id)
         check(
             "FAILED 버전은 활성이 안 됨",
-            still and str(still["month_routine_id"]) == str(month_routine_id),
+            bool(still)
+            and str(still["month_routine_id"]) == str(active_before["month_routine_id"]),
             f"활성 v{still['version'] if still else '?'}",
         )
         check("수행 기록 보존", routine_repo.count_logs(month_routine_id) == 1)

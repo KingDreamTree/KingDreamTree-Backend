@@ -128,12 +128,79 @@ def rule_bmi_never_triggers_cut() -> None:
     check("체지방률 30% 남성 → CUT", r["mode"] == "CUT", f"basis={r['basis']}")
 
 
+def rule_sanitize_holds_under_partial_llm() -> None:
+    """LLM 선택이 **일부만** 유효할 때도 중복·상한 불변식이 유지된다.
+
+    ⚠️ 이 경로가 실제 운영 경로다. mock·전면실패는 폴백표가 통째로 쓰여서
+       자연히 정합적이지만, LLM 응답이 섞이면 미리 만든 폴백표의 중복 계산이
+       무효가 된다. 퍼징으로 같은 Day 중복 41건·주간 상한 초과 14건을 재현했다.
+    """
+    print("\n[LLM 부분 실패 시 선택 정합성]")
+    import random
+    from collections import Counter
+
+    from app.services import exercise_catalog as ec
+    from app.services import routine
+
+    try:
+        catalog = ec.load_catalog()
+    except ec.CatalogNotBuiltError as e:
+        print(f"  SKIP  {e}")
+        return
+
+    random.seed(7)
+    bad_week = bad_day = unfilled = 0
+    trials = 0
+    for n in (3, 4, 5, 6, 7):
+        for mode in ("BALANCE", "CUT"):
+            days = get_template(n, mode)
+            cands = routine._collect_candidates(days, catalog, [])
+            slots = [
+                routine._slot_id(d, i)
+                for d in days
+                for i, s in enumerate(d["slots"])
+                if s.get("kind") != "CARDIO"
+            ]
+            fillable = [s for s in slots if cands.get(s)]
+            for _ in range(200):
+                trials += 1
+                raw: dict[str, str] = {}
+                for sid in fillable:
+                    roll = random.random()
+                    if roll < 0.3:
+                        raw[sid] = "garbage-ref"  # 후보 밖
+                    elif roll < 0.9:
+                        raw[sid] = random.choice(cands[sid])["exercise_ref"]
+                    # 나머지 10% 는 아예 누락
+                final, _fixed = routine._sanitize_selections(raw, days, cands)
+
+                if len(final) != len(fillable):
+                    unfilled += 1
+                if any(v > routine.MAX_WEEKLY_REPEAT for v in Counter(final.values()).values()):
+                    bad_week += 1
+                for d in days:
+                    ids = [
+                        routine._slot_id(d, i)
+                        for i, s in enumerate(d["slots"])
+                        if s.get("kind") != "CARDIO"
+                    ]
+                    picks = [final[x] for x in ids if x in final]
+                    if len(picks) != len(set(picks)):
+                        bad_day += 1
+                        break
+
+    check(f"같은 Day 중복 없음 ({trials}시행)", bad_day == 0, f"{bad_day}건")
+    check(f"주간 동일 운동 ≤ {routine.MAX_WEEKLY_REPEAT}", bad_week == 0, f"{bad_week}건")
+    check("빈 슬롯 없음 (교정이 슬롯을 지우지 않는다)", unfilled == 0, f"{unfilled}건")
+
+
 def main() -> int:
     rule_cardio_last()
     rule_boost_per_group()
     rule_caps()
     rule_no_diagnosis_shaped_days()
     rule_bmi_never_triggers_cut()
+    rule_sanitize_holds_under_partial_llm()
 
     print()
     if _failures:

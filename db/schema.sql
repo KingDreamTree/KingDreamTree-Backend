@@ -151,6 +151,15 @@ CREATE TABLE body_part_segment (
     bbox_w           INT           NOT NULL CHECK (bbox_w > 0),
     bbox_h           INT           NOT NULL CHECK (bbox_h > 0),
     is_truncated     BOOLEAN       NOT NULL DEFAULT false,
+    -- pixel_count 중 옷에서 흡수된 픽셀 수 (app/services/part_merge.py).
+    -- ⚠️ NULL = 병합 미적용(구버전 행 또는 SEG_MERGE_CLOTHING=false)
+    --    0    = 병합 적용했고 흡수분이 없음
+    --    이 구분을 위해 NOT NULL DEFAULT 0 으로 만들지 말 것. 두 경우를 합치면
+    --    "옷을 안 입은 것"과 "병합을 안 돌린 것"을 구분할 수 없다.
+    -- ⚠️ 이 값이 크면 그 부위는 맨살이 아니라 **옷 위 실루엣**을 잰 것이다.
+    --    진단 프롬프트가 이 비율을 보고 근육 윤곽 근거로 쓸지 말지 정한다.
+    clothing_pixel_count INT       CHECK (clothing_pixel_count >= 0
+                                      AND clothing_pixel_count <= pixel_count),
     is_valid         BOOLEAN       NOT NULL,
     invalid_reason   VARCHAR(30)
                      CHECK (invalid_reason IN ('TOO_SMALL', 'TOO_SMALL_RATIO',

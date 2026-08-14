@@ -109,6 +109,17 @@
       </div>
     </div>
 
+    <div class="row" style="margin-top:14px">
+      <div class="col">
+        <label>인바디 결과지 (선택 · 여러 장 가능)</label>
+        <input type="file" id="inbody" accept="image/*" multiple>
+        <div id="inbodyinfo" class="dim">
+          없어도 전 구간이 돕니다. 넣으면 진단이 실측 수치를 인용하고,
+          루틴 모드(CUT/BALANCE)가 <b>체지방률</b>로 정해집니다.
+        </div>
+      </div>
+    </div>
+
     <div class="gate" id="gate" hidden>
       <b>자세 관문 점수</b> — 브라우저(MediaPipe)가 계산한 값입니다.
       <table style="margin-top:6px">
@@ -141,9 +152,37 @@
   <!-- 3. 세그 -->
   <div class="card step" id="s3">
     <h2>3. 세그멘테이션 결과</h2>
+
+    <div class="row" style="margin-bottom:14px">
+      <div class="col">
+        <label>레퍼런스 — 부위 오버레이</label>
+        <canvas id="ovref" style="width:100%; border-radius:6px; background:#000"></canvas>
+      </div>
+      <div class="col">
+        <label>내 사진 — 부위 오버레이</label>
+        <canvas id="ovusr" style="width:100%; border-radius:6px; background:#000"></canvas>
+      </div>
+    </div>
+    <div style="margin-bottom:6px">
+      <label style="display:inline; color:var(--tx)">
+        <input type="checkbox" id="showov" checked style="width:auto"> 색칠 보기
+      </label>
+      <span class="dim" style="margin-left:10px">
+        서버가 VLM 에 보내는 것과 같은 방식(투명도 0.42)으로 칠합니다.
+      </span>
+    </div>
+    <div id="legend" class="dim" style="margin-bottom:14px"></div>
+
     <table><thead><tr>
       <th>부위</th><th>레퍼런스</th><th>내 사진</th><th>비교 가능</th>
     </tr></thead><tbody id="segrows"></tbody></table>
+  </div>
+
+  <!-- 3.5 인바디 -->
+  <div class="card step" id="s35" hidden>
+    <h2>3.5 인바디 (OCR)</h2>
+    <div id="inbodystat" class="dim" style="margin-bottom:10px"></div>
+    <table><tbody id="inbodyrows"></tbody></table>
   </div>
 
   <!-- 4. 진단 -->
@@ -378,11 +417,64 @@ $("run").onclick = async () => {
     renderSeg(seg);
     step("s3", "done");
 
+    // 4.5) 인바디 — ⚠️ **진단보다 먼저, 그리고 끝까지 기다린다.**
+    //     서버의 진단 핸들러는 인바디를 기다리지 않는다 (사용자를 로딩 화면에
+    //     무한정 세우지 않으려고). 그래서 OCR 이 DONE 이 되기 전에 진단을 걸면
+    //     **인바디를 올렸는데 진단에 안 쓰인다.** job.result 에 inbody:"NONE"
+    //     으로 남을 뿐이라 화면에서는 조용히 빠진 것처럼 보인다.
+    const inbodyFiles = [...$("inbody").files];
+    if (inbodyFiles.length) {
+      $("s35").hidden = false;
+      step("s35", "on");
+      log(`\n[3.5] 인바디 ${inbodyFiles.length}장 업로드 → OCR`);
+      const bf = new FormData();
+      for (const f of inbodyFiles) bf.append("files", f);
+      // ⚠️ 인바디는 **선택 입력이다.** OCR 이 실패해도(결과지가 흐리거나 잘렸거나)
+      //    전 구간을 중단하면 안 된다 — 사진 두 장으로 이미 한 세그 작업까지
+      //    같이 버리게 되고, 서버 설계(인바디 없어도 진단·루틴이 완주한다)와도
+      //    어긋난다. 여기서만 경고하고 인바디 없는 경로로 계속 간다.
+      try {
+        const ib = await api("POST", `/api/v1/sessions/${SID}/inbody`, { form: bf });
+        await waitJob(ib.job_id, "OCR_INBODY");
+
+        // ⚠️ 이 목록은 {items:[...]} 가 아니라 **배열 그대로** 온다 (openapi 확인).
+        //    감싼 모양으로 가정하면 조용히 undefined 가 된다.
+        const list = await api("GET", `/api/v1/sessions/${SID}/inbody`);
+        if (!Array.isArray(list) || !list.length) throw new Error("인바디 목록이 비어 있습니다.");
+        const detail = await api("GET", `/api/v1/inbody/${list[0].inbody_id}`);
+        raw.inbody = detail;
+        renderInbody(detail);
+        step("s35", "done");
+        log(`      상태 ${detail.status} · 판독 항목 ${
+          Object.keys(detail.fields || {}).length}개`, "ok");
+      } catch (e) {
+        log(`      ⚠️ 인바디 처리 실패 — ${explain(e)}`, "warn");
+        log("         인바디 없이 계속합니다 (루틴은 BALANCE 로 나옵니다).", "warn");
+        $("inbodystat").innerHTML =
+          `<span class="bad">실패</span> <span class="dim">${e.message}</span>`;
+      }
+    } else {
+      log("\n[3.5] 인바디 없음 — 건너뜁니다 (루틴은 BALANCE 로 나옵니다)", "dim");
+    }
+
     // 5) 진단
     log("\n[4] 진단 (F08 부위별 → F09 종합)");
     const an = await api("POST", `/api/v1/sessions/${SID}/analysis`, { json: {} });
     log(`      비교 부위 ${an.part_count}개${an.reused ? " (기존 잡 재사용)" : ""}`, "dim");
-    if (an.part_job_id) await waitJob(an.part_job_id, "VLM_PART");
+    if (an.part_job_id) {
+      const pj = await waitJob(an.part_job_id, "VLM_PART");
+      // ⚠️ 인바디가 실제로 쓰였는지는 **여기서만** 알 수 있다. 진단문에 수치가
+      //    안 보여도 그게 "안 쓴 것"인지 "쓸 게 없던 것"인지 구분이 안 되므로,
+      //    핸들러가 남기는 inbody 사유(USED / NONE / …)를 그대로 보여준다.
+      const used = pj.result?.inbody;
+      if (used) {
+        const ok = used === "USED";
+        log(`      인바디 반영: ${used}`, ok ? "ok" : "warn");
+        if (!ok && inbodyFiles.length)
+          log("      ⚠️ 인바디를 올렸는데 진단에 안 쓰였습니다 — OCR 이 DONE 인지 확인하세요.",
+              "warn");
+      }
+    }
 
     // ⚠️ VLM_OVERALL 잡은 부위 진단이 끝난 **뒤에** 등록된다. 그래서 시작 응답의
     //    overall_job_id 가 비어 있을 수 있다 — 그때는 진행 API 로 완료를 본다.
@@ -406,10 +498,15 @@ $("run").onclick = async () => {
     log("\n[5] 루틴 생성");
     const rt = await api("POST", `/api/v1/sessions/${SID}/routines`,
                          { json: { exercise_days_per_week: Number($("days").value) } });
-    if (rt.job_id) await waitJob(rt.job_id, "ROUTINE_GEN");
+    // ⚠️ 모드(CUT/BALANCE)와 그 근거는 **루틴 조회 응답에 없다.** 잡 결과에만
+    //    있으므로 여기서 받아 넘긴다. 인바디를 넣은 효과가 가장 눈에 띄는 값이라
+    //    (체지방률로 CUT 이 결정된다) 화면에 반드시 보여야 한다.
+    let gen = null;
+    if (rt.job_id) gen = (await waitJob(rt.job_id, "ROUTINE_GEN")).result || null;
     const active = await api("GET", `/api/v1/sessions/${SID}/routines/active`);
     raw.routine = active;
-    renderRoutine(active);
+    raw.routine_generation = gen;
+    renderRoutine(active, gen);
     step("s5", "done");
 
     log("\n전 구간 완료", "ok");
@@ -428,6 +525,55 @@ $("reset").onclick = () => location.reload();
 // ── 렌더 ────────────────────────────────────────────────────────────────
 // ⚠️ 세그 응답은 **부위 배열이 아니다.** 사진별 맵 정보 + comparable 요약이다
 //    (SessionSegmentationResponse). 부위별 수치는 진단 단계에서 나온다.
+//: 인바디 필드 한글 이름. 서버는 영문 키로 저장하므로 화면에서만 바꾼다.
+// ⚠️ 키 이름은 inbody_repo._BODY_FIELDS 와 맞춰야 한다. 오타가 나면 영문 키가
+//    그대로 노출될 뿐 안 죽으므로 조용히 넘어간다.
+const INBODY_KO = {
+  weight: "체중(kg)", height: "신장(cm)", bmi: "BMI",
+  age: "나이", gender: "성별",
+  body_fat_percentage: "체지방률(%)", body_fat_mass: "체지방량(kg)",
+  skeletal_muscle_mass: "골격근량(kg)", fat_free_mass: "제지방량(kg)",
+  total_body_water: "체수분(L)", protein: "단백질(kg)", mineral: "무기질(kg)",
+  basal_metabolic_rate: "기초대사량(kcal)", visceral_fat_level: "내장지방 레벨",
+  waist_hip_ratio: "복부지방률",
+};
+
+//: 진단·루틴이 실제로 읽는 항목 (inbody_repo._BODY_FIELDS). 나머지는 참고값이다.
+const INBODY_USED = new Set([
+  "weight", "bmi", "body_fat_mass", "body_fat_percentage",
+  "skeletal_muscle_mass", "fat_free_mass", "age", "gender", "height",
+]);
+const SEGMENT_KO = {
+  LEFT_ARM: "왼팔", RIGHT_ARM: "오른팔", TRUNK: "몸통",
+  LEFT_LEG: "왼다리", RIGHT_LEG: "오른다리",
+};
+
+function renderInbody(d) {
+  const v = d.validation || {};
+  // ⚠️ 항등식 불일치는 **실패가 아니다.** 판독은 됐고 검증만 어긋난 것이라
+  //    INSERT 를 막지 않는다 (work-b.md). 그래서 경고로만 보여준다.
+  const bad = Object.entries(v).filter(([, ok]) => ok === false).map(([k]) => k);
+  $("inbodystat").innerHTML =
+    `<span class="${d.status === "DONE" ? "ok" : "warn"}">${d.status}</span>` +
+    (d.device_type ? ` · ${d.device_type}` : "") +
+    (d.measured_at ? ` · 측정 ${d.measured_at.slice(0, 10)}` : "") +
+    (d.smi != null ? ` · SMI ${d.smi}` : "") +
+    (bad.length ? `<div class="warn">항등식 검증 어긋남: ${bad.join(", ")}
+       <span class="dim">— 판독은 됐고 저장도 됐습니다. 값을 직접 확인해 보세요.</span></div>` : "");
+
+  const rows = Object.entries(d.fields || {})
+    .filter(([, val]) => val != null)
+    .map(([k, val]) => `<tr><td class="dim" style="width:34%">${INBODY_KO[k] || k}</td>
+      <td><b>${val}</b>${INBODY_USED.has(k)
+        ? ` <span class="pill">진단·루틴에 사용</span>` : ""}</td></tr>`).join("");
+  const segs = (d.segments || []).map((s) =>
+    `<tr><td class="dim">${SEGMENT_KO[s.segment] || s.segment} 제지방/체지방</td>
+     <td>${s.lean_mass ?? "—"} / ${s.fat_mass ?? "—"} kg</td></tr>`).join("");
+
+  $("inbodyrows").innerHTML = rows + segs ||
+    `<tr><td class="bad">판독된 값이 없습니다 — 결과지가 선명한지 확인하세요.</td></tr>`;
+}
+
 function renderSeg(seg) {
   const c = seg.comparable || {};
   const box = (label, s) => s
@@ -447,7 +593,113 @@ function renderSeg(seg) {
         <td colspan="3" class="warn">${c.reference_only.join(", ")}</td></tr>` : ""}
     ${c.user_only?.length ? `<tr><td class="dim">내 사진에만</td>
         <td colspan="3" class="warn">${c.user_only.join(", ")}</td></tr>` : ""}`;
+
+  // 부위별 픽셀 비율·무효 사유는 palette 에 있다 — 표로 같이 보여준다.
+  const pal = (seg.user?.palette || []).filter((p) => p.is_comparable);
+  if (pal.length) {
+    $("segrows").insertAdjacentHTML("beforeend",
+      `<tr><th colspan="4" style="padding-top:12px">내 사진 부위별</th></tr>` +
+      pal.map((p) => `<tr>
+        <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;
+             background:${p.color_hex || "#666"};margin-right:6px"></span>${p.name_ko}</td>
+        <td>${(p.area_ratio * 100).toFixed(2)}%</td>
+        <td class="dim">${p.pixel_count.toLocaleString()}px${
+          p.is_truncated ? ' <span class="pill">잘림</span>' : ""}</td>
+        <td class="${p.is_valid ? "ok" : "bad"}">${
+          p.is_valid ? "유효" : (p.invalid_reason || "무효")}</td></tr>`).join(""));
+  }
+
+  drawOverlay("ovref", seg.reference);
+  drawOverlay("ovusr", seg.user);
+  renderLegend(seg.user || seg.reference);
 }
+
+// ── 세그 오버레이 그리기 ────────────────────────────────────────────────────
+//
+// ⚠️ 라벨 맵 PNG 의 **픽셀 값이 곧 클래스 번호**다. 그래서 브라우저가
+//    스케일링하면 값이 섞여 존재하지 않는 클래스가 생긴다 — 반드시
+//    imageSmoothingEnabled=false 로 원본 크기에 그린 뒤 CSS 로만 줄인다.
+//    (서버가 라벨을 NEAREST 로만 리사이즈하는 것과 같은 이유)
+//
+// ⚠️ 투명도 0.42 는 segmap.OVERLAY_ALPHA 와 같은 값이다. 여기서 보이는 것이
+//    VLM 이 보는 것과 달라지면 이 화면으로 판단할 수가 없다.
+const OVERLAY_ALPHA = 0.42;
+const _segCache = {};
+
+const loadImg = (src) => new Promise((res, rej) => {
+  const i = new Image();
+  i.crossOrigin = "anonymous";
+  i.onload = () => res(i);
+  i.onerror = () => rej(new Error("이미지를 불러오지 못했습니다 (서명 URL 만료?)"));
+  i.src = src;
+});
+
+async function drawOverlay(canvasId, side) {
+  const cv = $(canvasId);
+  if (!side) { cv.hidden = true; return; }
+  cv.hidden = false;
+  try {
+    const [photo, map] = await Promise.all([loadImg(side.photo_url), loadImg(side.map_url)]);
+    _segCache[canvasId] = { photo, map, side };
+    paint(canvasId);
+  } catch (e) {
+    log(`      오버레이 그리기 실패(${canvasId}): ${e.message}`, "warn");
+  }
+}
+
+function paint(canvasId) {
+  const c = _segCache[canvasId];
+  if (!c) return;
+  const { photo, map, side } = c;
+  const cv = $(canvasId);
+  cv.width = photo.naturalWidth;
+  cv.height = photo.naturalHeight;
+  const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(photo, 0, 0);
+
+  if (!$("showov").checked) return;
+
+  // 라벨 맵을 원본 크기로 펴서 픽셀 값을 읽는다
+  const tmp = document.createElement("canvas");
+  tmp.width = cv.width; tmp.height = cv.height;
+  const tctx = tmp.getContext("2d", { willReadFrequently: true });
+  tctx.imageSmoothingEnabled = false;
+  tctx.drawImage(map, 0, 0, cv.width, cv.height);
+  const md = tctx.getImageData(0, 0, cv.width, cv.height);
+
+  // label_value → RGB (비교 대상만 칠한다)
+  const rgb = {};
+  for (const p of side.palette || []) {
+    if (!p.is_comparable || !p.color_hex) continue;
+    const h = p.color_hex.replace("#", "");
+    rgb[p.label_value] = [parseInt(h.slice(0, 2), 16),
+                          parseInt(h.slice(2, 4), 16),
+                          parseInt(h.slice(4, 6), 16)];
+  }
+
+  const out = ctx.getImageData(0, 0, cv.width, cv.height);
+  const a = OVERLAY_ALPHA;
+  for (let i = 0; i < md.data.length; i += 4) {
+    const col = rgb[md.data[i]];          // R 채널이 라벨 값
+    if (!col) continue;
+    out.data[i]     = out.data[i]     * (1 - a) + col[0] * a;
+    out.data[i + 1] = out.data[i + 1] * (1 - a) + col[1] * a;
+    out.data[i + 2] = out.data[i + 2] * (1 - a) + col[2] * a;
+  }
+  ctx.putImageData(out, 0, 0);
+}
+
+function renderLegend(side) {
+  $("legend").innerHTML = (side?.palette || [])
+    .filter((p) => p.is_comparable)
+    .map((p) => `<span style="margin-right:12px; white-space:nowrap">
+      <span style="display:inline-block;width:11px;height:11px;border-radius:2px;
+        background:${p.color_hex || "#666"};vertical-align:-1px;margin-right:4px"></span>
+      <span class="${p.is_valid ? "" : "bad"}">${p.name_ko}</span></span>`).join("");
+}
+
+$("showov").onchange = () => { paint("ovref"); paint("ovusr"); };
 
 function renderDiag(d) {
   const o = d.overall || {};
@@ -480,13 +732,28 @@ function renderDiag(d) {
         d.excluded.map((e) => e.class_name || e).join(", ")}</td></tr>`);
 }
 
-function renderRoutine(r) {
-  $("mode").innerHTML =
+//: mode_basis → 사람이 읽을 근거. 인바디를 넣은 효과가 여기서 갈린다.
+const BASIS_KO = {
+  BODY_FAT_MEASURED: "인바디 체지방률 실측",
+  BODY_FAT_DERIVED: "체지방량÷체중으로 계산",
+  BODY_FAT_UNAVAILABLE: "체지방 정보 없음 → BMI 로는 감량 처방 안 함",
+  NO_INBODY: "인바디 없음",
+};
+
+function renderRoutine(r, gen) {
+  const modeLine = gen
+    ? `<div style="margin-bottom:6px">모드 <b class="${gen.mode === "CUT" ? "warn" : "ok"}">${
+        gen.mode}</b> <span class="pill">${BASIS_KO[gen.mode_basis] || gen.mode_basis}</span></div>`
+    : "";
+  $("mode").innerHTML = modeLine +
     `v${r.version} · 주 <b>${r.exercise_days_per_week}일</b> × ${r.total_cycles}주기 ` +
     `<span class="pill">${r.generation_type}</span> ` +
     `<span class="pill">${r.status}</span>` +
     (r.goal ? ` · ${r.goal}` : "") +
     (r.focus_areas?.length ? ` <span class="dim">보강: ${r.focus_areas.join(", ")}</span>` : "") +
+    (gen?.boosts && Object.keys(gen.boosts).length
+      ? `<div class="dim">볼륨 가중: ${Object.entries(gen.boosts)
+          .map(([k, v]) => `${k} +${v}세트`).join(" · ")}</div>` : "") +
     (r.notice ? `<div class="warn" style="margin-top:4px">${r.notice}</div>` : "");
 
   $("routine").innerHTML = (r.days || []).map((d) => `

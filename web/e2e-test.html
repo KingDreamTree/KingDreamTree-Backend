@@ -429,19 +429,30 @@ $("run").onclick = async () => {
       log(`\n[3.5] 인바디 ${inbodyFiles.length}장 업로드 → OCR`);
       const bf = new FormData();
       for (const f of inbodyFiles) bf.append("files", f);
-      const ib = await api("POST", `/api/v1/sessions/${SID}/inbody`, { form: bf });
-      await waitJob(ib.job_id, "OCR_INBODY");
+      // ⚠️ 인바디는 **선택 입력이다.** OCR 이 실패해도(결과지가 흐리거나 잘렸거나)
+      //    전 구간을 중단하면 안 된다 — 사진 두 장으로 이미 한 세그 작업까지
+      //    같이 버리게 되고, 서버 설계(인바디 없어도 진단·루틴이 완주한다)와도
+      //    어긋난다. 여기서만 경고하고 인바디 없는 경로로 계속 간다.
+      try {
+        const ib = await api("POST", `/api/v1/sessions/${SID}/inbody`, { form: bf });
+        await waitJob(ib.job_id, "OCR_INBODY");
 
-      // ⚠️ 이 목록은 {items:[...]} 가 아니라 **배열 그대로** 온다 (openapi 확인).
-      //    감싼 모양으로 가정하면 조용히 undefined 가 된다.
-      const list = await api("GET", `/api/v1/sessions/${SID}/inbody`);
-      if (!Array.isArray(list) || !list.length) throw new Error("인바디 목록이 비어 있습니다.");
-      const detail = await api("GET", `/api/v1/inbody/${list[0].inbody_id}`);
-      raw.inbody = detail;
-      renderInbody(detail);
-      step("s35", "done");
-      log(`      상태 ${detail.status} · 판독 항목 ${
-        Object.keys(detail.fields || {}).length}개`, "ok");
+        // ⚠️ 이 목록은 {items:[...]} 가 아니라 **배열 그대로** 온다 (openapi 확인).
+        //    감싼 모양으로 가정하면 조용히 undefined 가 된다.
+        const list = await api("GET", `/api/v1/sessions/${SID}/inbody`);
+        if (!Array.isArray(list) || !list.length) throw new Error("인바디 목록이 비어 있습니다.");
+        const detail = await api("GET", `/api/v1/inbody/${list[0].inbody_id}`);
+        raw.inbody = detail;
+        renderInbody(detail);
+        step("s35", "done");
+        log(`      상태 ${detail.status} · 판독 항목 ${
+          Object.keys(detail.fields || {}).length}개`, "ok");
+      } catch (e) {
+        log(`      ⚠️ 인바디 처리 실패 — ${explain(e)}`, "warn");
+        log("         인바디 없이 계속합니다 (루틴은 BALANCE 로 나옵니다).", "warn");
+        $("inbodystat").innerHTML =
+          `<span class="bad">실패</span> <span class="dim">${e.message}</span>`;
+      }
     } else {
       log("\n[3.5] 인바디 없음 — 건너뜁니다 (루틴은 BALANCE 로 나옵니다)", "dim");
     }

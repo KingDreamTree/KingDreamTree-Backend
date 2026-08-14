@@ -107,32 +107,30 @@ def decide_mode(inbody: dict[str, Any] | None) -> dict[str, Any]:
             ),
         }
 
-    # ── 폴백: 체지방률을 못 읽음 → BMI ──────────────────────────────────────
-    # ⚠️ 근육형을 오분류할 수 있는 경로다. basis 로 표시해 추적 가능하게 둔다.
+    # ── 체지방률을 못 읽음 → **무조건 BALANCE** (2026-08-14 정정) ─────────────
+    #
+    # ⚠️ 이전에는 BMI >= 25 면 CUT 으로 보냈다. 폐기했다.
+    #
+    #    BMI 는 지방의 **대리 지표**다. 체지방률이라는 직접 측정값을 못 읽은
+    #    상황에서 대리 지표만으로 "감량하세요"를 처방하면, 이 모듈 상단에 적어둔
+    #    근육형 오분류(BMI 26 · 체지방 12%)를 우리가 스스로 만들어낸다.
+    #    체지방률 1차 원칙을 세워놓고 폴백에서 그 원칙을 뒤집는 구조였다.
+    #
+    #    감량 처방의 오분류는 비대칭적으로 해롭다 — CUT 을 놓치면 근력 루틴을
+    #    받을 뿐이지만, 불필요한 CUT 은 근육형 사용자에게 유산소를 강제한다.
+    #    확신이 없으면 기본값으로 가는 쪽이 안전하다.
+    #
+    #    BMI 는 계속 계산해 value 에 담는다 — 참고값·추적용이지 트리거가 아니다.
     bmi = _as_float(inbody.get("bmi"))
     if bmi is None:
         weight, height = _as_float(inbody.get("weight")), _as_float(inbody.get("height"))
         if weight is not None and height is not None:
             bmi = round(weight / (height / 100) ** 2, 1)
 
-    if bmi is None:
-        return {
-            "mode": RoutineMode.BALANCE,
-            "basis": "NO_INBODY",
-            "value": None,
-            "cutoff": None,
-            "reason": "체성분 수치를 읽지 못해 기본 모드로 구성했습니다.",
-        }
-
-    is_cut = bmi >= BMI_CUTOFF
     return {
-        "mode": RoutineMode.CUT if is_cut else RoutineMode.BALANCE,
-        "basis": "BMI_FALLBACK",
-        "value": bmi,
-        "cutoff": BMI_CUTOFF,
-        "reason": (
-            f"체지방률을 읽지 못해 BMI {bmi} 기준으로 감량 병행 구성을 적용했습니다."
-            if is_cut
-            else f"체지방률을 읽지 못해 BMI {bmi} 기준으로 근력 중심 구성을 적용했습니다."
-        ),
+        "mode": RoutineMode.BALANCE,
+        "basis": "BODY_FAT_UNAVAILABLE",
+        "value": bmi,  # 참고값. 판정에 쓰지 않았다.
+        "cutoff": None,
+        "reason": "체성분 정보가 부족하여 기본 루틴으로 구성했습니다.",
     }

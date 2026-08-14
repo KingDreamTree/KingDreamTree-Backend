@@ -26,6 +26,7 @@ LLM 은 운동명을 쓰지 않고, 여기서 만든 후보 목록의 `exercise_
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -100,6 +101,91 @@ SINGLE_SIDE_HINTS = ("single", "one arm", "one-arm", "one leg", "lunge", "split"
 #:    D8(초보 부적합 제외)과는 성격이 다르다 — 저건 난이도 판단이고 이건
 #:    명백한 오분류 수정이라 PM 승인 대상이 아니다.
 NON_STRENGTH_NAME_HINTS = ("stretch", "mobility", "foam roll", "warm up", "warm-up")
+
+# --------------------------------------------------------------------------- #
+# 초보자 스크리닝 (D8) — 여기가 유일한 판정 지점
+# --------------------------------------------------------------------------- #
+#
+# ⚠️ **seed 할 때마다 다시 평가한다.** 수집본 JSON 의 값을 믿지 않는다 —
+#    목록을 고칠 때마다 API 를 재수집해야 한다면(=한글화가 날아간다) 아무도
+#    안 고치게 된다. 원본은 raw 로 두고 판정은 여기서 한다.
+#
+# ⚠️ 이 목록은 **우리 판단이지 논문이 아니다** (D8, PM 승인 대기).
+#    근거를 주장하지 않고, 무엇을 왜 뺐는지만 남긴다.
+
+#: 초보자가 1회도 수행하기 어렵거나 부상 위험이 높은 동작.
+#:
+#: 실측 근거 — 초기 목록(hanging/pistol/handstand 등)은 200건 중 **3건**만
+#: 걸러냈다. 정작 **풀업·친업 계열 7건이 통과**했는데, 초보자 대부분이
+#: 1개도 못 하는 동작이라 루틴에 넣으면 그 슬롯이 통째로 무의미해진다.
+BEGINNER_UNSAFE_TERMS: tuple[str, ...] = (
+    # 자기 체중을 매달아 끌어올리는 동작 — 초보 수행률이 낮다
+    "pull-up",
+    "pull up",
+    "pullup",
+    "chin-up",
+    "chin up",
+    "chinup",
+    "muscle up",
+    "muscle-up",
+    "chest dip",  # ⚠️ bench dip / floor dip 은 초보도 가능해서 제외하지 않는다
+    # 폭발적·플라이오메트릭 — 착지 충격이 커서 초보 관절에 부담
+    "jump squat",
+    "jumping",
+    "plyo",
+    "box jump",
+    "burpee",
+    # 고난도 체조·역도 계열
+    "pistol",
+    "handstand",
+    "planche",
+    "front lever",
+    "dragon flag",
+    "hanging",
+    "snatch",
+    "clean and jerk",
+    "clean & jerk",
+    "power clean",
+    "l-sit",
+    "l-pull",
+)
+
+
+def _unsafe_pattern() -> re.Pattern[str]:
+    """제외 용어를 단어 경계 + 복수형 허용으로 매칭하는 정규식.
+
+    실측에서 걸린 함정 둘 —
+      ⚠️ 단순 `in` 검사는 **`"chin" in "Touching"` 처럼 조용히 걸린다.**
+         "Front Toe Touching" 이 친업으로 오분류됐다. → 단어 경계 필수.
+      ⚠️ 단수형만 적으면 복수형이 샌다. "Chin-Up" 은 걸리는데 "Chin-ups" 는
+         통과했다. → 마지막 단어에 `s?` 를 붙인다.
+    하이픈은 공백으로 정규화해 "pull-up"/"pull up" 을 한 번에 잡는다.
+    """
+    parts = []
+    for term in BEGINNER_UNSAFE_TERMS:
+        words = term.replace("-", " ").split()
+        parts.append(r"\s+".join(re.escape(w) for w in words) + "s?")
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b")
+
+
+_UNSAFE_RE = _unsafe_pattern()
+
+
+def is_beginner_safe(name: str, exercise_type: str = "STRENGTH") -> bool:
+    """초보자에게 처방해도 되는 동작인가. **seed 시점에 평가된다.**
+
+    ⚠️ **CARDIO 는 항상 통과시킨다.** 유산소는 속도·시간으로 강도를 조절하므로
+       난이도 기준이 근력과 다르다. 실측에서 "Jumping Jack"·"Burpee" 가
+       `jumping`/`burpee` 에 걸려 빠졌는데, 둘 다 초보 유산소의 기본 동작이라
+       유산소 후보를 오히려 망가뜨렸다.
+
+    ⚠️ 이름만 본다. keywords 는 마케팅 문구가 섞여 있어("Bodyweight exercise
+       for waist") 난이도 신호로 못 쓴다 — 오탐만 늘렸다.
+    """
+    if (exercise_type or "").upper() == "CARDIO":
+        return True
+    normalized = " ".join(name.lower().replace("-", " ").split())
+    return not _UNSAFE_RE.search(normalized)
 
 
 class CatalogNotBuiltError(RuntimeError):

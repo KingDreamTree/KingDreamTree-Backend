@@ -37,6 +37,7 @@
               GET  /sessions/active    → steps 를 보고 어느 화면으로 갈지 결정
 
 분석 시작      POST /sessions
+처음부터 다시  POST /sessions/{id}/archive  → 그 다음 POST /sessions
 레퍼런스       POST /sessions/{id}/photos/reference   → job_id (세그 시작)
 촬영 화면      GET  /sessions/{id}/photos/reference   → 기준 랜드마크
 사용자 사진    POST /sessions/{id}/photos/user        → job_id (세그 시작)
@@ -106,6 +107,22 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 하드코딩하면 서버에서 조정한 순간 어긋나고, **"실시간 촬영은 자동으로 통과"라는 전제가 깨집니다** — 화면에선 통과인데 저장이 거부됩니다.
 
 `n_hold`는 자동 촬영용입니다. 조건을 만족한 상태가 **15프레임(≈0.5초) 이어질 때** 셔터를 누르세요. 손이 지나가다 우연히 맞는 순간에 찍히면 안 됩니다.
+
+### 진행 중 세션 종료 — `POST /sessions/{session_id}/archive`
+
+**사용자당 진행 중 분석은 하나뿐입니다.** 이미 있는 상태에서 `POST /sessions` 를 부르면 409 입니다.
+
+"처음부터 다시 하기" 버튼은 이렇게 만드세요.
+
+```
+POST /sessions/{id}/archive     → 200, status: "ARCHIVED"
+POST /sessions                  → 201, 새 session_id
+```
+
+- 사진과 분석 결과는 **지워지지 않습니다.** 지난 분석은 그대로 남습니다
+- **여러 번 눌러도 안전합니다** — 이미 종료된 세션에 다시 불러도 200 입니다
+
+⚠️ 이 버튼이 없으면 사용자는 **첫 세션에 갇힙니다.** 레퍼런스를 잘못 올렸을 때 빠져나갈 길이 계정 삭제밖에 없습니다.
 
 ---
 
@@ -209,7 +226,8 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 | 405 | `METHOD_NOT_ALLOWED` | 요청 메서드가 틀림 (개발 중 실수) |
 | 500 | `INTERNAL_ERROR` | 서버 오류. `message` 를 그대로 보여주고 재시도 안내 |
 | 404 | `NOT_FOUND` | 없거나 **남의 것**. 403을 주지 않는 건 의도된 설계입니다 |
-| 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행** |
+| 404 | `NO_ACTIVE_SESSION` | 진행 중인 분석 없음. **오류가 아니라 상태입니다** — 시작 화면으로 |
+| 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행**하거나, 처음부터 다시 하려면 archive 후 재생성 |
 | 409 | `PRECONDITION_NOT_MET` | 선행 단계 미완료 (예: 레퍼런스 없이 사용자 사진) |
 | 413 | `FILE_TOO_LARGE` | 10MB 초과 |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | 이미지로 열리지 않는 파일 (해상도가 과도하게 큰 경우 포함) |

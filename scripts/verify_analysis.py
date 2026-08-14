@@ -422,6 +422,118 @@ def test_blocked_without_inbody() -> None:
     check("인바디 있으면 유지 (인바디 근거 경로)", with_inbody["Torso"] == "SIGNIFICANT")
 
 
+def test_baseline_separation() -> None:
+    """기준선 분리 — 인바디 '표준 대비 %'가 목표 격차 판정을 오염시키지 않는가.
+
+    ⚠️ 실측(2026-08-15)으로 잡은 결함의 회귀 방지다. 더미 인바디(표준 대비
+       89.9~94.5%)가 들어가자, "실측이 사진을 이깁니다" 지시 때문에 모든 부위가
+       평균 언저리 = '약간 부족'으로 눌렸다. 시각적으로는 격차가 명확한데도.
+       평균과의 비교(인바디)와 목표와의 격차(레퍼런스)는 잣대가 다르다.
+    """
+    print("\n8. 기준선 분리 (평균 대비 vs 목표 격차)")
+
+    from app.prompts.part_diagnosis import SYSTEM_PROMPT as part_system
+    from app.prompts.part_diagnosis import _inbody_lr
+
+    check("'실측이 사진을 이깁니다' 제거됨", "이깁니다" not in part_system)
+    check(
+        "표준 대비 %는 평균과의 비교라고 명시",
+        "일반인 평균과" in part_system,
+    )
+    check(
+        "보이는 부위 gap 은 이미지가 정한다고 명시",
+        "gap_level 은 언제나 이미지가 정합니다" in part_system,
+    )
+    check(
+        "few-shot 이 발산 케이스를 가르침 (평균 수준 ≠ 목표 근접)",
+        "표준 대비 %로 격차를 낮추지 마세요" in part_system,
+    )
+
+    # 좌우 실측은 코드가 계산한다 — LLM 산수 금지
+    lr = _inbody_lr(
+        {
+            "segments": {
+                "LEFT_ARM": {"lean_mass": 2.72},
+                "RIGHT_ARM": {"lean_mass": 2.74},
+                "LEFT_LEG": {"lean_mass": 7.78},
+                "RIGHT_LEG": {"lean_mass": 7.78},
+            }
+        }
+    )
+    check("팔 좌우 차이 계산 (0.7%)", abs(lr["팔"]["diff_pct"] - 0.73) < 0.05)
+    check("오른쪽이 많음으로 방향 표기", lr["팔"]["larger"] == "RIGHT")
+    check("다리 동일 → 대칭(None)", lr["다리"]["larger"] is None)
+    check(
+        "한쪽 없으면 계산 안 함", _inbody_lr({"segments": {"LEFT_ARM": {"lean_mass": 2.7}}}) == {}
+    )
+    check("인바디 없으면 빈 dict", _inbody_lr(None) == {})
+
+    # 프롬프트에 실측 좌우가 픽셀 대칭과 나란히 실리는가
+    parts = [
+        {
+            "class_name": "Left_Upper_Arm",
+            "name_ko": "왼팔 상완",
+            "color_hex": "#0000FF",
+            "inbody_segment": "LEFT_ARM",
+        },
+        {
+            "class_name": "Right_Upper_Arm",
+            "name_ko": "오른팔 상완",
+            "color_hex": "#00FF00",
+            "inbody_segment": "RIGHT_ARM",
+        },
+    ]
+    ref = {
+        "Left_Upper_Arm": _segment("Left_Upper_Arm", 8000, 60, 120, 60, 200),
+        "Right_Upper_Arm": _segment("Right_Upper_Arm", 8000, 260, 120, 60, 200),
+    }
+    names = ["Left_Upper_Arm", "Right_Upper_Arm"]
+    prompt = build_part_prompt(
+        parts=parts,
+        metrics=segmap.compare_parts(ref, ref, names, PERSON),
+        ref_symmetry={"Upper_Arm": {"diff_pct": 3.0, "larger": "LEFT"}},
+        user_symmetry={"Upper_Arm": {"diff_pct": 14.2, "larger": "LEFT"}},
+        inbody={
+            "segments": {
+                "LEFT_ARM": {"lean_mass": 2.72, "lean_percentage": 89.9},
+                "RIGHT_ARM": {"lean_mass": 2.74, "lean_percentage": 90.6},
+            }
+        },
+    )
+    check("픽셀 좌우와 실측 좌우가 나란히 제공", "인바디 실측 근육량 (팔)" in prompt)
+    check("조율 규칙 포함 (실측이 정답)", "좌우 근육량은 실측이 정답" in prompt)
+    check(
+        "인바디 블록에도 기준선 경고",
+        "일반인 평균과의 비교" in prompt,
+    )
+
+    # F09 — 우선순위는 코드가 3개로 자른다 (프롬프트 지시만으로는 부족)
+    capped = vlm.parse_overall_response(
+        {
+            "summary": "s",
+            "priority_parts": ["Torso", "Left_Upper_Arm", "Right_Upper_Arm", "Left_Lower_Arm"],
+        },
+        {"Torso", "Left_Upper_Arm", "Right_Upper_Arm", "Left_Lower_Arm"},
+    )
+    check(
+        "priority_parts 상위 3개만 (순서 유지)",
+        capped["priority_parts"] == ["Torso", "Left_Upper_Arm", "Right_Upper_Arm"],
+    )
+
+    from app.prompts.overall_diagnosis import SYSTEM_PROMPT as overall_system
+
+    check("F09 우선순위 1~3개 지시", "1~3개만" in overall_system)
+    excluded_prompt = build_overall_prompt(
+        parts=[],
+        blocked=[],
+        failed=[],
+        inbody=None,
+        excluded=["Left_Upper_Leg(왼쪽 허벅지)", "Left_Lower_Leg(왼쪽 종아리)"],
+    )
+    check("확인 불가 부위는 한 문장으로 병합 지시", "전부 묶어 한 문장" in excluded_prompt)
+    check("한글 이름 사용 지시", "괄호 안의 한글 이름" in excluded_prompt)
+
+
 def main() -> int:
     print("F08/F09 진단 파이프라인 검증")
     test_handlers()
@@ -432,6 +544,7 @@ def main() -> int:
     test_prompts()
     test_citation_routing()
     test_retry_policy()
+    test_baseline_separation()
 
     print()
     if _failures:

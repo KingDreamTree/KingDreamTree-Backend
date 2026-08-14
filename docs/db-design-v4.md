@@ -6,7 +6,7 @@
 | **최종 수정일** | 2026-08-13 |
 | **대상** | Supabase (PostgreSQL) — DB + Storage만 사용, **Auth 미사용** |
 | **테이블 수** | **16개** (v3의 15개 + `segmentation`) |
-| **이전 버전** | `docs/db-design-v3.md` |
+| **이전 버전** | v3 은 2026-08-14 에 삭제 (git 이력에 있음) |
 
 ---
 

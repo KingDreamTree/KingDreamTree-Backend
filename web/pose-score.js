@@ -214,7 +214,10 @@ export function facingDelta(ref, user) {
 export const MESSAGES = {
   MULTI_PERSON: "혼자 나오도록 촬영해주세요.",
   NOT_ENOUGH_JOINTS: "전신이 보이도록 서주세요.",
-  FRAMING: "몸이 화면에 다 나오도록 서주세요.",
+  FRAMING: "레퍼런스와 촬영 거리가 너무 다릅니다.",
+  //: 유도용 — 막지는 않는다. 촬영 화면에서만 띄운다.
+  TOO_CLOSE: "조금 뒤로 물러나 주세요.",
+  TOO_FAR: "조금 앞으로 와 주세요.",
   FACING: "정면을 보고 서주세요.",
   POSE: "레퍼런스와 포즈를 맞춰주세요.",
   OK: "좋습니다. 그대로 유지해주세요.",
@@ -223,12 +226,21 @@ export const MESSAGES = {
 /**
  * 세 값을 계산하고 통과 여부까지 판단한다.
  *
+ * 두 가지를 따로 돌려준다.
+ *   pass    — **자동 촬영 조건.** 유도 기준까지 만족했는가 (거리 포함)
+ *   blocked — **서버가 거부하는가.** 갤러리 업로드 경로에서 이걸 본다
+ *
+ * ⚠️ 거리는 둘의 기준이 다르다. 촬영 중에는 f_min 으로 안내해도 공짜지만
+ *    (한 걸음 물러나면 된다), 이미 찍힌 사진을 f_min 으로 막으면 처음부터
+ *    다시 하라는 뜻이 된다. 게다가 거리 차이는 몸통 길이 정규화로 상쇄되므로
+ *    **고쳐도 이득이 없다.** 그래서 거부는 f_hard 로만 한다.
+ *
  * ⚠️ **판단 결과를 서버로 보내지 않는다.** 서버에는 세 값만 보내고 판정은
  *    서버가 다시 한다. 이건 화면에 실시간으로 보여주기 위한 것이다.
  *
- * ⚠️ 순서가 서버(app/services/pose.py judge_user_photo)와 같아야 한다.
+ * ⚠️ blocked 판정 순서가 서버(app/services/pose.py judge_user_photo)와 같아야 한다.
  *    다르면 화면에서 통과인데 업로드가 거부되는 상황이 생긴다.
- *      여러 명 → 프레이밍 → 정면성 → 자세
+ *      여러 명 → 거리(f_hard) → 정면성 → 자세
  *
  * ⚠️ reason 이 NOT_ENOUGH_JOINTS 면 **업로드하지 마세요.** 서버는 숫자만 받아서
  *    "포즈를 맞춰주세요"라고 답하는데, 실제 문제는 몸이 안 보이는 것이라
@@ -240,6 +252,8 @@ export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
   const pose = poseScore(ref, user, c);
   const framing = framingScore(ref, user, c);
   const facing = facingDelta(ref, user);
+  const torsoRatio =
+    torsoLength(user, c.min_visibility) / (torsoLength(ref, c.min_visibility) || 1);
 
   const values = {
     pose_similarity: pose.score,
@@ -247,20 +261,38 @@ export function evaluate(ref, user, criteria, { multiPerson = false } = {}) {
     facing_delta: Math.round(facing * 1000) / 1000,
   };
 
-  let reason = null;
-  if (multiPerson) reason = "MULTI_PERSON";
-  else if (pose.reason === "NOT_ENOUGH_JOINTS") reason = "NOT_ENOUGH_JOINTS";
-  else if (framing < c.f_min) reason = "FRAMING";
-  else if (facing > c.r_max) reason = "FACING";
-  else if (pose.score < c.threshold) reason = "POSE";
+  // ── 서버가 실제로 막는 조건 (app/services/pose.py 와 같은 순서·같은 기준) ──
+  let blockReason = null;
+  if (multiPerson) blockReason = "MULTI_PERSON";
+  else if (pose.reason === "NOT_ENOUGH_JOINTS") blockReason = "NOT_ENOUGH_JOINTS";
+  else if (framing < c.f_hard) blockReason = "FRAMING";
+  else if (facing > c.r_max) blockReason = "FACING";
+  else if (pose.score < c.threshold) blockReason = "POSE";
+
+  // ── 촬영 화면 유도 (막지는 않는다) ──
+  // ⚠️ 거리는 f_min 에서 **안내만** 한다. 부위 굵기를 몸통 길이로 나눠 비교하므로
+  //    거리 차이는 계산에서 상쇄된다 — 여기서 막으면 고쳐도 이득이 없는 이유로
+  //    사용자를 돌려보내게 된다. 실제 거부선은 f_hard 다.
+  let guideReason = blockReason;
+  if (guideReason === null && framing < c.f_min) {
+    guideReason = torsoRatio > 1 ? "TOO_CLOSE" : "TOO_FAR";
+  }
 
   return {
     ...values,
-    pass: reason === null,
-    reason,
-    message: MESSAGES[reason ?? "OK"],
-    // 디버깅용 — 어느 관절이 얼마나 벌어졌는지
-    detail: { usedAngles: pose.usedAngles, diffs: pose.diffs, poseReason: pose.reason },
+    /** 자동 촬영 조건. 유도 기준까지 만족했는가. */
+    pass: guideReason === null,
+    /** 이 상태로 업로드하면 서버가 거부하는가. 갤러리 업로드 경로에서 쓴다. */
+    blocked: blockReason !== null,
+    reason: guideReason,
+    blockReason,
+    message: MESSAGES[guideReason ?? "OK"],
+    detail: {
+      usedAngles: pose.usedAngles,
+      diffs: pose.diffs,
+      poseReason: pose.reason,
+      torsoRatio: Math.round(torsoRatio * 100) / 100,
+    },
   };
 }
 

@@ -50,7 +50,7 @@ import { poseScore, framingScore, facingDelta, evaluate, IDX } from "./pose-scor
 // 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md)
 const C = {
   tol_deg: 45, hard_tol_deg: 60, threshold: 70,
-  f_min: 0.65, r_max: 0.25,
+  f_min: 0.65, f_hard: 0.40, r_max: 0.25,
   min_visible_angles: 4, min_visibility: 0.5, n_hold: 15,
 };
 
@@ -214,10 +214,22 @@ const tests = [
     run: () => evaluate(REF, build(shift(20)), C).reason,
   },
   {
-    name: "종합 판정 — 너무 가까이",
-    why: "거리가 문제면 FRAMING",
-    expect: "FRAMING",
-    run: () => evaluate(REF, build(BASE, { scale: 2 }), C).reason,
+    name: "거리 — 1.4배 가까이: 안내는 하되 막지 않음",
+    why: "★★ 거리 차이는 몸통 길이로 나누면 상쇄된다. 여기서 막으면 고쳐도 이득이 없는 이유로 사용자를 돌려보내는 것",
+    expect: false,
+    run: () => evaluate(REF, build(BASE, { scale: 1.4 }), C).blocked,
+  },
+  {
+    name: "거리 — 1.4배 가까이: 안내 문구",
+    why: "촬영 화면에서는 유도해도 공짜다 (한 걸음 물러나면 됨)",
+    expect: "TOO_CLOSE",
+    run: () => evaluate(REF, build(BASE, { scale: 1.4 }), C).reason,
+  },
+  {
+    name: "거리 — 3배 가까이: 서버가 막음",
+    why: "★ 이쯤이면 다리가 화면 밖이라 어차피 못 쓴다. 2차 검사가 죽었을 때의 최후 방어선",
+    expect: true,
+    run: () => evaluate(REF, build(BASE, { scale: 3 }), C).blocked,
   },
   {
     name: "기준값을 안 넘기면 에러",

@@ -27,8 +27,15 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from app.schemas.enums import DomainStatus, JobKind
-from app.services import diagnosis_repo, inbody_repo, routine, routine_repo
+from app.schemas.enums import DomainStatus, GenerationType, JobKind
+from app.services import (
+    coach_chat,
+    diagnosis_repo,
+    exercise_catalog,
+    inbody_repo,
+    routine,
+    routine_repo,
+)
 from app.services.db import get_client
 from app.worker.registry import HANDLERS, register, register_preflight
 
@@ -188,12 +195,15 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _patch(job: dict[str, Any]) -> dict[str, Any]:
-    """피드백 → 루틴 변경 오퍼레이션을 해석해 이력으로 남긴다.
+    """피드백 → 변경 해석 → **실제 적용** → FEEDBACK 새 버전 (2026-08-14).
 
-    ⚠️ 지금은 **해석과 이력 기록까지**다. 실제 운동 교체 적용은 다음 단계다 —
-       변경을 적용하려면 새 버전을 만들어야 하는데(기존 버전을 고치면 이미 완료한
-       Day 의 기록과 어긋난다), 그 정책이 아직 확정되지 않았다.
-       지금도 "왜 바뀌었는지"(GET /revisions)와 금기 누적은 동작한다.
+    이전에는 해석·이력까지만 하고 적용을 안 했다. 버전 정책이 미확정이라서였는데,
+    F12-b 코치 대화에서 그 정책이 확정됐으므로(새 버전 생성 → DONE 후 활성화)
+    같은 경로를 그대로 쓴다. 도구 스키마도 coach_chat 과 통일했다
+    (prompts/routine_patch.py 모듈 주석).
+
+    ⚠️ 기존 버전을 고치지 않는다 — 이미 완료한 Day 의 기록과 어긋난다.
+       변경이 0건이면 새 버전을 만들지 않고 이력만 남긴다.
     """
     payload = job.get("payload") or {}
     routine_id_raw = payload.get("month_routine_id")
@@ -230,24 +240,30 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
     existing = (session[0].get("contraindications") if session else None) or []
 
     days = routine_repo.list_days(month_routine_id)
+    catalog = exercise_catalog.load_catalog()
+    candidates = coach_chat._candidates_by_group(days, catalog)
+
     result = asyncio.run(
         routine.patch_routine(
             current_routine={"days": days},
             feedback_text=feedback,
             contraindications=existing,
+            candidates_by_group=candidates,
         )
     )
 
-    routine_repo.create_revision(
-        month_routine_id,
-        {
-            "source_log_id": str(log_id_raw),
-            "interpretation": result["interpretation"],
-            "changes": result["changes"],
-            "contraindications_added": result["contraindications_added"],
-            "raw_response": result.get("raw_response"),
-        },
-    )
+    # 도구 인자를 재검증한다 — coach_chat 과 같은 함수. 후보 밖 운동·없는 Day·
+    # 범위 밖 delta 는 여기서 걸린다 (LLM 을 믿지 않는 지점).
+    validated: list[dict[str, Any]] = []
+    for change in result["changes"]:
+        name, args = change.get("function"), change.get("args") or {}
+        ok_args, err = coach_chat.validate_tool_call(name, args, days, candidates)
+        if err is not None:
+            log.warning("피드백 도구 거부: %s — %s", name, err)
+            continue
+        validated.append({"name": name, "args": ok_args})
+
+    routine_calls = [c for c in validated if c["name"] != "flag_contraindication"]
 
     # 금기는 세션 단위로 누적한다 (revision 에는 이번 회차 증분만).
     added = result["contraindications_added"]
@@ -257,9 +273,67 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
             "session_id", str(session_id)
         ).execute()
 
+    if not routine_calls:
+        # 적용할 루틴 변경이 없다 — 버전을 만들지 않고 이력만 남긴다.
+        routine_repo.create_revision(
+            month_routine_id,
+            {
+                "source_log_id": str(log_id_raw),
+                "interpretation": result["interpretation"],
+                "changes": [],
+                "contraindications_added": added,
+                "raw_response": result.get("raw_response"),
+            },
+        )
+        return {
+            "month_routine_id": str(month_routine_id),
+            "changes": 0,
+            "contraindications_added": len(added),
+            "no_change": True,
+        }
+
+    by_ref = {c["exercise_ref"]: c for c in catalog}
+    new_days, applied = coach_chat.apply_changes_to_days(days, routine_calls, by_ref)
+
+    days_per_week = row["exercise_days_per_week"]
+    new_row = routine_repo.create_routine(session_id, days_per_week, GenerationType.FEEDBACK)
+    new_id = UUID(str(new_row["month_routine_id"]))
+    try:
+        routine_repo.replace_days(new_id, new_days, days_per_week)
+        routine_repo.update_routine(
+            new_id,
+            {
+                "goal": row.get("goal"),
+                "focus_areas": row.get("focus_areas"),
+                "raw_response": {"source": "WORKOUT_FEEDBACK", "base_version": row["version"]},
+                "status": str(DomainStatus.DONE),
+            },
+        )
+    except Exception:
+        # 실패해도 이전 활성 버전은 그대로다 (work-b.md §6).
+        routine_repo.update_routine(new_id, {"status": str(DomainStatus.FAILED)})
+        raise
+
+    routine_repo.activate(new_id, session_id)
+
+    routine_repo.create_revision(
+        new_id,
+        {
+            "previous_month_routine_id": str(month_routine_id),
+            "source_log_id": str(log_id_raw),
+            "interpretation": result["interpretation"],
+            "changes": applied,
+            "contraindications_added": added,
+            "raw_response": result.get("raw_response"),
+        },
+    )
+    log.info("피드백 적용 — v%s → v%s, 변경 %d건", row["version"], new_row["version"], len(applied))
+
     return {
-        "month_routine_id": str(month_routine_id),
-        "changes": len(result["changes"]),
+        "month_routine_id": str(new_id),
+        "previous_month_routine_id": str(month_routine_id),
+        "version": new_row["version"],
+        "changes": len(applied),
         "contraindications_added": len(added),
     }
 

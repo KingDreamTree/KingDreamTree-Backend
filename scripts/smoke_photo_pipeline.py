@@ -181,10 +181,15 @@ def main() -> int:
         check("reason=POSE", err.get("detail", {}).get("reason") == "POSE")
         check("임계값을 detail에 내려줌", "threshold" in err.get("detail", {}))
 
-        r = upload(f"{SP}/user", H, {**ok, "framing_score": "0.4"})  # F_MIN=0.65 미만
+        # ⚠️ 거리(framing)는 **유도선(F_MIN)이 아니라 거부선(F_HARD)으로만** 막는다.
+        #    부위 굵기를 몸통 길이로 나눠 비교하므로 거리 차이는 계산에서 상쇄된다.
+        #    유도선에서 막으면 고쳐도 이득이 없는 이유로 사용자를 돌려보내게 된다.
+        #    (통과하는 쪽은 아래 "거부된 사진은 저장되지 않음" 검사 뒤에서 확인한다)
+        r = upload(f"{SP}/user", H, {**ok, "framing_score": "0.3"})  # F_HARD=0.40 미만
         check(
-            "프레이밍 미달 → 422 FRAMING",
+            "거리가 극단적으로 다르면 → 422 FRAMING",
             r.status_code == 422 and r.json()["error"]["detail"]["reason"] == "FRAMING",
+            f"status={r.status_code}",
         )
 
         r = upload(f"{SP}/user", H, {**ok, "facing_delta": "0.5"})  # R_MAX=0.25 초과
@@ -224,6 +229,18 @@ def main() -> int:
         check(
             "거부된 사진은 저장되지 않음",
             db.get_photo(UUID(session_id), "USER") is None,
+        )
+
+        # ⚠️ 위 검사가 끝난 뒤에 확인한다 — 여기서 성공하면 사진이 남기 때문이다.
+        r = upload(f"{SP}/user", H, {**ok, "framing_score": "0.5"})  # F_MIN 미만, F_HARD 이상
+        check(
+            "거리가 유도선에 못 미쳐도 통과 (고쳐도 이득 없는 이유로 막지 않는다)",
+            r.status_code == 201,
+            f"status={r.status_code}",
+        )
+        check(
+            "그때는 저장된다",
+            db.get_photo(UUID(session_id), "USER") is not None,
         )
 
         # ⚠️ 형식 판별을 Content-Type 헤더가 아니라 실제 디코딩으로 하는지.

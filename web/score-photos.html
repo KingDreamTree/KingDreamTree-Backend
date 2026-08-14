@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>사진 점수 매기기</title>
+<style>
+  :root { color-scheme: light dark;
+    --bg:#EDEFF1; --card:#fff; --ink:#14181C; --muted:#66727A; --rule:#D5DBDF;
+    --ok:#1D6547; --okbg:#DCEAE3; --bad:#A32E1E; --badbg:#F5DFDA;
+    --warn:#7E5A11; --warnbg:#F0E7D0; --accent:#1C5F5A; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0F1316; --card:#171D21; --ink:#E3E9EC; --muted:#87949E; --rule:#263036;
+      --ok:#5FB68C; --okbg:#143024; --bad:#E17F65; --badbg:#371C16;
+      --warn:#CFA349; --warnbg:#322611; --accent:#62B3AC; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); padding:24px 20px 70px;
+         font:15px/1.65 system-ui,"Malgun Gothic",sans-serif; }
+  .wrap { max-width:860px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+  h1 { font-size:23px; margin:0; letter-spacing:-.02em; }
+  p { margin:0; color:var(--muted); max-width:62ch; font-size:14px; }
+  #status { padding:10px 15px; font-size:14px; }
+  #status.ok{background:var(--okbg);color:var(--ok)} #status.bad{background:var(--badbg);color:var(--bad)}
+  #status.warn{background:var(--warnbg);color:var(--warn)}
+  .bar { background:var(--card); border:1px solid var(--rule); padding:14px 16px;
+         display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  button { font:inherit; padding:8px 14px; border:1px solid var(--rule);
+           background:var(--card); color:var(--ink); cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:default; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; background:var(--card);
+          border:1px solid var(--rule); }
+  th,td { padding:9px 11px; border-bottom:1px solid var(--rule); text-align:left; vertical-align:middle; }
+  thead th { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); }
+  tbody tr:last-child td { border-bottom:0; }
+  td.n { font-family:Consolas,monospace; font-variant-numeric:tabular-nums; white-space:nowrap; }
+  td img { width:52px; height:64px; object-fit:cover; border:1px solid var(--rule); display:block; }
+  .ref { background:var(--okbg); color:var(--ok); font-weight:700; font-size:11px; padding:2px 7px; }
+  .note { background:var(--card); border:1px solid var(--rule); padding:13px 16px; font-size:13.5px; }
+  code { font-family:Consolas,monospace; font-size:.88em; background:var(--bg);
+         border:1px solid var(--rule); padding:1px 5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>사진 점수 매기기</h1>
+  <p>이미 찍어둔 사진들의 자세 점수를 다시 계산합니다. <strong>첫 번째 사진이 기준</strong>이 되고, 나머지가 그것과 얼마나 다른지를 잽니다.</p>
+
+  <div id="status" class="warn">MediaPipe 준비 중…</div>
+
+  <div class="bar">
+    <input type="file" id="files" accept="image/*" multiple disabled>
+    <button id="rename" class="primary" disabled>점수 이름으로 전부 내려받기</button>
+  </div>
+
+  <table>
+    <thead><tr><th></th><th>파일</th><th>자세 P</th><th>거리 F</th><th>정면성 R</th><th>새 이름</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="6" style="color:var(--muted)">사진을 골라주세요</td></tr></tbody>
+  </table>
+
+  <div class="note">
+    ⚠️ <strong>파일을 고르는 순서가 중요합니다.</strong> 맨 처음 것이 기준이 되므로,
+    <strong>레퍼런스 자세에 가장 가까운 사진</strong>을 첫 번째로 두세요.
+    보통 촬영 시각이 가장 빠른 것입니다.<br><br>
+    내려받은 파일들을 <code>refit-backend/tolerance/</code> 에 넣고
+    <code>python scripts/measure_pose_tolerance.py --dir tolerance</code> 를 돌리면 됩니다.
+  </div>
+</div>
+
+<script type="module">
+import { poseScore, framingScore, facingDelta } from "./pose-score.js";
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (m, k = "warn") => { $("status").textContent = m; $("status").className = k; };
+
+// ⚠️ 이 페이지는 서버를 안 쓴다. 사진에 점수를 매기는 도구일 뿐이고,
+//    판정을 하는 게 아니다. 그래서 기준값을 여기 적어도 규약 위반이 아니다.
+//    (docs/pose-scoring.md 와 같은 값)
+const C = { tol_deg:45, hard_tol_deg:60, threshold:70, f_min:.65, f_hard:.40,
+            r_max:.25, min_visible_angles:4, min_visibility:.5, n_hold:15 };
+
+let landmarker = null, results = [];
+
+try {
+  const { FilesetResolver, PoseLandmarker } = await import(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14");
+  const vision = await FilesetResolver.forVisionTasks(
+    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+  landmarker = await PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath:
+      "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+      delegate: "GPU" },
+    runningMode: "IMAGE",
+    numPoses: 1,
+  });
+  setStatus("준비됐습니다. 사진을 고르세요 — 첫 번째가 기준이 됩니다.", "ok");
+  $("files").disabled = false;
+} catch (e) {
+  setStatus(`MediaPipe 를 불러오지 못했습니다: ${e.message}`, "bad");
+}
+
+const loadImage = (file) => new Promise((res, rej) => {
+  const img = new Image();
+  img.onload = () => res(img);
+  img.onerror = rej;
+  img.src = URL.createObjectURL(file);
+});
+
+$("files").onchange = async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  setStatus(`${files.length}장 분석 중…`, "warn");
+  results = [];
+
+  for (const f of files) {
+    const img = await loadImage(f);
+    const det = landmarker.detect(img);
+    results.push({ file: f, img, lm: det.landmarks[0] ?? null });
+  }
+
+  const ref = results.find((r) => r.lm);
+  if (!ref) { setStatus("어느 사진에서도 사람을 찾지 못했습니다.", "bad"); return; }
+
+  const rows = results.map((r, i) => {
+    if (!r.lm) return { ...r, p:null };
+    const p = poseScore(ref.lm, r.lm, C);
+    return { ...r, p: p.score, reason: p.reason,
+             f: framingScore(ref.lm, r.lm, C), rr: facingDelta(ref.lm, r.lm),
+             isRef: r === ref };
+  });
+
+  $("rows").innerHTML = rows.map((r) => {
+    if (r.p === null)
+      return `<tr><td><img src="${r.img.src}"></td><td>${r.file.name}</td>
+              <td colspan="4" style="color:var(--bad)">사람을 찾지 못했습니다</td></tr>`;
+    const name = `${Math.round(r.p)}.jpg`;
+    return `<tr>
+      <td><img src="${r.img.src}"></td>
+      <td>${r.file.name}${r.isRef ? ' <span class="ref">기준</span>' : ""}</td>
+      <td class="n">${r.p.toFixed(1)}${r.reason ? ` <span style="color:var(--bad)">${r.reason}</span>` : ""}</td>
+      <td class="n">${r.f.toFixed(3)}</td>
+      <td class="n">${r.rr.toFixed(3)}</td>
+      <td class="n">${name}</td></tr>`;
+  }).join("");
+
+  const usable = rows.filter((r) => r.p !== null);
+  const spread = Math.max(...usable.map(r => r.p)) - Math.min(...usable.map(r => r.p));
+  setStatus(
+    spread < 25
+      ? `분석 완료. ⚠️ 점수 폭이 ${spread.toFixed(0)}점밖에 안 됩니다 — 실험에는 60~100점처럼 넓게 퍼진 사진이 필요합니다.`
+      : `분석 완료. 점수 폭 ${spread.toFixed(0)}점. 실험에 쓸 만합니다.`,
+    spread < 25 ? "warn" : "ok");
+  $("rename").disabled = false;
+  window._rows = rows;
+};
+
+$("rename").onclick = async () => {
+  for (const r of window._rows ?? []) {
+    if (r.p === null) continue;
+    const a = document.createElement("a");
+    a.href = r.img.src;
+    a.download = `${Math.round(r.p)}.jpg`;
+    a.click();
+    await new Promise((s) => setTimeout(s, 300));   // 브라우저가 연속 다운로드를 막는다
+  }
+  setStatus("내려받았습니다. tolerance/ 폴더로 옮기세요.", "ok");
+};
+</script>
+</body>
+</html>

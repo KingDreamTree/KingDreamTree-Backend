@@ -379,7 +379,9 @@ def segment(
         model_version=model_version(size),
         person_pixel_count=person_pixel_count,
         person_area_ratio=min(person_pixel_count / (w * h), 1.0),
-        detected_class_count=int(len(np.unique(labels))),
+        # ⚠️ Background(0)는 빼고 센다. 넣으면 parts 개수와 늘 1 이 어긋나서
+        #    "검출 12개인데 목록은 11개"가 된다. 화면에 나가는 숫자다.
+        detected_class_count=int(np.count_nonzero(np.unique(labels))),
         inference_ms=elapsed_ms,
         parts=parts,
         valid_comparable_raw=valid_raw,

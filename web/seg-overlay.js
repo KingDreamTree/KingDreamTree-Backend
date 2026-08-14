@@ -20,9 +20,14 @@
 
 const OVERLAY_ALPHA = 165; // 0~255. 색은 보이되 몸의 윤곽도 남는 선
 
-/** hex "#RRGGBB" → [r,g,b] */
+//: 마스터에 색이 없는 부위용 (비교 대상이 아닌 클래스는 color_hex 가 null 이다).
+//  ⚠️ 이걸 안 받치면 rgb(null) 에서 통째로 죽는다 — 실측으로 잡은 버그.
+const FALLBACK_HEX = "#9aa3b2";
+
+/** hex "#RRGGBB" → [r,g,b]. null/이상값이면 회색으로 받친다. */
 function rgb(hex) {
-  const v = parseInt(hex.replace("#", ""), 16);
+  const v = parseInt(String(hex || FALLBACK_HEX).replace("#", ""), 16);
+  if (Number.isNaN(v)) return rgb(FALLBACK_HEX);
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
@@ -256,7 +261,7 @@ export async function mountSegOverlay(container, seg) {
     if (!p.is_valid) chip.title = `무효: ${p.invalid_reason ?? "?"}`;
     const dot = document.createElement("span");
     dot.className = "dot";
-    dot.style.background = p.color_hex;
+    dot.style.background = p.color_hex || FALLBACK_HEX;
     chip.appendChild(dot);
     chip.appendChild(document.createTextNode(p.name_ko ?? name));
     chip.onclick = () => toggle(name);

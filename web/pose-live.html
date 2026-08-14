@@ -97,6 +97,19 @@
   .holdwrap { height:4px; background:#0d1014; border-radius:2px; overflow:hidden; margin:12px 0 0; }
   #holdbar { height:100%; width:0; background:var(--accent); transition:width .06s linear; }
 
+  /* ── 셔터 ── */
+  .flash { position:absolute; inset:0; background:#fff; opacity:0; pointer-events:none; }
+  .flash.on { animation:fl .45s ease-out; }
+  @keyframes fl { 0%{opacity:.95} 100%{opacity:0} }
+
+  .result { display:none; margin-top:12px; background:var(--panel); border:1px solid var(--line);
+            border-radius:8px; padding:13px; gap:14px; grid-template-columns:230px 1fr; align-items:start; }
+  .result.on { display:grid; }
+  .result img { width:100%; border:1px solid var(--line); border-radius:4px; display:block; }
+  .result .vals { font-family:var(--mono); font-size:12.5px; line-height:1.9; }
+  .result .vals b { color:var(--accent); }
+  @media (max-width:900px) { .result.on { grid-template-columns:1fr; } }
+
   .note { color:var(--dim); font-size:12.5px; margin-top:16px; border-left:2px solid var(--line);
           padding-left:12px; }
   .note b { color:var(--ink); }
@@ -137,6 +150,7 @@
       <div class="view" id="liveview">
         <video id="video" playsinline muted></video>
         <canvas id="livecv"></canvas>
+        <div class="flash" id="flash"></div>
       </div>
     </div>
   </div>
@@ -145,11 +159,27 @@
   <div id="checks" style="display:flex;flex-wrap:wrap;gap:8px;font-family:var(--mono);font-size:12px"></div>
   <div class="holdwrap"><div id="holdbar"></div></div>
 
+  <div class="result" id="result">
+    <img id="shot" alt="자동 촬영된 사진">
+    <div>
+      <div style="font-weight:700;margin-bottom:6px">촬영된 사진 <span class="n" id="shotmeta"></span></div>
+      <div class="vals" id="vals"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button id="save">내려받기</button>
+      </div>
+      <div style="color:var(--dim);font-size:12px;margin-top:8px;line-height:1.6">
+        거울 모드와 무관하게 <b style="color:var(--ink)">카메라 원본(비반전)</b>으로 저장됩니다 —
+        서버로 올라가는 사진과 같습니다. 이어서 찍으려면 위의 "다시 찍기"를 누르세요.
+      </div>
+    </div>
+  </div>
+
   <div class="metrics" style="margin-top:12px">
     <div class="m">
       <div class="top"><span class="nm">자세 (P)</span><span class="vl" id="pv">–</span></div>
       <div class="track"><div class="fill" id="pf"></div><div class="mark" id="pm"></div></div>
       <div class="ds">팔다리·몸통이 가리키는 방향의 일치도</div>
+      <div class="raw" id="praw">–</div>
     </div>
     <div class="m">
       <div class="top"><span class="nm">거리 (F)</span><span class="vl" id="fv">–</span></div>
@@ -157,9 +187,9 @@
       <div class="ds">몸통 길이 비율</div>
     </div>
     <div class="m">
-      <div class="top"><span class="nm">몸통 방향 (R)</span><span class="vl" id="rv">–</span></div>
-      <div class="track"><div class="fill" id="rf"></div><div class="mark" id="rm"></div></div>
-      <div class="ds">0이면 레퍼런스와 같은 방향</div>
+      <div class="top"><span class="nm">몸통 방향 (R) <span style="opacity:.6">(관찰용)</span></span><span class="vl" id="rv">–</span></div>
+      <div class="track"><div class="fill" id="rf"></div></div>
+      <div class="ds">0이면 레퍼런스와 같은 방향. <b>판정에 안 씁니다</b></div>
       <div class="raw" id="rraw">–</div>
     </div>
     <div class="m">
@@ -200,8 +230,8 @@ $("load").onclick = async () => {
     criteria = await fetchCriteria($("api").value.trim());
     hold = createHoldGate(criteria);
     $("pm").style.left = criteria.threshold + "%";
-    $("fm").style.left = (criteria.f_min * 100) + "%";
-    $("rm").style.left = (criteria.r_max * 100) + "%";
+    // ⚠️ 거리 눈금은 f_hard(거부선)에 둔다. f_min 은 문구 안내용이라 셔터를 안 막는다.
+    $("fm").style.left = (criteria.f_hard * 100) + "%";
     $("cam").disabled = false;
     setStatus(`기준을 받았습니다 — ${JSON.stringify(criteria)}`, "ok");
   } catch (e) {
@@ -309,6 +339,38 @@ $("reshoot").onclick = () => {
   setStatus("이어서 진행합니다. 자세를 맞추면 다시 찍힙니다.", "ok");
 };
 
+// ── 셔터 ──────────────────────────────────────────────────────────────────
+let lastScore = 0;
+
+function capture(r) {
+  const v = $("video");
+  const c = document.createElement("canvas");
+  c.width = v.videoWidth; c.height = v.videoHeight;
+  // ⚠️ 카메라 원본을 그린다. 거울 모드는 보기 전용이다 — 좌표와 마찬가지로
+  //    사진도 비반전이어야 서버로 올라가는 것과 같다.
+  c.getContext("2d").drawImage(v, 0, 0);
+
+  $("shot").src = c.toDataURL("image/jpeg", 0.9);
+  $("shotmeta").textContent = `${v.videoWidth}×${v.videoHeight}`;
+  $("vals").innerHTML =
+    `자세 P <b>${r.pose_similarity.toFixed(1)}</b> · 거리 F <b>${r.framing_score.toFixed(3)}</b> · ` +
+    `방향 R <b>${r.facing_delta.toFixed(3)}</b> · OKS <b>${r.oks.toFixed(3)}</b>`;
+  $("result").classList.add("on");
+  lastScore = r.pose_similarity;
+
+  const f = $("flash");
+  f.classList.remove("on"); void f.offsetWidth; f.classList.add("on");
+}
+
+$("save").onclick = () => {
+  const a = document.createElement("a");
+  a.href = $("shot").src;
+  // ⚠️ 파일명에 점수를 넣는다 — 임계값 측정 스크립트가 파일명에서 점수를 읽는다
+  //    (pose-demo.html 과 같은 규칙).
+  a.download = `${lastScore.toFixed(0)}.jpg`;
+  a.click();
+};
+
 // ── 5. 그리기 ──────────────────────────────────────────────────────────────
 function drawSkeleton(cv, lm, view) {
   const r = view.getBoundingClientRect();
@@ -377,7 +439,8 @@ function loop() {
       $("holdbar").style.width = (fired ? 1 : (captured ? 0 : hold.progress)) * 100 + "%";
       if (fired) {
         captured = true;
-        setStatus("촬영 조건을 만족했습니다. ⚠️ 숫자는 계속 갱신되니 실험을 이어가도 됩니다.", "ok");
+        capture(r);
+        setStatus("찰칵 — 촬영됐습니다. 아래에서 사진을 확인하세요. 이어서 찍으려면 '다시 찍기'.", "ok");
       }
     } else {
       $("guide").textContent = refLm ? "사람이 보이지 않습니다" : "레퍼런스 사진을 올려주세요";
@@ -400,10 +463,18 @@ function render(r) {
       r.pose_similarity < criteria.threshold);
   set("fv", "ff", r.framing_score.toFixed(3), r.framing_score * 100,
       r.framing_score < criteria.f_hard);
-  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100,
-      r.facing_delta > criteria.r_max);
-  // ⚠️ OKS 는 bad 표시를 하지 않는다 — 임계값이 아직 없다. 있는 척하면 안 된다.
+  // ⚠️ R·OKS 는 bad 표시를 하지 않는다 — 관찰용이라 임계값이 없다. 있는 척하면 안 된다.
+  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100, false);
   set("kv", "kf", r.oks.toFixed(3), r.oks * 100, false);
+
+  // ⚠️ 점수가 0 일 때 "평균이 낮아서"인지 "관절 하나가 하드컷"인지 화면에서
+  //    구분이 안 됐다 — 사유와 최악 관절을 그대로 보여준다.
+  const worst = Object.entries(r.detail.diffs)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([k, v]) => `${k} ${v.toFixed(0)}°`).join("  ");
+  $("praw").textContent =
+    (r.detail.poseReason ? `${r.detail.poseReason} · ` : "") +
+    (worst || "잴 각도 없음") + ` · 유효각도 ${r.detail.usedAngles}개`;
 
   const spread = (lm) => {
     const sl = lm[IDX.shoulderL], sr = lm[IDX.shoulderR];
@@ -420,13 +491,14 @@ function render(r) {
     `깊이차    ${show(spread(refLm))} → ${show(spread(liveLm))}`;
 
   // ⚠️ message 는 **제일 먼저 걸린 것 하나만** 알려준다. 자동 촬영이 안 될 때
-  //    "그럼 나머지는 통과인가"를 알 수 없어서, 네 조건을 다 펼쳐 보여준다.
+  //    "그럼 나머지는 통과인가"를 알 수 없어서, 셔터 조건을 다 펼쳐 보여준다.
+  //    (거리는 거부선 f_hard 다 — f_min 은 문구 안내일 뿐 셔터를 안 막는다.
+  //     방향 R 은 2026-08-14 부터 관찰용이라 여기서 뺐다.)
   const c = criteria;
   const checks = [
     ["사람 1명", personCount <= 1],
     [`자세 ≥ ${c.threshold}`, r.pose_similarity >= c.threshold],
-    [`거리 ≥ ${c.f_min}`, r.framing_score >= c.f_min],
-    [`방향 ≤ ${c.r_max}`, r.facing_delta <= c.r_max],
+    [`거리 ≥ ${c.f_hard}`, r.framing_score >= c.f_hard],
   ];
   $("checks").innerHTML = checks.map(([t, ok]) =>
     `<span style="padding:3px 9px;border-radius:4px;background:${ok ? "#173a2a" : "#3a1e1a"};` +

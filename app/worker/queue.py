@@ -277,6 +277,41 @@ def fail(job_id: UUID, error: str, retryable: bool = True) -> dict[str, Any]:
     return client.table("job").update(patch).eq("job_id", str(job_id)).execute().data[0]
 
 
+def cancel_open_for_photo(session_id: UUID, photo_id: UUID) -> int:
+    """폐기된 사진을 가리키는 아직 안 끝난 잡을 종결한다. 종결한 개수 반환.
+
+    ⚠️ 사진을 교체하면 **옛 잡은 없어진 photo_id 를 들고 그대로 남는다.**
+       그대로 두면 워커가 집어 "대상 사진을 찾을 수 없습니다"로 실패하고,
+       재시도 여력만큼(기본 3회) 반복한다. 세그는 GPU 작업이라 그냥 낭비다.
+       화면에도 방금 올린 사진과 무관한 FAILED 가 하나 남는다.
+
+    ⚠️ PROCESSING 인 잡도 같이 내린다. 이미 GPU 에서 돌고 있더라도, 그 결과는
+       존재하지 않는 사진에 대한 것이라 어차피 저장되지 않는다.
+    ⚠️ retryable=False 로 종결한다 — 사진이 없어진 것은 다시 시도해도 그대로다.
+    """
+    client = get_client()
+    rows = (
+        client.table("job")
+        .select("job_id,payload")
+        .eq("session_id", str(session_id))
+        .in_("status", list(OPEN_STATUSES))
+        .execute()
+        .data
+    )
+    targets = [
+        r["job_id"] for r in rows if str((r.get("payload") or {}).get("photo_id")) == str(photo_id)
+    ]
+    for job_id in targets:
+        client.table("job").update(
+            {
+                "status": JobStatus.FAILED,
+                "error": "사진이 교체되어 취소되었습니다.",
+                "finished_at": _now(),
+            }
+        ).eq("job_id", job_id).execute()
+    return len(targets)
+
+
 # --------------------------------------------------------------------------- #
 # 조회
 # --------------------------------------------------------------------------- #

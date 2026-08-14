@@ -148,6 +148,10 @@ POST /sessions                  → 201, 새 session_id
 
 **응답 201** — `photo_id` / `job_id` / `width` / `height` / `pose_scale_basis` / `was_mirrored` / `pose_landmarks` / `signed_url` / `signed_url_expires_at` / `segmented`
 
+⚠️ **재업로드하면 이전 사진과 그 분석 결과는 통째로 사라집니다.** 진행 중이던 부위 분리 작업도 취소됩니다(`FAILED`, `error: "사진이 교체되어 취소되었습니다."`). 폴링 중이었다면 **새 `job_id` 로 갈아타세요** — 옛 job_id 를 계속 보면 실패로 뜹니다.
+
+⚠️ 조회(`GET`) 시 `job_id` 는 **null 일 수 있습니다.** null 이면 폴링하지 마세요.
+
 ### ⚠️ 레퍼런스 복장 안내가 꼭 필요합니다
 
 **레퍼런스에서 안 잡힌 부위는 사용자 사진이 아무리 잘 나와도 비교가 안 됩니다.** 두 사진의 교집합만 비교하기 때문입니다.

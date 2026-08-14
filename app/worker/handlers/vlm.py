@@ -31,7 +31,7 @@ from PIL import Image
 
 from app.config import settings
 from app.schemas.enums import DomainStatus, JobKind, PhotoKind, ScoreSource, VlmInputType
-from app.services import diagnosis_repo, inbody_repo, segmap, storage, vlm
+from app.services import diagnosis_repo, inbody_repo, scoring, segmap, storage, vlm
 from app.worker import queue
 from app.worker.registry import register
 
@@ -277,29 +277,40 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("모든 부위의 진단이 실패해 종합할 수 없습니다.")
 
     inbody, inbody_source = _inbody_for(session_id)
+    overall_input = [_for_overall(r) for r in done]
+
+    # 점수는 코드가 계산한다 (score_source=RULE). VLM 은 격차 "판정"까지만 하고
+    # 판정→점수 합산은 규칙이다 — "68점이 왜 68점인가"에 공식으로 답하기 위해서.
+    # 근거·공식은 app/services/scoring.py 모듈 docstring.
+    scored = scoring.compute_similarity(overall_input)
+    score = scored["score"] if scored else None
+
     result = asyncio.run(
-        vlm.diagnose_overall(results=[_for_overall(r) for r in done], failed=failed, inbody=inbody)
+        vlm.diagnose_overall(results=overall_input, failed=failed, inbody=inbody, score=score)
     )
 
     diagnosis_repo.upsert_overall(
         session_id,
         {
-            "similarity_score": result["similarity_score"],
-            # ⚠️ 규칙 합산은 스코프 아웃 — 점수는 VLM 직접 출력만 쓴다
-            #    (llm-strategy.md §F09).
-            "score_source": str(ScoreSource.VLM),
-            "score_rationale": result["score_rationale"],
+            "similarity_score": score,
+            "score_source": str(ScoreSource.RULE),
+            "score_rationale": scored["rationale"] if scored else None,
             "summary": result["summary"],
             "priority_parts": result["priority_parts"],
             "strengths": result["strengths"],
             "cautions": result["cautions"],
-            "raw_response": result.get("raw_response"),
+            # breakdown 을 함께 박제 — 심사·디버깅 때 "이 점수가 어떻게 나왔나"를
+            # 부위 단위까지 재구성할 수 있다.
+            "raw_response": {
+                "llm": result.get("raw_response"),
+                "score_breakdown": scored["breakdown"] if scored else None,
+            },
             "status": str(DomainStatus.DONE),
         },
     )
 
     return {
-        "similarity_score": result["similarity_score"],
+        "similarity_score": score,
         "judged": len(done),
         "failed": len(failed),
         "inbody": inbody_source,

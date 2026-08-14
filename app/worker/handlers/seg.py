@@ -97,6 +97,13 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
                 "bbox_w": p.bbox_w,
                 "bbox_h": p.bbox_h,
                 "is_truncated": p.is_truncated,
+                # ⚠️ 병합을 안 돌렸으면 0 이 아니라 NULL 이다.
+                #    0 으로 쓰면 "옷을 안 입어서 흡수분이 없음"과
+                #    "병합 자체를 안 함"이 구분되지 않는다. 나중에 이 데이터를
+                #    다시 볼 때 두 경우를 가를 수 없게 된다.
+                "clothing_pixel_count": (
+                    p.clothing_pixel_count if settings.seg_merge_clothing else None
+                ),
                 "is_valid": p.is_valid,
                 "invalid_reason": p.invalid_reason,
             }

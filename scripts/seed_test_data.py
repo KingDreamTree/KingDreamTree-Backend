@@ -35,17 +35,27 @@ MAP_W, MAP_H = 400, 600  # seg_map PNG 해상도
 PHOTO_W, PHOTO_H = 400, 600  # 더미 사진 해상도
 
 # (class_name, pixel_value, bbox_x, bbox_y, bbox_w, bbox_h)
-# ⚠️ pixel_value 는 임시값. A 실측 후 교체 예정.
+#
+# pixel_value 는 Sapiens2 alpha 순서의 **실측 확정값**이다 (PR #7, 2026-08-13).
+# alpha = goliath 28개의 index 2 자리에 Eyeglasses 가 끼어들어 그 이후가 +1 밀린 것.
+#   → app/services/sapiens_labels.py 의 VERIFIED_ORDER 가 유일한 출처
+#
+# ⚠️ 여기가 라벨 값을 하드코딩하는 **유일한 곳**이다. 런타임 코드는 절대 이러지
+#    않는다 — segmentation.label_map 을 DB 에서 읽는다. 더미 픽스처는 DB 에 넣을
+#    label_map 을 스스로 만들어야 해서 어쩔 수 없이 값을 안다.
+#
+# ⚠️ 좌/우가 화면 좌표와 반대인 것이 정상이다. 정면 사진에서 피사체의 왼쪽은
+#    화면 오른쪽(x 가 큼)에 온다. bbox 도 그 규칙에 맞춰 배치했다.
 COMPARABLE_PARTS = [
-    ("Torso", 1, 160, 150, 80, 200),
-    ("Left_Upper_Arm", 2, 95, 155, 60, 100),
-    ("Left_Lower_Arm", 3, 85, 260, 50, 90),
-    ("Right_Upper_Arm", 4, 245, 155, 60, 100),
-    ("Right_Lower_Arm", 5, 265, 260, 50, 90),
-    ("Left_Upper_Leg", 6, 145, 355, 55, 120),
-    ("Left_Lower_Leg", 7, 140, 480, 50, 100),
-    ("Right_Upper_Leg", 8, 200, 355, 55, 120),
-    ("Right_Lower_Leg", 9, 210, 480, 50, 100),
+    ("Torso", 22, 160, 150, 80, 200),
+    ("Left_Upper_Arm", 11, 245, 155, 60, 100),
+    ("Left_Lower_Arm", 7, 265, 260, 50, 90),
+    ("Right_Upper_Arm", 20, 95, 155, 60, 100),
+    ("Right_Lower_Arm", 16, 85, 260, 50, 90),
+    ("Left_Upper_Leg", 12, 200, 355, 55, 120),
+    ("Left_Lower_Leg", 8, 210, 480, 50, 100),
+    ("Right_Upper_Leg", 21, 145, 355, 55, 120),
+    ("Right_Lower_Leg", 17, 140, 480, 50, 100),
 ]
 
 INBODY_SEGMENTS = [
@@ -57,7 +67,9 @@ INBODY_SEGMENTS = [
 ]
 
 MODEL_NAME = "sapiens2"
-MODEL_VERSION = "dummy-seed-v1"  # 실측 후 A가 실제 체크포인트명으로 교체
+#: ⚠️ 실제 체크포인트명(sapiens2-seg-5b)을 쓰지 않는다. 더미 행이 실추론 결과로
+#:    오인되면 안 된다 — 이 세그멘테이션은 사각형 몇 개일 뿐이다.
+MODEL_VERSION = "dummy-seed-v1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

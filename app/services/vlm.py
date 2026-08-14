@@ -215,6 +215,19 @@ def _coerce_part(
     blocked = item.get("blocked_reason")
     blocked = blocked.strip() if isinstance(blocked, str) and blocked.strip() else None
 
+    differences = _as_str_list(item.get("differences"))
+
+    # ⚠️ 자기모순 게이트 (2026-08-15 실측): differences 에 시각 관찰("두께가
+    #    두드러집니다")을 적어놓고 blocked_reason("시각 확인 불가")을 함께 보낸
+    #    케이스가 실물로 나왔다. few-shot 의 blocked 예시가 실데이터와 거의
+    #    일치하자(몸통 + 평균 94% ≈ TRUNK 94.5%) 프레임째 복사된 것.
+    #    눈으로 본 게 있다면 가려진 게 아니다 — 관찰 기록이 우선이고 blocked 는
+    #    코드가 해제한다. 이 게이트는 아래 "blocked+인바디 없음 → gap 강등"보다
+    #    먼저 와야 한다: 관찰이 있으면 gap 의 근거는 시각이므로 강등 대상이 아니다.
+    if blocked is not None and differences:
+        log.warning("%s: differences 관찰이 있는데 blocked 선언 — 모순, blocked 해제", class_name)
+        blocked = None
+
     gap_level = _enum_or_none(item.get("gap_level"), GapLevel)
     if gap_level is None and item.get("gap_level") is not None and blocked is None:
         # 판단 불가(null)도 아니고 유효한 등급도 아니다 = 형식 오류.
@@ -248,7 +261,7 @@ def _coerce_part(
 
     return {
         "class_name": class_name,
-        "differences": _as_str_list(item.get("differences")),
+        "differences": differences,
         "assessment": assessment,
         "gap_level": gap_level,
         "priority": priority,

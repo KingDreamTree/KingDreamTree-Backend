@@ -109,3 +109,12 @@ def multi_person_error() -> ApiError:
         "MULTI_PERSON",
         "사진에 여러 사람이 있습니다. 혼자 나오도록 촬영해주세요.",
     )
+
+
+def unsuitable_photo(message: str, detail: dict[str, Any] | None = None) -> ApiError:
+    """사진으로 실루엣 비교가 안 된다고 판정된 경우.
+
+    ⚠️ POSE_MISMATCH 와 다른 코드를 쓴다. 사용자가 고쳐야 할 게 다르다 —
+       포즈는 자세를 바꾸는 것이고, 이건 옷을 갈아입거나 다시 찍는 것이다.
+    """
+    return ApiError(422, "UNSUITABLE_PHOTO", message, detail)

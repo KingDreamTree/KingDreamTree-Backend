@@ -50,7 +50,7 @@ const TORSO_POINTS = [IDX.shoulderL, IDX.shoulderR, IDX.hipL, IDX.hipR];
 const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
 /** 두 점이 이루는 방향(도). */
-export const angleOf = (a, b) => (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+const angleOf = (a, b) => (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
 
 /**
  * 두 각도의 차이. 항상 0~180 으로 접는다.
@@ -58,7 +58,7 @@ export const angleOf = (a, b) => (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math
  * ⚠️ 접지 않으면 350° 와 10° 가 340° 차이로 나온다. 실제로는 20° 다.
  *    그러면 살짝 흔들린 팔이 하드 상한에 걸려 통째로 탈락한다.
  */
-export const angleDiff = (p, q) => {
+const angleDiff = (p, q) => {
   const d = Math.abs(p - q) % 360;
   return d > 180 ? 360 - d : d;
 };
@@ -217,7 +217,9 @@ export function facingDelta(ref, user) {
 // 한 번에 — 화면 표시용
 // --------------------------------------------------------------------------
 
-/** 사용자에게 그대로 보여줘도 되는 문구. 서버 문구와 뜻을 맞춰 둔다. */
+/** 사용자에게 그대로 보여줘도 되는 문구. 서버 문구와 뜻을 맞춰 둔다.
+ *  ⚠️ export 해 둔 이유 — 화면 톤에 맞게 갈아끼울 수 있게. evaluate() 가
+ *     이 표를 그대로 읽으므로, 바꾸면 message 도 같이 바뀐다. */
 export const MESSAGES = {
   MULTI_PERSON: "혼자 나오도록 촬영해주세요.",
   NOT_ENOUGH_JOINTS: "전신이 보이도록 서주세요.",

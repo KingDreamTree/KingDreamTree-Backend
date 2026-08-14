@@ -9,7 +9,7 @@
 | | |
 |---|---|
 | **최종 수정일** | 2026-08-13 (superseded) |
-| **기준 문서** | `docs/db-design-v3.md`, `docs/api-spec-v1.md` |
+| **기준 문서** | `docs/db-design-v4.md`, `docs/api-spec-v2.md` |
 | **인원** | 담당 A / 담당 B |
 
 ---

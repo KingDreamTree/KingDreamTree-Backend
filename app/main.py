@@ -15,6 +15,7 @@ from app.routes.body_parts import router as body_parts_router
 from app.routes.inbody import router as inbody_router
 from app.routes.jobs import router as jobs_router
 from app.routes.photos import router as photos_router
+from app.routes.pose_criteria import router as pose_criteria_router
 from app.routes.segmentation import router as segmentation_router
 from app.routes.sessions import router as sessions_router
 from app.routes.storage import router as storage_router
@@ -72,6 +73,7 @@ for _router in (
     users_router,
     sessions_router,
     photos_router,
+    pose_criteria_router,
     segmentation_router,
     storage_router,
     inbody_router,

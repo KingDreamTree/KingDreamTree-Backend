@@ -46,9 +46,15 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값
     # ------------------------------------------------------------------ #
-    pose_threshold: float = 90.0  # THRESHOLD: 최종 유사도 하한 (%)
-    framing_f_min: float = 0.80  # F_MIN: 프레이밍 Jaccard 하한
-    pose_tol_deg: float = 40.0  # TOL: 관절 각도 허용 오차 (도)
+    # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
+    #    프론트가 GET /pose-criteria 로 이 값들을 받아 쓰므로, 여기만 고치면 양쪽이 같이 움직인다.
+    pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=45 기준 평균 오차 13.5°
+    framing_f_min: float = 0.65  # F_MIN: 인물 bbox IoU 하한
+    pose_tol_deg: float = 45.0  # TOL: 관절 하나가 0점이 되는 각도 차
+    pose_hard_tol_deg: float = 60.0  # HARD: 하나라도 넘으면 즉시 탈락 (그 부위는 못 씀)
+    pose_facing_max_delta: float = 0.25  # R_MAX: 어깨폭/몸통길이 비율 차 상한 (몸 돌아감)
+    pose_min_visible_angles: int = 4  # 유효 각도가 이보다 적으면 판정 불가
+    pose_min_visibility: float = 0.5  # 이 미만인 관절은 각도 계산에서 뺀다
     pose_n_hold: int = 15  # N_HOLD: 자동 촬영 유지 프레임 수 (프론트 참고용)
 
     # ------------------------------------------------------------------ #

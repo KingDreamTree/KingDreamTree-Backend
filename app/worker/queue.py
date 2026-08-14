@@ -4,6 +4,7 @@
 핸들러는 app/worker/handlers/ 아래에 각자 추가하고, 여기는 건드리지 않는다.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import UUID
@@ -11,6 +12,8 @@ from uuid import UUID
 from app.config import settings
 from app.schemas.enums import JobKind, JobStatus
 from app.services.db import get_client
+
+log = logging.getLogger("worker.queue")
 
 #: 아직 끝나지 않은 잡 (중복 등록 판정용)
 #: ⚠️ PROCESSING 이라고 다 살아있는 건 아니다 — 워커가 죽으면 그대로 멈춘다.
@@ -252,8 +255,27 @@ def reclaim_stale(
 # --------------------------------------------------------------------------- #
 
 
-def complete(job_id: UUID, result: dict[str, Any] | None = None) -> dict[str, Any]:
-    return (
+def _first(rows: list[dict[str, Any]] | None, job_id: UUID, what: str) -> dict[str, Any] | None:
+    """UPDATE 가 0행을 돌려준 경우를 **예외 없이** 흘려보낸다.
+
+    ⚠️ 여기서 IndexError 가 나면 **워커 프로세스가 통째로 죽는다.** 실측으로
+       겪었다: 스모크가 만든 세션이 CASCADE 로 지워지면서 job 행까지 사라졌는데,
+       그 잡을 이미 집어간 워커가 마무리하려다 `.data[0]` 에서 터졌다.
+       complete() 는 try 안이라 fail() 로 넘어가는데 fail() 도 같은 이유로 터지니
+       run.py 의 except 를 뚫고 나가 루프가 끝났다 — 잡 하나 때문에 워커 전체가
+       내려가고, 그 뒤 들어온 모든 잡이 PENDING 에 쌓인다.
+
+    잡이 사라진 것은 **정상적인 종료 사유**다 (사용자가 세션을 지웠거나
+    보관 처리했다). 경고만 남기고 None 을 돌려준다.
+    """
+    if rows:
+        return rows[0]
+    log.warning("[%s] %s — 잡 행이 없습니다 (세션이 지워진 듯). 건너뜁니다.", job_id, what)
+    return None
+
+
+def complete(job_id: UUID, result: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    rows = (
         get_client()
         .table("job")
         .update(
@@ -266,11 +288,12 @@ def complete(job_id: UUID, result: dict[str, Any] | None = None) -> dict[str, An
         )
         .eq("job_id", str(job_id))
         .execute()
-        .data[0]
+        .data
     )
+    return _first(rows, job_id, "완료 기록")
 
 
-def fail(job_id: UUID, error: str, retryable: bool = True) -> dict[str, Any]:
+def fail(job_id: UUID, error: str, retryable: bool = True) -> dict[str, Any] | None:
     """실패 처리. 재시도 여력이 남아 있으면 PENDING으로 되돌린다.
 
     ⚠️ `error`는 프론트에 그대로 노출된다.
@@ -288,7 +311,8 @@ def fail(job_id: UUID, error: str, retryable: bool = True) -> dict[str, Any]:
     if not requeue:
         patch["finished_at"] = _now()
 
-    return client.table("job").update(patch).eq("job_id", str(job_id)).execute().data[0]
+    updated = client.table("job").update(patch).eq("job_id", str(job_id)).execute().data
+    return _first(updated, job_id, "실패 기록")
 
 
 def cancel_open_for_photo(session_id: UUID, photo_id: UUID) -> int:

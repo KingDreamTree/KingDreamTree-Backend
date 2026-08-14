@@ -226,9 +226,21 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
              "detail": { "reason": "LOOSE_CLOTHING", "confidence": "HIGH" } } }
 ```
 
-`message`를 **그대로 보여주면 됩니다.** `detail.reason` 은 `LOOSE_CLOTHING` / `PERSPECTIVE_MISMATCH` / `CROPPED` / `NO_PERSON` / `MULTI_PERSON` / `TOO_DARK` / `OTHER`.
+`message`를 **그대로 보여주면 됩니다.** `detail.reason` 은 아래 중 하나입니다.
 
-⚠️ **이 검사 때문에 업로드 응답이 2~5초 걸립니다.** AI 호출을 기다리기 때문입니다. 로딩 표시가 필요합니다 — 그 자리에서 재촬영을 유도하는 게 목적이라 일부러 동기로 만들었습니다.
+| reason | 사용자가 해야 할 일 |
+|---|---|
+| `LOOSE_CLOTHING` | 몸에 붙는 옷으로 갈아입고 재촬영 |
+| `PERSPECTIVE_MISMATCH` | 촬영 거리 조정 |
+| `CROPPED` | 몸통·팔·다리가 다 담기게 재촬영 |
+| `NO_PERSON` / `MULTI_PERSON` | 혼자 나오게 재촬영 |
+| `TOO_DARK` | 밝은 곳으로 이동 |
+| `BLURRY` | 초점 맞추고 흔들리지 않게 재촬영 |
+| `OTHER` | (message 만 표시) |
+
+> 💡 **머리나 발이 잘린 사진은 반려되지 않습니다.** 크기 정규화를 어깨~골반(또는 골반~무릎)으로 하기 때문에 머리·발은 필요 없습니다. 실측으로 확인했습니다 — 목 아래만 나온 사진도 통과합니다.
+
+⚠️ **이 검사 때문에 업로드 응답이 2~5초 걸립니다.** AI 호출을 기다리기 때문입니다. 로딩 표시가 필요합니다 — 그 자리에서 재촬영을 유도하는 게 목적이라 일부러 동기로 만들었습니다. (실측 1.1~3.6초)
 
 **⚠️ 판정에 실패한 사진은 저장되지 않습니다.** 재촬영 UI가 반드시 필요합니다.
 

@@ -75,7 +75,9 @@ const visibleIn = (frames, indexes, minVisibility) =>
   frames.every((lm) => indexes.every((i) => lm[i] && vis(lm[i]) >= minVisibility));
 
 function requireCriteria(c) {
-  if (!c || typeof c.tol_deg !== "number") {
+  // ⚠️ min_seg_ratio 까지 본다 — 2026-08-14 에 추가된 키라, 옛 서버가 내려준
+  //    criteria 를 그대로 쓰면 단축 컷이 조용히 꺼진다. 시끄럽게 죽는 게 낫다.
+  if (!c || typeof c.tol_deg !== "number" || typeof c.min_seg_ratio !== "number") {
     throw new Error(
       "criteria 가 필요합니다. GET /api/v1/pose-criteria 로 받아서 넘기세요. " +
         "(임계값을 프론트에 하드코딩하면 서버 조정 시 어긋납니다)"
@@ -99,13 +101,27 @@ function requireCriteria(c) {
  *    그러면 왼팔 진단만 조용히 틀린다.
  *    최솟값만 쓰면 손목이 살짝 흔들린 것으로 전체가 떨어진다.
  *    그래서 평균으로 점수를 내고 하드 상한으로 파국만 막는다.
+ *
+ * ⚠️ **카메라 쪽으로 뻗은(단축된) 세그먼트는 뺀다.** 팔이 렌즈를 향하면 투영
+ *    길이가 짧아지고, 그 2D 각도는 사실상 난수다 — 자세가 같아도 hard_tol_deg
+ *    를 넘겨 전체를 0점으로 만들었다. "육안으로 같은데 안 찍히는" 제1 원인.
+ *    투영 길이 < 몸통 길이 × min_seg_ratio 면 그 세그먼트는 없는 것으로 본다.
  */
 export function poseScore(ref, user, criteria) {
   const c = requireCriteria(criteria);
   const diffs = {};
 
+  const tRef = torsoLength(ref, c.min_visibility);
+  const tUser = torsoLength(user, c.min_visibility);
+  const segLen = (lm, a, b) => Math.hypot(lm[b].x - lm[a].x, lm[b].y - lm[a].y);
+  // ⚠️ 몸통을 잴 수 없으면(0) 컷을 끈다 — 기준 없이 자르면 전부 잘려나간다.
+  const foreshortened = (lm, a, b, torso) =>
+    torso > 0 && segLen(lm, a, b) < torso * c.min_seg_ratio;
+
   for (const [name, a, b] of SEGMENTS) {
     if (!visibleIn([ref, user], [a, b], c.min_visibility)) continue;
+    // ⚠️ **한쪽에서만 단축이어도 뺀다.** 각도 비교는 양쪽이 다 믿을 만해야 성립한다.
+    if (foreshortened(ref, a, b, tRef) || foreshortened(user, a, b, tUser)) continue;
     diffs[name] = angleDiff(angleOf(ref[a], ref[b]), angleOf(user[a], user[b]));
   }
 
@@ -176,6 +192,11 @@ export function framingScore(ref, user, criteria) {
 
 // --------------------------------------------------------------------------
 // R — 몸통 방향 차이 (0~. ⚠️ 1 을 넘을 수 있다)
+//
+// ⚠️ **2026-08-14 부터 관찰용이다. 판정에 쓰지 않는다** (서버도 같이 뺐다 —
+//    app/services/pose.py). 어깨폭/몸통길이 비율이 잡음에 민감해 육안으로
+//    비슷한 자세를 반려했다. 값은 계속 계산·표시·저장한다 — "돌아간 사진이
+//    진단을 실제로 얼마나 망치나"가 데이터로 쌓이면 관문을 되살릴 수 있다.
 // --------------------------------------------------------------------------
 
 /**
@@ -516,10 +537,10 @@ export const MESSAGES = {
   MULTI_PERSON: "혼자 나오도록 촬영해주세요.",
   NOT_ENOUGH_JOINTS: "전신이 보이도록 서주세요.",
   FRAMING: "레퍼런스와 촬영 거리가 너무 다릅니다.",
-  //: 유도용 — 막지는 않는다. 촬영 화면에서만 띄운다.
+  //: 유도용 — 셔터도 업로드도 막지 않는다. 문구만 띄운다.
   TOO_CLOSE: "조금 뒤로 물러나 주세요.",
   TOO_FAR: "조금 앞으로 와 주세요.",
-  FACING: "레퍼런스와 몸의 방향이 다릅니다. 같은 방향으로 서주세요.",
+  // FACING 은 2026-08-14 에 뺐다 — R 은 관찰용이라 이 문구가 나올 경로가 없다.
   POSE: "레퍼런스와 포즈를 맞춰주세요.",
   OK: "좋습니다. 그대로 유지해주세요.",
 };
@@ -528,20 +549,21 @@ export const MESSAGES = {
  * 세 값을 계산하고 통과 여부까지 판단한다.
  *
  * 두 가지를 따로 돌려준다.
- *   pass    — **자동 촬영 조건.** 유도 기준까지 만족했는가 (거리 포함)
+ *   pass    — **자동 촬영 조건.** 서버가 거부하지 않는 상태와 같다 (= !blocked)
  *   blocked — **서버가 거부하는가.** 갤러리 업로드 경로에서 이걸 본다
  *
- * ⚠️ 거리는 둘의 기준이 다르다. 촬영 중에는 f_min 으로 안내해도 공짜지만
- *    (한 걸음 물러나면 된다), 이미 찍힌 사진을 f_min 으로 막으면 처음부터
- *    다시 하라는 뜻이 된다. 게다가 거리 차이는 몸통 길이 정규화로 상쇄되므로
- *    **고쳐도 이득이 없다.** 그래서 거부는 f_hard 로만 한다.
+ * ⚠️ 거리 유도(f_min)는 **문구만 낸다. 셔터를 막지 않는다** (2026-08-14).
+ *    거리 차이는 몸통 길이 정규화로 상쇄되므로 f_min 미달은 고쳐도 이득이 없다 —
+ *    서버가 애초에 그 이유로 f_hard 로만 막는데, 셔터만 f_min 을 요구하면
+ *    "업로드는 되는데 자동 촬영은 안 되는" 사진을 만든다. 좁은 방에서는
+ *    f_min 을 영영 못 넘기도 한다(뒤로 가면 작아지고, 앞으로 오면 발이 잘린다).
  *
- * ⚠️ **판단 결과를 서버로 보내지 않는다.** 서버에는 세 값만 보내고 판정은
+ * ⚠️ **판단 결과를 서버로 보내지 않는다.** 서버에는 값만 보내고 판정은
  *    서버가 다시 한다. 이건 화면에 실시간으로 보여주기 위한 것이다.
  *
  * ⚠️ blocked 판정 순서가 서버(app/services/pose.py judge_user_photo)와 같아야 한다.
  *    다르면 화면에서 통과인데 업로드가 거부되는 상황이 생긴다.
- *      여러 명 → 거리(f_hard) → 정면성 → 자세
+ *      여러 명 → 거리(f_hard) → 자세      (정면성 R 은 2026-08-14 에 뺐다)
  *
  * ⚠️ reason 이 NOT_ENOUGH_JOINTS 면 **업로드하지 마세요.** 서버는 숫자만 받아서
  *    "포즈를 맞춰주세요"라고 답하는데, 실제 문제는 몸이 안 보이는 것이라
@@ -571,16 +593,16 @@ export function evaluate(
   };
 
   // ── 서버가 실제로 막는 조건 (app/services/pose.py 와 같은 순서·같은 기준) ──
+  // ⚠️ 정면성(R) 관문은 여기 있었다 — 2026-08-14 에 서버와 함께 뺐다(위 R 절 참고).
   let blockReason = null;
   if (multiPerson) blockReason = "MULTI_PERSON";
   else if (pose.reason === "NOT_ENOUGH_JOINTS") blockReason = "NOT_ENOUGH_JOINTS";
   else if (framing < c.f_hard) blockReason = "FRAMING";
-  else if (facing > c.r_max) blockReason = "FACING";
   else if (pose.score < c.threshold) blockReason = "POSE";
 
-  // ── 촬영 화면 유도 (막지는 않는다) ──
+  // ── 촬영 화면 안내 문구 (셔터도 업로드도 막지 않는다) ──
   // ⚠️ 거리는 f_min 에서 **안내만** 한다. 부위 굵기를 몸통 길이로 나눠 비교하므로
-  //    거리 차이는 계산에서 상쇄된다 — 여기서 막으면 고쳐도 이득이 없는 이유로
+  //    거리 차이는 계산에서 상쇄된다 — 막으면 고쳐도 이득이 없는 이유로
   //    사용자를 돌려보내게 된다. 실제 거부선은 f_hard 다.
   let guideReason = blockReason;
   if (guideReason === null && framing < c.f_min) {
@@ -589,8 +611,8 @@ export function evaluate(
 
   return {
     ...values,
-    /** 자동 촬영 조건. 유도 기준까지 만족했는가. */
-    pass: guideReason === null,
+    /** 자동 촬영 조건. 서버가 거부하지 않으면 찍는다 — 거리 유도는 문구만. */
+    pass: blockReason === null,
     /** 이 상태로 업로드하면 서버가 거부하는가. 갤러리 업로드 경로에서 쓴다. */
     blocked: blockReason !== null,
     reason: guideReason,
@@ -614,23 +636,31 @@ export function evaluate(
 // --------------------------------------------------------------------------
 
 /**
- * 통과 상태가 연속 n_hold 프레임 이어졌을 때만 true 를 돌려준다.
+ * 최근 프레임 중 n_hold 개가 통과 상태였을 때 true 를 돌려준다.
  *
  * ⚠️ 한 프레임만 보고 셔터를 누르면 손이 지나가다 우연히 맞는 순간에 찍힌다.
+ *
+ * ⚠️ **"연속 n_hold"가 아니다** (2026-08-14 에 바꿨다). MediaPipe lite 는 프레임이
+ *    수시로 튀는데, 연속 조건은 한 프레임만 튀어도 처음부터 다시 세게 했다 —
+ *    점수가 통과선 근처면 영영 안 찍혔다. 최근 n_hold+SLACK 프레임 중 n_hold 개
+ *    통과로 완화한다. 손이 지나가는 순간(통과가 몇 프레임 안 됨)은 여전히 못 찍는다.
  *
  *   const hold = createHoldGate(criteria);
  *   ...매 프레임...
  *   if (hold(result.pass)) shutter();
  */
 export function createHoldGate(criteria) {
-  const need = requireCriteria(criteria).n_hold ?? 15;
-  let streak = 0;
+  const need = requireCriteria(criteria).n_hold ?? 10;
+  const SLACK = 3; // 허용하는 튐 프레임 수 — 창 크기는 need + SLACK
+  let window = [];
 
   const gate = (ok) => {
-    streak = ok ? streak + 1 : 0;
-    gate.progress = Math.min(1, streak / need);
-    if (streak >= need) {
-      streak = 0; // 한 번 찍고 나면 다시 쌓는다
+    window.push(ok ? 1 : 0);
+    if (window.length > need + SLACK) window.shift();
+    const got = window.reduce((s, v) => s + v, 0);
+    gate.progress = Math.min(1, got / need);
+    if (got >= need) {
+      window = []; // 한 번 찍고 나면 다시 쌓는다
       gate.progress = 0;
       return true;
     }

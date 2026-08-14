@@ -332,7 +332,7 @@ X-User-Id → users 존재 확인
 2. 파일 형식·크기 검사 → 랜드마크 형식 검사 (33개, 0~1 정규화 좌표)
 3. `multi_person` → 422 `MULTI_PERSON`
 4. `pose_scale_basis`가 레퍼런스와 다르면 → 422 (`reason="FRAMING"`)
-5. `framing_score < F_HARD` → 422 (`reason="FRAMING"`), `facing_delta > R_MAX` → 422 (`reason="FACING"`), `pose_similarity < THRESHOLD` → 422 (`reason="POSE"`)
+5. `framing_score < F_HARD` → 422 (`reason="FRAMING"`), `pose_similarity < THRESHOLD` → 422 (`reason="POSE"`). ⚠️ `facing_delta` 는 받아서 저장만 한다 — FACING 거부는 2026-08-14 에 뺐다 (docs/pose-scoring.md R 절)
 6. 통과 시에만 저장 → `photo(kind='USER')` → `job(kind='SEG_USER')` 큐잉
 
 **프론트가 계산해야 하는 값** (구현: `web/pose-score.js`)

@@ -246,7 +246,7 @@ def criteria() -> dict[str, float | int]:
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
         "f_hard": settings.framing_hard_min,
-        "r_max": settings.pose_facing_max_delta,
+        "min_seg_ratio": settings.pose_min_seg_ratio,
         "min_visible_angles": settings.pose_min_visible_angles,
         "min_visibility": settings.pose_min_visibility,
         "n_hold": settings.pose_n_hold,
@@ -265,17 +265,18 @@ def judge_user_photo(
 
     산식은 docs/pose-scoring.md 참조. 여기서는 **임계값 비교만** 한다.
 
-    ⚠️ **순서가 의미를 갖는다.** 몸이 돌아간 상태의 자세 점수는 믿을 수 없고,
+    ⚠️ **순서가 의미를 갖는다.** 프레이밍이 깨진 상태의 자세 점수는 믿을 수 없고,
        안내 문구가 각각 달라야 한다 — 사용자가 취해야 할 행동이 다르기 때문이다.
-         FRAMING "비슷한 거리에서 다시" / FACING "레퍼런스와 같은 방향으로"
-         POSE    "포즈를 맞춰주세요"
+         FRAMING "비슷한 거리에서 다시" / POSE "포즈를 맞춰주세요"
 
     ⚠️ 거리(framing)는 **f_hard 로만 막는다.** f_min 은 촬영 화면 유도용이다.
        거리 차이는 몸통 길이 정규화로 상쇄되므로, 유도선에서 막으면 고쳐도
        이득이 없는 이유로 사용자를 돌려보내게 된다. 자세한 근거는 config.py 참조.
 
-    ⚠️ facing_delta 기본값이 0.0 인 것은 **미전달 시 통과**를 뜻한다.
-       프론트가 아직 이 값을 안 보내는 동안 업로드가 막히면 안 된다.
+    ⚠️ facing_delta(몸통 방향 차이)는 **더 이상 판정에 쓰지 않는다** (2026-08-14).
+       어깨폭 잡음으로 오발이 잦아 "육안으로 비슷한데 반려"를 만들었다.
+       값은 계속 받아 저장한다 — "돌아간 사진이 실제로 진단을 얼마나 망치나"를
+       나중에 데이터로 확인하고, 필요하면 관문을 되살리기 위해서다.
     """
     # ⚠️ 임계값 비교보다 **먼저** 범위를 본다. 단위를 착각한 값은 "미달"이 아니라
     #    "잘못 보낸 것"이고, 사용자에게 재촬영을 시킬 일이 아니라 프론트가 고칠 일이다.
@@ -296,11 +297,10 @@ def judge_user_photo(
     detail = {
         "pose_similarity": pose_similarity,
         "framing_score": framing_score,
-        "facing_delta": facing_delta,
+        "facing_delta": facing_delta,  # 관찰용 — 판정에는 안 쓴다
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
         "f_hard": settings.framing_hard_min,
-        "r_max": settings.pose_facing_max_delta,
     }
 
     # ⚠️ **거리는 유도 기준(f_min)이 아니라 거부 기준(f_hard)으로 막는다.**
@@ -317,20 +317,10 @@ def judge_user_photo(
             detail=detail,
         )
 
-    # ⚠️ 몸이 돌아가면 어깨폭이 좁아 보여 실루엣 굵기가 왜곡된다.
-    #    각도만으로는 안 잡힌다 — 팔을 내린 자세는 돌아서도 각도가 거의 같다.
-    #
-    # ⚠️ **이 값은 "정면인가"가 아니라 "레퍼런스와 같은 방향인가"다.**
-    #    facing_delta = |사용자 어깨폭비 − 레퍼런스 어깨폭비| / 레퍼런스 어깨폭비 로
-    #    **상대 비교**다. 레퍼런스가 측면이면 사용자도 측면이어야 0 이 나온다.
-    #    그래서 문구에 "정면"을 쓰면 안 된다 — 측면 레퍼런스를 쓰는 사용자가
-    #    올바르게 섰는데 "정면을 보라"는, 따라도 통과 못 하는 안내를 받는다.
-    if facing_delta > settings.pose_facing_max_delta:
-        raise pose_mismatch(
-            "레퍼런스와 몸의 방향이 다릅니다. 같은 방향으로 서주세요.",
-            reason="FACING",
-            detail=detail,
-        )
+    # ⚠️ FACING(몸통 방향) 관문은 여기 있었다 — 2026-08-14 에 뺐다.
+    #    어깨폭/몸통길이 비율이 잡음에 민감해 육안으로 비슷한 사진을 반려했다.
+    #    facing_delta 는 계속 받아 저장하므로(위 detail), 데이터가 쌓이면
+    #    "돌아간 사진이 진단을 망치는 선"을 실측해서 관문을 되살릴 수 있다.
 
     if pose_similarity < settings.pose_threshold:
         raise pose_mismatch(

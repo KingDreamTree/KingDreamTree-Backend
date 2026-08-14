@@ -541,7 +541,12 @@ $("run").onclick = async () => {
     renderRoutine(active, gen);
     step("s5", "done");
 
-    log("\n전 구간 완료", "ok");
+    // ⚠️ **이 블록이 없으면 F12 칸이 영영 안 열린다.** UI 와 핸들러가 다 있어도
+    //    sendfb 를 켜주는 곳이 여기뿐이라, 빠지면 버튼이 계속 회색이고
+    //    "전 구간을 먼저 실행하면 열립니다" 만 뜬다 — 실제로 한 번 빠뜨렸다.
+    await openFeedbackLoop(SID);
+
+    log("\n전 구간 완료 — 아래 5.5 에서 피드백을 보내보세요", "ok");
     step("s2", "done");
   } catch (e) {
     log(`\n중단: ${explain(e)}`, e.code === "INSUFFICIENT_PARTS" ? "warn" : "bad");
@@ -565,6 +570,46 @@ $("reset").onclick = () => location.reload();
 // ⚠️ 진행도는 세션 전체에서 센다. 버전이 갈려도 이어져야 하기 때문이다
 //    (routine_repo.count_session_logs 주석 — 2주기까지 간 사용자가 피드백
 //    한 번에 1주기로 되감기던 문제를 고친 자리다). 화면에서도 그걸 확인한다.
+
+// ⚠️ 전 구간을 다시 돌리지 않고도 피드백만 반복해 볼 수 있어야 한다.
+//    새로고침 한 번에 잠기면 세그·진단(LLM 요금)을 처음부터 다시 태워야 한다.
+//    그래서 마지막 실행의 user_id·session_id 를 localStorage 에 남기고,
+//    다음 방문에 활성 루틴이 아직 있으면 그대로 이어서 쓴다.
+const LAST = "e2e-last-run";
+
+async function openFeedbackLoop(sid, headers = H) {
+  H = headers;
+  F12.sid = sid;
+  try {
+    F12.routine = await api("GET", `/api/v1/sessions/${sid}/routines/active`);
+  } catch {
+    $("todaybox").innerHTML =
+      `<span class="warn">이 세션에 활성 루틴이 없습니다 — 전 구간을 먼저 실행하세요.</span>`;
+    return false;
+  }
+  localStorage.setItem(LAST, JSON.stringify({ user: H["X-User-Id"], sid }));
+  $("sendfb").disabled = false;
+  step("s55", "on");
+  await refreshToday();
+  return true;
+}
+
+// 페이지를 열 때 지난 실행이 아직 살아 있으면 이어준다.
+(async () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LAST) || "null");
+    if (!saved?.sid || !saved?.user) return;
+    const ok = await openFeedbackLoop(saved.sid, { "X-User-Id": saved.user });
+    if (ok) {
+      $("todaybox").insertAdjacentHTML("beforeend",
+        `<div class="dim">지난 실행을 이어서 씁니다 (세션 ${saved.sid.slice(0, 8)}). ` +
+        `새로 하려면 위에서 전 구간을 다시 실행하세요.</div>`);
+    } else {
+      localStorage.removeItem(LAST);   // 세션이 지워졌다 — 흔적도 지운다
+      $("todaybox").innerHTML = "전 구간을 먼저 실행하면 여기가 열립니다.";
+    }
+  } catch { /* 이어붙이기 실패는 조용히 무시 — 전 구간 실행은 그대로 된다 */ }
+})();
 
 const flog = (msg, cls = "") => {
   $("fblog").hidden = false;

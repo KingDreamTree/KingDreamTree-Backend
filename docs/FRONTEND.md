@@ -185,6 +185,7 @@ const hold = createHoldGate(criteria);
 const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 
 showGuide(r.message);        // "같은 방향으로 서주세요" 등, 그대로 노출 가능
+                             // 문구를 바꾸려면 MESSAGES 를 수정하세요 (export 돼 있습니다)
 if (hold(r.pass)) shutter(); // 조건이 15프레임 이어지면 자동 촬영
 
 // 업로드할 때 이 세 값을 보냅니다

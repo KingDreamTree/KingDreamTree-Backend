@@ -12,10 +12,22 @@
 ⚠️ 키는 .env 가 아니라 환경변수로만 받는다. .env 는 공유 파일(A 리뷰 대상)이라
    확정 전 변수를 늘리지 않는다. 확정되면 .env.example 에 이름만 추가한다.
 
-⚠️ ascendapi 변종은 공개 문서가 빈약해 엔드포인트 경로가 확실치 않다.
-   후보 경로를 순서대로 찔러보고 되는 것을 쓴다 — 실패해도 어떤 경로를
-   시도했는지 전부 출력하므로, RapidAPI playground 의 실제 경로와 대조해
-   상단의 *_PATH_CANDIDATES 상수에 추가하면 된다.
+━━ 실측으로 확인한 API 스펙 (2026-08-14) ━━
+
+    GET /api/v1/exercises?limit=25&after=<exerciseId>
+    GET /api/v1/bodyparts · /muscles · /equipments
+    응답: {"success": true, "meta": {total, hasNextPage, nextCursor}, "data": [...]}
+
+⚠️ **커서 파라미터 이름은 `after` 다.** 응답이 `nextCursor` 를 주길래 `cursor`/
+   `nextCursor` 로 보내면 **에러 없이 1페이지가 그대로 돌아온다.** 조용히 틀리는
+   종류라, 눈치 못 채면 같은 25개를 무한히 수집하게 된다.
+   실측: cursor/nextCursor/offset/page/skip → 이동 안 함, `after` → 이동함.
+
+⚠️ **limit 상한은 25다.** limit=100 을 보내도 25개만 온다. 전체 수집에는
+   페이지 수가 그만큼 늘어난다는 뜻이므로 rate limit 간격을 둔다.
+
+⚠️ `meta.total` 은 전체 개수가 아니라 **200 고정**으로 보인다(limit 과 무관하게
+   불변). 종료 조건은 total 이 아니라 `hasNextPage`/`nextCursor` 로 판단한다.
 """
 
 from __future__ import annotations
@@ -35,13 +47,19 @@ from typing import Any
 HOST = "edb-with-videos-and-images-by-ascendapi.p.rapidapi.com"
 OUT_DIR = Path(__file__).resolve().parent.parent / "data"
 
-#: 표준 ExerciseDB 계열에서 흔한 경로들. 되는 것을 처음 발견하는 순간 고정한다.
-EXERCISE_PATH_CANDIDATES = ("/v1/exercises", "/exercises", "/api/v1/exercises")
+#: 실측 확인된 경로 (2026-08-14). 앞의 것부터 시도한다.
+EXERCISE_PATH_CANDIDATES = ("/api/v1/exercises", "/v1/exercises", "/exercises")
 ENUM_PATH_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "bodyparts": ("/v1/bodyparts", "/bodyparts", "/exercises/bodyPartList"),
-    "muscles": ("/v1/muscles", "/muscles", "/exercises/targetList"),
-    "equipments": ("/v1/equipments", "/equipments", "/exercises/equipmentList"),
+    "bodyparts": ("/api/v1/bodyparts", "/v1/bodyparts", "/bodyparts"),
+    "muscles": ("/api/v1/muscles", "/v1/muscles", "/muscles"),
+    "equipments": ("/api/v1/equipments", "/v1/equipments", "/equipments"),
 }
+
+#: 커서 파라미터 이름. ⚠️ 응답의 `nextCursor` 를 그대로 키로 쓰면 안 된다 (모듈 주석).
+CURSOR_PARAM = "after"
+
+#: 서버가 강제하는 페이지 크기 상한. 더 크게 보내도 25개만 온다.
+MAX_PAGE_SIZE = 25
 
 #: D8 초보 제외 후보 — 이름/키워드에 이게 들어가면 is_beginner_safe=false.
 #: ⚠️ 임의 목록이다. PM 승인(D8) 후 확정하고, 승인 전에는 "표시만" 한다.
@@ -130,6 +148,16 @@ def _unwrap(data: Any) -> list[dict]:
     return []
 
 
+def _next_cursor(payload: Any) -> str | None:
+    """다음 페이지 커서. 없으면 None (= 마지막 페이지)."""
+    if not isinstance(payload, dict):
+        return None
+    meta = payload.get("meta") or {}
+    if not meta.get("hasNextPage"):
+        return None
+    return meta.get("nextCursor") or None
+
+
 def cmd_enums() -> None:
     """bodyparts / muscles / equipments 실제 enum 을 받아 저장한다.
 
@@ -153,7 +181,7 @@ def cmd_enums() -> None:
 def cmd_sample() -> None:
     """5건만 받아 필드 구조를 눈으로 확인한다 (스키마 검증용)."""
     print("exercises:")
-    _, data = _try_paths(EXERCISE_PATH_CANDIDATES, {"limit": 5, "offset": 0})
+    _, data = _try_paths(EXERCISE_PATH_CANDIDATES, {"limit": 5})
     items = _unwrap(data)
     print(json.dumps(items[:5], ensure_ascii=False, indent=2)[:4000])
     if items:
@@ -174,15 +202,29 @@ def cmd_fetch(page_size: int, max_pages: int) -> None:
     정규화한다. 한글화(name_ko)는 별도 배치(LLM 1회)에서 채운다.
     """
     OUT_DIR.mkdir(exist_ok=True)
+    page_size = min(page_size, MAX_PAGE_SIZE)
     print("exercises (첫 페이지로 경로 확정):")
-    path, first = _try_paths(EXERCISE_PATH_CANDIDATES, {"limit": page_size, "offset": 0})
+    path, first = _try_paths(EXERCISE_PATH_CANDIDATES, {"limit": page_size})
 
     all_items: list[dict] = list(_unwrap(first))
-    for page in range(1, max_pages):
-        batch = _unwrap(_get(path, {"limit": page_size, "offset": page * page_size}))
+    cursor = _next_cursor(first)
+
+    for _ in range(1, max_pages):
+        if not cursor:
+            break
+        payload = _get(path, {"limit": page_size, CURSOR_PARAM: cursor})
+        batch = _unwrap(payload)
         if not batch:
             break
+
+        # ⚠️ 커서 파라미터를 잘못 보내면 같은 페이지가 계속 온다 (모듈 주석).
+        #    에러가 안 나므로 여기서 직접 감지하지 않으면 무한 루프가 된다.
+        if batch[0].get("exerciseId") == all_items[-len(batch)].get("exerciseId"):
+            print("  [!] 같은 페이지가 반복됩니다 — 커서 파라미터를 확인하세요. 중단.")
+            break
+
         all_items.extend(batch)
+        cursor = _next_cursor(payload)
         print(f"  {len(all_items)}개 수집…")
         time.sleep(0.4)  # rate limit 예방
 
@@ -233,8 +275,8 @@ def cmd_fetch(page_size: int, max_pages: int) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description="ExerciseDB 배치 수집")
     ap.add_argument("command", choices=["enums", "sample", "fetch"])
-    ap.add_argument("--page-size", type=int, default=100)
-    ap.add_argument("--max-pages", type=int, default=50)
+    ap.add_argument("--page-size", type=int, default=25)  # 서버 상한
+    ap.add_argument("--max-pages", type=int, default=400)
     args = ap.parse_args()
 
     if args.command == "enums":

@@ -523,6 +523,90 @@ def test_baseline_separation() -> None:
     from app.prompts.overall_diagnosis import SYSTEM_PROMPT as overall_system
 
     check("F09 우선순위 1~3개 지시", "1~3개만" in overall_system)
+
+    # 자기모순 게이트 — 관찰(differences)을 적어놓고 blocked 를 선언하면 코드가
+    # blocked 를 해제한다. 실측(2026-08-15): few-shot 의 blocked 예시(몸통+평균
+    # 94%)가 실데이터(TRUNK 94.5%)와 거의 일치하자 프레임째 복사됐다 —
+    # 몸통을 눈으로 봤으면서 "시각 확인 불가"라고 보내왔다.
+    contradicted = vlm.parse_part_response(
+        {
+            "parts": [
+                {
+                    "class_name": "Torso",
+                    "differences": ["몸통 두께가 더 두드러집니다"],
+                    "assessment": "옷에 가려 확인하지 못했지만…",
+                    "gap_level": "SLIGHT",
+                    "confidence": "MEDIUM",
+                    "blocked_reason": "시각 확인 불가, 인바디 기준 판단",
+                }
+            ]
+        },
+        ["Torso"],
+        inbody_available=False,
+    )
+    row = contradicted["results"][0]
+    check("관찰 있는 blocked 는 해제", row["blocked_reason"] is None)
+    check(
+        "해제되면 gap 은 시각 근거로 유지 (인바디 없어도)",
+        row["gap_level"] == "SLIGHT",
+    )
+    check(
+        "blocked 예시가 실데이터와 안 겹침 (몸통·94% 제거)",
+        "몸통은 눈으로 확인하지 못했" not in part_system and "평균의 94%" not in part_system,
+    )
+    check("blocked→differences 빈 배열 규칙 명시", "반드시 빈 배열" in part_system)
+    check("처방 문장 복사 금지 명시", "처방 문장도 마찬가지" in part_system)
+
+    # 옷 흡수 표가 '가림' 선언의 관문이다 — 실측(2026-08-15): 왼쪽 전완만 옷
+    # 65% 인데 모델이 "전완은 가려짐"으로 일반화해 맨살인 오른쪽(0%)까지
+    # blocked 로 보냈다. 표에 없는 부위는 가림 선언을 못 하게 명시한다.
+    ref_seg = {"Left_Lower_Arm": _segment("Left_Lower_Arm", 5000, 60, 300, 50, 150)}
+    user_seg = {
+        "Left_Lower_Arm": dict(
+            _segment("Left_Lower_Arm", 5000, 60, 300, 50, 150), clothing_pixel_count=3250
+        )
+    }
+    clothed_metrics = segmap.compare_parts(ref_seg, user_seg, ["Left_Lower_Arm"], PERSON)
+    clothed_prompt = build_part_prompt(
+        parts=[
+            {
+                "class_name": "Left_Lower_Arm",
+                "name_ko": "왼팔 전완",
+                "color_hex": "#123456",
+                "inbody_segment": "LEFT_ARM",
+            }
+        ],
+        metrics=clothed_metrics,
+        ref_symmetry={},
+        user_symmetry={},
+        inbody=None,
+    )
+    check(
+        "옷 흡수 부위가 표에 실림 (65%)",
+        "흡수된 픽셀이 포함된 부위" in clothed_prompt and "65%" in clothed_prompt,
+    )
+    check(
+        "옷 흡수 표 밖 부위의 '가림' 선언 금지",
+        "이 표에 없는 부위를 '옷에 가려 판단 불가'라고 하지 마세요" in clothed_prompt,
+    )
+    bare_prompt = build_part_prompt(
+        parts=[
+            {
+                "class_name": "Left_Lower_Arm",
+                "name_ko": "왼팔 전완",
+                "color_hex": "#123456",
+                "inbody_segment": "LEFT_ARM",
+            }
+        ],
+        metrics=segmap.compare_parts(ref_seg, ref_seg, ["Left_Lower_Arm"], PERSON),
+        ref_symmetry={},
+        user_symmetry={},
+        inbody=None,
+    )
+    check(
+        "옷 흡수 0 이면 가림 선언 전면 금지 안내",
+        "옷 흡수가 감지된 부위가 없습니다" in bare_prompt,
+    )
     excluded_prompt = build_overall_prompt(
         parts=[],
         blocked=[],

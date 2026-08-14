@@ -176,6 +176,8 @@
     <table><thead><tr>
       <th>부위</th><th>레퍼런스</th><th>내 사진</th><th>비교 가능</th>
     </tr></thead><tbody id="segrows"></tbody></table>
+    <!-- A 붙임(2026-08-15): 부위 클릭 → 사진 위 색칠. 로직 전부 web/seg-overlay.js (A 소유) -->
+    <div id="segviewer" style="margin-top:14px"></div>
   </div>
 
   <!-- 3.5 인바디 -->
@@ -212,6 +214,7 @@
 
 <script type="module">
 import { poseScore, framingScore, facingDelta } from "./pose-score.js";
+import { mountSegOverlay } from "./seg-overlay.js"; // A 붙임(2026-08-15)
 
 const $ = (id) => document.getElementById(id);
 const API = () => $("api").value.replace(/\/+$/, "");
@@ -415,6 +418,7 @@ $("run").onclick = async () => {
     const seg = await api("GET", `/api/v1/sessions/${SID}/segmentation`);
     raw.segmentation = seg;
     renderSeg(seg);
+    mountSegOverlay($("segviewer"), seg); // A 붙임 — 부위 클릭 색칠 (await 안 함: 실패해도 진행)
     step("s3", "done");
 
     // 4.5) 인바디 — ⚠️ **진단보다 먼저, 그리고 끝까지 기다린다.**

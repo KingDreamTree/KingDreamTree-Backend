@@ -1,6 +1,9 @@
-# 루틴 스키마 변경안 — A 협의용 초안
+# 루틴 스키마 변경안 — ✅ A 합의 완료 (2026-08-14)
 
 > **작성**: B파트 · 2026-08-14 · **배경**: docs/routine-logic-decision.md §Q8
+> **상태**: A 합의 완료 → 마이그레이션 파일로 반영됨
+>   `db/migrations/2026-08-14_exercise_catalog.sql` (먼저 실행)
+>   `db/migrations/2026-08-14_routine_cycle_model.sql`
 > **요지**: 루틴 단위가 "Day 1~28"에서 **"주기당 N일 × 4주기 반복"**으로 확정됨.
 > `day_routine`(1~28행, week_number)·요일 개념을 폐기하고 N행 구조로 바꾼다.
 
@@ -118,11 +121,41 @@ GET .../routines/{id}/days/{day_order}   ← day_number(1~28) 대신 day_order(1
 - 운동 일수 조정 = 새 버전 (`DAYS_CHANGED`) — 유지, 오히려 단순해짐 (N행만 재생성)
 - 루틴 패치(F12)는 변경분만 — 유지. 패치 대상이 28행이 아니라 N행이라 diff 도 작아짐
 
-## 5. A 에게 질문
+## 5. A 합의 결과 (2026-08-14)
 
-1. `day_routine`/`day_routine_exercise` 를 rename+alter 로 갈지, drop+create 로 갈지
-   (아직 운영 데이터 없으니 **drop+create 제안**)
-2. `exercise_catalog` 를 DB 테이블로 두는 것 vs 서버 로컬 JSON 파일
-   (B 제안: **테이블** — 잡 워커와 API 프로세스가 같은 캐시를 봐야 하고, RLS 불필요한 공용 마스터라 body_part 와 같은 취급)
-3. 버킷/Storage 영향 없음. RLS 는 기존 루틴 테이블과 동일 정책
+| 질문 | 결론 | 반영 |
+|---|---|---|
+| rename+alter vs drop+create | **drop+create** — 루틴 계열 전 테이블 0행 확인됨 | 마이그레이션 |
+| 카탈로그를 테이블 vs 파일 | **테이블** — 워커·API 가 다른 기계라 파일이면 동기화 문제 | `exercise_catalog.sql` |
+| RLS 정책 | **정책 없음이 곧 정책** — `ENABLE` 만, `CREATE POLICY` 0개. service_role 전용이 의도된 설계 | 두 파일 모두 |
+
+**A 요청으로 추가된 것**
+
+1. **DROP 을 FK 역순으로** — 초안에서 `routine_revision → workout_log` 의존성이 빠져 있었다.
+   순서: `routine_revision` → `workout_log` → `routine_day_exercise` → `routine_day`
+2. **BEGIN/COMMIT 으로 묶기** — 중간 실패 시 반쪽 스키마가 남으면 되돌릴 수 없다
+3. **`db/migrations/` 에 파일로** — `schema.sql` 은 전체 생성 스크립트라 기존 DB 에 못 쓴다
+4. **seed 스크립트** — `scripts/seed_exercise_catalog.py`
+5. **워커 preflight** — 카탈로그가 비면 기동 거부 (`app/worker/handlers/routine.py`).
+   `body_part` 가 비었는데 워커가 떠서 "비교 부위 0"이 조용히 나오던 사고의 재발 방지.
+   ⚠️ 루틴 잡을 실제로 처리하는 워커에서만 검사한다 — 조건 없이 걸면 VLM 전용
+   워커까지 카탈로그 때문에 못 뜬다
+
+### 🔴 A 지적 반영 — `is_beginner_safe` 기본값 뒤집음
+
+초안의 `NOT NULL DEFAULT true` 는 **"아직 검토 안 함"이 "초보자에게 안전함"으로
+들어가는 구조**였다. 새로 수집한 운동이 자동으로 후보에 올라가고 LLM 이 그걸 근거로
+초보자에게 처방하게 된다. `clothing_pixel_count` 를 nullable 로 둔 것과 같은 판단이다.
+
+→ **`NOT NULL DEFAULT false`.** seed 스크립트가 스크리닝 결과를 명시적으로 넣고,
+안 넣으면 후보가 0건이라 바로 티가 난다. 조용히 위험한 운동이 나가는 것보다 낫다.
+
+### A 지적 — DB 가 못 막는 것 2개 (애플리케이션 검증 대상)
+
+| 항목 | 왜 DB 가 못 막나 | 대응 |
+|---|---|---|
+| `workout_log.session_id` ↔ `month_routine.session_id` | 비정규화라 서로 어긋나게 넣어도 통과 | 기록 시 일치 검증. 컬럼 COMMENT 에 명시 |
+| `routine_day` 행 수 ↔ `month_routine.exercise_days_per_week` | N=3 인데 4행이 들어가도 통과 | 저장 시 검증. `day_order` COMMENT 에 명시 |
+
+복합 FK·트리거까지 갈 위험은 아니라는 데 동의. 저장 계층에서 검증하고 주석으로 남겼다.
 ```

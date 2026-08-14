@@ -183,11 +183,9 @@
 
   <div class="hint">
     <h3>여는 방법</h3>
-    <ul>
-      <li>이 폴더를 서버로 띄웁니다 — <code>python -m http.server 5500 -d web</code></li>
-      <li>브라우저에서 <code>http://localhost:5500/pose-demo.html</code></li>
-      <li>다른 터미널에서 API 서버 — <code>uvicorn app.main:app --reload</code></li>
-    </ul>
+    <p><code>python scripts/run_pose_demo.py</code> — API 서버까지 같이 띄우고 브라우저를 엽니다.</p>
+    <p>⚠️ 이 파일을 더블클릭해서 열면 <b>카메라도 안 되고 모듈도 안 불러와집니다.</b>
+       <code>file://</code> 은 보안 컨텍스트가 아니라서요. 반드시 위 명령으로 여세요.</p>
   </div>
 </div>
 

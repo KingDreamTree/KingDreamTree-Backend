@@ -399,6 +399,60 @@ async def chat_turn(
         if finalized is not None and reply:
             break
 
+    # ── finalize 강제 라운드 ────────────────────────────────────────────────
+    # 실호출 검증(2026-08-14)에서 드러난 결함: 코치가 교체·금기까지 실행하고도
+    # finalize_revision 을 부르지 않아 요약 카드가 안 나왔다. 프롬프트 권고는
+    # 이런 걸 보장하지 못한다 — **변경이 실행됐으면 카드는 규칙이다.**
+    # tool_choice 로 finalize 를 강제해 결정론적으로 닫는다.
+    if finalized is None and tool_events:
+        llm_messages.append(
+            {
+                "role": "system",
+                "content": "변경이 실행되었습니다. finalize_revision 으로 지금까지의 변경을 요약해 마무리하세요.",
+            }
+        )
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0.4,
+            max_tokens=500,
+            messages=llm_messages,
+            tools=TOOLS,
+            tool_choice={"type": "function", "function": {"name": "finalize_revision"}},
+        )
+        msg = response.choices[0].message
+        if msg.tool_calls:
+            tc = msg.tool_calls[0]
+            llm_messages.append(
+                {
+                    "role": "assistant",
+                    "content": msg.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments,
+                            },
+                        }
+                    ],
+                }
+            )
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except ValueError:
+                args = {}
+            ok_args, err = validate_tool_call(tc.function.name, args, days, allowed_refs)
+            llm_messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps({"ok": err is None}, ensure_ascii=False),
+                }
+            )
+            if err is None:
+                finalized = ok_args
+
     if finalized is not None and _SAFETY_FOOTER not in (finalized.get("summary") or ""):
         # 통증 흐름이면 안전 문구를 카드에 보강한다 (금기 등록이 있었던 경우).
         if any(e["name"] == "flag_contraindication" for e in tool_events):

@@ -186,24 +186,31 @@ export function framingScore(ref, user, criteria) {
  *
  * 몸통 길이로 나누므로 촬영 거리와 사람 크기에 영향받지 않는다.
  */
+/**
+ * 어깨폭 ÷ 몸통길이. 몸이 돌아갈수록 작아진다 (정면 대비 cos θ 배).
+ *
+ * ⚠️ 이 값 자체는 절대적인 의미가 없다. 화면비에 따라 배율이 달라지기 때문이다
+ *    (x 는 너비로, y 는 높이로 각각 나눈 좌표다). 두 사진을 **서로 비교할 때만**
+ *    쓴다 — 같은 배율이 양쪽에 걸려 나눗셈에서 상쇄된다.
+ */
+export function shoulderRatio(lm) {
+  const sl = lm[IDX.shoulderL];
+  const sr = lm[IDX.shoulderR];
+  const hl = lm[IDX.hipL];
+  const hr = lm[IDX.hipR];
+  if (!sl || !sr || !hl || !hr) return 0;
+
+  const shoulderWidth = Math.hypot(sl.x - sr.x, sl.y - sr.y);
+  const s = mid(sl, sr);
+  const h = mid(hl, hr);
+  const torsoLen = Math.hypot(s.x - h.x, s.y - h.y);
+  return torsoLen > 0 ? shoulderWidth / torsoLen : 0;
+}
+
 export function facingDelta(ref, user) {
-  const ratio = (lm) => {
-    const sl = lm[IDX.shoulderL];
-    const sr = lm[IDX.shoulderR];
-    const hl = lm[IDX.hipL];
-    const hr = lm[IDX.hipR];
-    if (!sl || !sr || !hl || !hr) return 0;
-
-    const shoulderWidth = Math.hypot(sl.x - sr.x, sl.y - sr.y);
-    const s = mid(sl, sr);
-    const h = mid(hl, hr);
-    const torsoLen = Math.hypot(s.x - h.x, s.y - h.y);
-    return torsoLen > 0 ? shoulderWidth / torsoLen : 0;
-  };
-
-  const r = ratio(ref);
+  const r = shoulderRatio(ref);
   if (r <= 0) return 0; // 잴 수 없으면 통과 쪽으로 (서버도 같은 판단)
-  return Math.abs(ratio(user) - r) / r;
+  return Math.abs(shoulderRatio(user) - r) / r;
 }
 
 // --------------------------------------------------------------------------

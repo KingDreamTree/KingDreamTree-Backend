@@ -121,7 +121,8 @@
       <div class="metric">
         <div class="top"><span class="nm">정면성 (R)</span><span class="vl" id="rv">–</span></div>
         <div class="track"><div class="fill" id="rf" style="width:0%"></div><div class="mark" id="rm"></div></div>
-        <div class="ds">어깨폭 ÷ 몸통길이 의 차이. 낮을수록 정면</div>
+        <div class="ds">어깨폭 ÷ 몸통길이 의 <b>차이</b>. <b>0이 정면</b>이고, 몸을 돌릴수록 커집니다</div>
+        <div class="ds" id="rraw" style="font-family:Consolas,monospace">–</div>
       </div>
 
       <div>
@@ -157,7 +158,7 @@
 </div>
 
 <script type="module">
-import { evaluate, createHoldGate, fetchCriteria, IDX, SEGMENTS } from "./pose-score.js";
+import { evaluate, createHoldGate, fetchCriteria, shoulderRatio, IDX, SEGMENTS } from "./pose-score.js";
 
 const $ = (id) => document.getElementById(id);
 const status = $("status");
@@ -321,6 +322,12 @@ function render(r) {
         <td class="d">${d.toFixed(0)}°</td></tr>`;
     }).join("");
   $("joints").querySelector("tbody").innerHTML = rows;
+
+  if (refLm) {
+    const a = shoulderRatio(refLm), b = shoulderRatio(liveLm);
+    $("rraw").textContent =
+      `어깨폭비  기준 ${a.toFixed(3)} → 지금 ${b.toFixed(3)}  (${(b / (a || 1)).toFixed(2)}배)`;
+  }
 
   $("meta").textContent =
     `쓰인 각도 ${r.detail.usedAngles}개 · 몸통 크기비 ${r.detail.torsoRatio} · 사람 ${personCount}명` +

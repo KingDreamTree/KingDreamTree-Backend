@@ -281,7 +281,14 @@ def judge_user_photo(
     #    "잘못 보낸 것"이고, 사용자에게 재촬영을 시킬 일이 아니라 프론트가 고칠 일이다.
     _ensure_range("pose_similarity", pose_similarity, 0.0, 100.0)
     _ensure_range("framing_score", framing_score, 0.0, 1.0)
-    _ensure_range("facing_delta", facing_delta, 0.0, 1.0)
+    # ⚠️ 상한이 1.0 이었는데 **버그였다.** facing_delta 는 레퍼런스 비율로
+    #    나눈 값이라, 레퍼런스가 많이 돌아가 있으면(비율이 작으면) 1 을 넘는다.
+    #    측면 레퍼런스에 정면으로 선 사용자가 "방향이 다릅니다" 대신
+    #    "잘못 보낸 값" 400 을 받고 있었다 — 고칠 수 없는 에러를 본 셈이다.
+    #
+    #    10.0 은 판정 기준이 아니라 **단위 착오를 잡는 sanity bound** 다.
+    #    (퍼센트로 보내면 25 가 오므로 여전히 걸린다)
+    _ensure_range("facing_delta", facing_delta, 0.0, 10.0)
 
     ensure_single_person(multi_person)
     ensure_same_scale_basis(reference_scale_basis, str(scale_basis))

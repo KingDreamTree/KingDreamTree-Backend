@@ -168,10 +168,27 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
             #    스택 트레이스·모델 경로·API 키가 섞이면 안 되므로 사람이 읽을
             #    한 줄만 넣고, 상세는 서버 로그로만 남긴다.
             log.exception("[%s] 실패", job_id)
-            queue.fail(job_id, _user_message(e))
+            retryable = _is_retryable(e)
+            if not retryable:
+                log.warning("[%s] 재시도해도 같은 결과 — 즉시 종결합니다", job_id)
+            queue.fail(job_id, _user_message(e), retryable=retryable)
 
     log.info("워커 종료")
     return 0
+
+
+def _is_retryable(e: Exception) -> bool:
+    """다시 시도할 가치가 있는 실패인가.
+
+    ⚠️ **결정론적 실패를 재시도하면 요금만 3배가 된다.** 프롬프트 형식 오류나
+       응답 스키마 위반은 같은 입력으로 다시 불러도 같은 결과가 나온다. 그런데
+       기본값이 재시도라서, 실패 하나가 조용히 VLM 호출 3회분으로 청구된다.
+       (LLM 호출은 이 프로젝트에서 가장 비싼 연산이다)
+
+    예외에 `retryable = False` 를 달아 두면 여기서 걸러진다. 담당 A·B 어느 쪽
+    핸들러든 같은 규약을 쓴다 — run.py 가 각 서비스의 예외 타입을 알 필요가 없다.
+    """
+    return bool(getattr(e, "retryable", True))
 
 
 def _user_message(e: Exception) -> str:

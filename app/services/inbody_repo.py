@@ -56,12 +56,7 @@ def update_inbody(inbody_id: UUID, patch: dict[str, Any]) -> dict[str, Any]:
     구분해야 OCR 정확도를 평가할 수 있다 (api-spec F07).
     """
     return (
-        get_client()
-        .table("inbody")
-        .update(patch)
-        .eq("inbody_id", str(inbody_id))
-        .execute()
-        .data[0]
+        get_client().table("inbody").update(patch).eq("inbody_id", str(inbody_id)).execute().data[0]
     )
 
 
@@ -108,3 +103,70 @@ def upsert_segments(inbody_id: UUID, rows: list[dict[str, Any]]) -> None:
         [{**r, "inbody_id": str(inbody_id)} for r in rows],
         on_conflict="inbody_id,segment",
     ).execute()
+
+
+# --------------------------------------------------------------------------- #
+# 진단·루틴에서 쓰는 인바디 1건 (F08 / F09 / F10)
+# --------------------------------------------------------------------------- #
+
+#: 프롬프트에 넣는 전신 지표. ⚠️ 항등식 전용 항목(체수분·단백질·무기질)은
+#: 넣지 않는다 — 검증용이지 진단 근거가 아니다 (llm-strategy.md §F07).
+_BODY_FIELDS = (
+    "weight",
+    "bmi",
+    "body_fat_mass",
+    "body_fat_percentage",
+    "skeletal_muscle_mass",
+    "fat_free_mass",
+    "age",
+    "gender",
+    "height",
+)
+
+
+def latest_done(session_id: UUID) -> dict[str, Any] | None:
+    """세션에서 진단·루틴에 쓸 인바디 1건.
+
+    ⚠️ 여러 건이 올라와도 **최신 DONE 1건만** 쓴다 (2026-08-13 PM 확정,
+       llm-strategy.md §해커톤 데이터 구성). 여러 건을 합치면 어느 수치로
+       진단했는지 재현이 안 된다.
+
+    ⚠️ PENDING 인 건은 기다리지 않고 무시한다. 인바디는 선택 입력이고,
+       OCR 이 끝나기를 기다리면 사용자가 로딩 화면에 갇힌다 (work-b.md §6).
+    """
+    rows = (
+        get_client()
+        .table("inbody")
+        .select("*")
+        .eq("session_id", str(session_id))
+        .eq("status", "DONE")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    return rows[0] if rows else None
+
+
+def to_prompt_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """inbody 행 → 프롬프트용 {"body": {...}, "segments": {SEGMENT: {...}}}.
+
+    부위별 제지방량은 **inbody_segment 테이블**이 출처다 (사용자가 PATCH 로 고친
+    값이 여기 들어 있다). 표준 대비 비율(lean_percentage)은 컬럼이 없어
+    raw_ocr 에서 읽어 덧붙인다 — 있으면 쓰고 없으면 생략한다.
+    """
+    body = {f: row.get(f) for f in _BODY_FIELDS if row.get(f) is not None}
+
+    raw_segments = ((row.get("raw_ocr") or {}).get("segments")) or {}
+    segments: dict[str, Any] = {}
+    for s in list_segments(UUID(str(row["inbody_id"]))):
+        name = s["segment"]
+        entry: dict[str, Any] = {k: s[k] for k in ("lean_mass", "fat_mass") if s.get(k) is not None}
+        for pct in ("lean_percentage", "fat_percentage"):
+            value = (raw_segments.get(name) or {}).get(pct)
+            if value is not None:
+                entry[pct] = value
+        if entry:
+            segments[name] = entry
+
+    return {"inbody_id": str(row["inbody_id"]), "body": body, "segments": segments}

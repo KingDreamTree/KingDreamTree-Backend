@@ -7,8 +7,6 @@ F12 — patch_routine(): 피드백 기반 루틴 패치 (Function Calling)
 import json
 from typing import Any
 
-from openai import AsyncOpenAI
-
 from app.config import settings
 from app.prompts.routine_gen import build_generate_prompt
 from app.prompts.routine_patch import SYSTEM_PROMPT, TOOLS
@@ -274,6 +272,8 @@ async def generate_routine(
         result["notice"] = notice
         return result
 
+    from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
+
     client = AsyncOpenAI(api_key=settings.openai_api_key)
     system, user = build_generate_prompt(
         week_template=week_template,
@@ -329,6 +329,8 @@ async def patch_routine(
     """
     if settings.use_mock:
         return dict(_MOCK_PATCH_RESULT)
+
+    from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
 

@@ -13,14 +13,20 @@
 from __future__ import annotations
 
 import io
+import logging
 
 from PIL import Image, ImageOps
 
 from app.config import settings
 
 #: ⚠️ 압축 폭탄 방어. 10MB 파일도 디코딩하면 수십억 픽셀이 될 수 있다.
-#   Pillow 기본값(~1.78억)보다 넉넉하지만 t3.large 메모리 안에서 버틸 선으로 낮춰 둔다.
-Image.MAX_IMAGE_PIXELS = 80_000_000
+#   t3.large 메모리 안에서 버틸 선.
+#
+#   ⚠️ **이 값만으로는 못 막는다.** Pillow 는 이 값을 넘으면 경고만 내고,
+#      **2배**를 넘어야 예외를 던진다. 실측 — 2.8MB PNG(1억 화소)가 그대로 통과해
+#      메모리 286MB 를 먹었다. 그래서 load_rgb 가 헤더 크기를 직접 본다.
+MAX_PIXELS = 80_000_000
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 
 
 class UnsupportedImageError(Exception):
@@ -40,7 +46,12 @@ def _register_heif() -> None:
 
         pillow_heif.register_heif_opener()
     except ImportError:
-        pass
+        # ⚠️ 조용히 넘어가면 아이폰 사진이 "읽을 수 없는 파일"로 막히는데
+        #    원인이 화면 어디에도 안 나온다. 기동 로그에는 남긴다.
+        logging.getLogger("services.images").warning(
+            "pillow-heif 가 없어 HEIC(아이폰 기본 형식)을 열 수 없습니다. "
+            "pip install pillow-heif"
+        )
     _heif_registered = True
 
 
@@ -60,9 +71,22 @@ def load_rgb(raw_bytes: bytes) -> Image.Image:
 
     try:
         img = Image.open(io.BytesIO(raw_bytes))
+
+        # ⚠️ **픽셀을 만지기 전에** 크기를 본다. Image.open 은 헤더만 읽으므로
+        #    여기서 거르면 큰 이미지가 메모리에 펼쳐지지 않는다.
+        #    exif_transpose 와 convert 는 둘 다 실제 디코딩을 일으킨다.
+        w, h = img.size
+        if w * h > MAX_PIXELS:
+            raise UnsupportedImageError(
+                f"이미지 해상도가 너무 큽니다 ({w}x{h}). "
+                f"{MAX_PIXELS // 1_000_000}백만 화소 이하로 줄여주세요."
+            )
+
         # exif_transpose 는 회전을 픽셀에 적용하고 EXIF 태그를 제거한다.
         img = ImageOps.exif_transpose(img)
         return img.convert("RGB")
+    except UnsupportedImageError:
+        raise
     except Image.DecompressionBombError as e:
         raise UnsupportedImageError("이미지 해상도가 너무 큽니다.") from e
     except Exception as e:  # noqa: BLE001 — Pillow가 형식마다 다른 예외를 던진다

@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>레퍼런스 사진 ↔ 실시간 — 자세 유사도</title>
+<!--
+  실제 서비스 흐름 그대로.
+
+    왼쪽  = 업로드한 레퍼런스 사진 (닮고 싶은 몸)
+    오른쪽 = 웹캠 실시간
+
+  ⚠️ pose-demo.html 과 무엇이 다른가 — 그쪽은 레퍼런스도 **같은 웹캠**에서
+     잡는다. 그래서 두 사진의 **화면비가 항상 같아** refAspect ≠ userAspect
+     경로를 한 번도 타지 않는다. 실제 서비스는 세로 사진 + 가로 웹캠처럼
+     화면비가 다른 게 보통이고, 거기서 틀리면 조용히 틀린다.
+
+  ⚠️ 판정 로직은 여기 없다. 전부 pose-score.js 를 부른다. 복사하면 두 화면이
+     서로 다른 기준으로 통과를 보여주게 된다.
+-->
+<style>
+  :root {
+    --bg:#0f1216; --panel:#171b21; --line:#2a323b; --ink:#e8ebef; --dim:#9aa4b2;
+    --ok:#39b57e; --warn:#d8a13f; --bad:#dd6a5c; --accent:#4fb3d0;
+    --mono: Consolas, "SFMono-Regular", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;
+    font-size:14px; line-height:1.6;
+  }
+  .wrap { max-width:1500px; margin:0 auto; padding:18px 20px 60px; }
+  h1 { font-size:19px; margin:0 0 4px; letter-spacing:-.02em; }
+  .sub { color:var(--dim); font-size:13px; margin-bottom:14px; }
+
+  #status { padding:9px 13px; border-radius:5px; margin-bottom:14px; font-size:13px;
+            background:#20262e; border-left:3px solid var(--dim); }
+  #status.ok   { border-color:var(--ok);   }
+  #status.warn { border-color:var(--warn); }
+  #status.bad  { border-color:var(--bad);  }
+
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:14px; }
+  button {
+    background:#252c35; color:var(--ink); border:1px solid var(--line);
+    padding:8px 14px; border-radius:5px; cursor:pointer; font-size:13px; font-family:inherit;
+  }
+  button:hover:not(:disabled) { background:#2f3843; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.primary { background:#1d4e60; border-color:#2a6d85; }
+  label.chk { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:13px; cursor:pointer; }
+  input[type=text] { background:#0d1014; color:var(--ink); border:1px solid var(--line);
+                     padding:7px 10px; border-radius:5px; font-family:var(--mono); font-size:12px; width:260px; }
+
+  /* ── 두 화면 ── */
+  .stage { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane > .hd {
+    padding:9px 13px; border-bottom:1px solid var(--line); display:flex;
+    justify-content:space-between; align-items:baseline; gap:10px;
+  }
+  .pane .t { font-weight:700; font-size:13.5px; }
+  .pane .n { font-family:var(--mono); font-size:11px; color:var(--dim); }
+  .view {
+    position:relative; background:#000; aspect-ratio:3/4;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .view img, .view video { max-width:100%; max-height:100%; display:block; }
+  .view canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+  .view.mirror { transform:scaleX(-1); }
+  .drop {
+    position:absolute; inset:0; display:flex; flex-direction:column; gap:8px;
+    align-items:center; justify-content:center; text-align:center;
+    color:var(--dim); font-size:13px; padding:20px; cursor:pointer;
+    border:2px dashed var(--line); margin:10px; border-radius:8px;
+  }
+  .drop:hover, .drop.over { border-color:var(--accent); color:var(--ink); }
+  .drop b { font-size:15px; color:var(--ink); }
+
+  /* ── 점수 ── */
+  .guide {
+    padding:11px 15px; border-radius:6px; font-size:15px; font-weight:700;
+    margin-bottom:12px; background:#20262e;
+  }
+  .metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; }
+  .m { background:var(--panel); border:1px solid var(--line); border-radius:7px; padding:11px 13px; }
+  .m .top { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:7px; }
+  .m .nm { font-size:12.5px; color:var(--dim); }
+  .m .vl { font-family:var(--mono); font-size:19px; font-weight:700; }
+  .track { position:relative; height:6px; background:#0d1014; border-radius:3px; overflow:hidden; }
+  .fill { height:100%; background:var(--ok); border-radius:3px; transition:width .06s linear; }
+  .fill.bad { background:var(--bad); }
+  .mark { position:absolute; top:-2px; width:2px; height:10px; background:var(--warn); }
+  .m .ds { font-size:11.5px; color:var(--dim); margin-top:6px; line-height:1.5; }
+  .m .raw { font-family:var(--mono); font-size:11px; color:var(--dim); margin-top:4px; white-space:pre-line; }
+
+  .holdwrap { height:4px; background:#0d1014; border-radius:2px; overflow:hidden; margin:12px 0 0; }
+  #holdbar { height:100%; width:0; background:var(--accent); transition:width .06s linear; }
+
+  .note { color:var(--dim); font-size:12.5px; margin-top:16px; border-left:2px solid var(--line);
+          padding-left:12px; }
+  .note b { color:var(--ink); }
+  @media (max-width:900px) { .stage { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>레퍼런스 사진 ↔ 실시간</h1>
+  <p class="sub">실제 서비스 흐름 그대로 — 왼쪽에 닮고 싶은 몸 사진을 올리고, 오른쪽에서 따라 섭니다.</p>
+
+  <div id="status" class="warn">준비 중…</div>
+
+  <div class="bar">
+    <input type="text" id="api" value="http://localhost:8000/api/v1">
+    <button id="load" class="primary">기준 받아오기</button>
+    <button id="cam" disabled>카메라 켜기</button>
+    <button id="reshoot" disabled>다시 찍기</button>
+    <label class="chk"><input type="checkbox" id="mirror"> 거울 모드로 보기</label>
+  </div>
+
+  <div class="stage">
+    <div class="pane">
+      <div class="hd"><span class="t">레퍼런스</span><span class="n" id="refn">사진 없음</span></div>
+      <div class="view" id="refview">
+        <img id="refimg" alt="" hidden>
+        <canvas id="refcv"></canvas>
+        <div class="drop" id="drop">
+          <b>사진을 여기로 끌어다 놓으세요</b>
+          <span>또는 눌러서 고르기 · 전신이 나온 사진이어야 합니다</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pane">
+      <div class="hd"><span class="t">실시간</span><span class="n" id="liven">카메라 꺼짐</span></div>
+      <div class="view" id="liveview">
+        <video id="video" playsinline muted></video>
+        <canvas id="livecv"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="guide" id="guide">사진을 올리고 카메라를 켜세요.</div>
+  <div id="checks" style="display:flex;flex-wrap:wrap;gap:8px;font-family:var(--mono);font-size:12px"></div>
+  <div class="holdwrap"><div id="holdbar"></div></div>
+
+  <div class="metrics" style="margin-top:12px">
+    <div class="m">
+      <div class="top"><span class="nm">자세 (P)</span><span class="vl" id="pv">–</span></div>
+      <div class="track"><div class="fill" id="pf"></div><div class="mark" id="pm"></div></div>
+      <div class="ds">팔다리·몸통이 가리키는 방향의 일치도</div>
+    </div>
+    <div class="m">
+      <div class="top"><span class="nm">거리 (F)</span><span class="vl" id="fv">–</span></div>
+      <div class="track"><div class="fill" id="ff"></div><div class="mark" id="fm"></div></div>
+      <div class="ds">몸통 길이 비율</div>
+    </div>
+    <div class="m">
+      <div class="top"><span class="nm">몸통 방향 (R)</span><span class="vl" id="rv">–</span></div>
+      <div class="track"><div class="fill" id="rf"></div><div class="mark" id="rm"></div></div>
+      <div class="ds">0이면 레퍼런스와 같은 방향</div>
+      <div class="raw" id="rraw">–</div>
+    </div>
+    <div class="m">
+      <div class="top"><span class="nm">OKS <span style="opacity:.6">(관찰용)</span></span><span class="vl" id="kv">–</span></div>
+      <div class="track"><div class="fill" id="kf"></div></div>
+      <div class="ds">관절별 편차로 나눈 유사도. <b>판정에 안 씁니다</b></div>
+      <div class="raw" id="kraw">–</div>
+    </div>
+  </div>
+
+  <p class="note">
+    ⚠️ <b>거울 모드는 보기에만 적용됩니다.</b> 판정에 쓰는 좌표는 카메라 원본 그대로입니다 —
+    좌표까지 뒤집으면 왼팔 진단이 오른팔에 붙습니다.<br>
+    ⚠️ 레퍼런스 사진과 웹캠의 <b>화면비가 다른 게 정상</b>입니다. OKS는 그 차이를 보정해서 계산합니다.
+  </p>
+</div>
+
+<script type="module">
+import { evaluate, createHoldGate, fetchCriteria, shoulderRatio, IDX, SEGMENTS }
+  from "./pose-score.js";
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (t, k = "") => { $("status").textContent = t; $("status").className = k; };
+
+let criteria = null, imgLm = null, vidLm = null;
+let refLm = null, liveLm = null, refAspect = 1, personCount = 0;
+let hold = null, running = false, captured = false;
+
+const videoAspect = () => {
+  const v = $("video");
+  return v.videoHeight ? v.videoWidth / v.videoHeight : 1;
+};
+
+// ── 1. 기준 ────────────────────────────────────────────────────────────────
+$("load").onclick = async () => {
+  try {
+    setStatus("기준을 받아오는 중…", "warn");
+    criteria = await fetchCriteria($("api").value.trim());
+    hold = createHoldGate(criteria);
+    $("pm").style.left = criteria.threshold + "%";
+    $("fm").style.left = (criteria.f_min * 100) + "%";
+    $("rm").style.left = (criteria.r_max * 100) + "%";
+    $("cam").disabled = false;
+    setStatus(`기준을 받았습니다 — ${JSON.stringify(criteria)}`, "ok");
+  } catch (e) {
+    setStatus(`${e.message} — API 서버가 켜져 있는지 확인하세요`, "bad");
+  }
+};
+
+// ── 2. MediaPipe ───────────────────────────────────────────────────────────
+// ⚠️ 사진용(IMAGE)과 영상용(VIDEO)을 **따로** 만든다. Tasks API 는 인스턴스마다
+//    runningMode 가 하나로 고정된다. 하나로 돌려쓰면 setOptions 왕복이 생겨
+//    프레임이 끊긴다.
+const CDN = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/" +
+              "pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+
+async function ensureLandmarkers() {
+  if (imgLm && vidLm) return;
+  setStatus("MediaPipe 를 내려받는 중… (처음 한 번, 몇 초 걸립니다)", "warn");
+  const { FilesetResolver, PoseLandmarker } = await import(CDN);
+  const vision = await FilesetResolver.forVisionTasks(`${CDN}/wasm`);
+  const make = (runningMode) => PoseLandmarker.createFromOptions(vision, {
+    baseOptions: { modelAssetPath: MODEL, delegate: "GPU" },
+    runningMode,
+    numPoses: 2,
+  });
+  [imgLm, vidLm] = await Promise.all([make("IMAGE"), make("VIDEO")]);
+}
+
+// ── 3. 레퍼런스 사진 ───────────────────────────────────────────────────────
+const picker = document.createElement("input");
+picker.type = "file";
+picker.accept = "image/*";
+picker.onchange = () => picker.files[0] && loadRef(picker.files[0]);
+
+$("drop").onclick = () => picker.click();
+["dragenter", "dragover"].forEach((e) =>
+  $("refview").addEventListener(e, (ev) => { ev.preventDefault(); $("drop").classList.add("over"); }));
+["dragleave", "drop"].forEach((e) =>
+  $("refview").addEventListener(e, () => $("drop").classList.remove("over")));
+$("refview").addEventListener("drop", (ev) => {
+  ev.preventDefault();
+  const f = ev.dataTransfer.files[0];
+  if (f) loadRef(f);
+});
+
+async function loadRef(file) {
+  try {
+    await ensureLandmarkers();
+    setStatus("레퍼런스 사진을 분석하는 중…", "warn");
+
+    const img = $("refimg");
+    img.src = URL.createObjectURL(file);
+    await img.decode();
+    img.hidden = false;
+    $("drop").style.display = "none";
+
+    const res = imgLm.detect(img);
+    if (!res.landmarks.length) {
+      setStatus("이 사진에서 사람을 찾지 못했습니다. 전신이 나온 다른 사진으로 해보세요.", "bad");
+      return;
+    }
+    refLm = res.landmarks[0];
+    // ⚠️ **사진의 화면비**다. 웹캠과 다른 게 보통이고, 안 넘기면 OKS 가 조용히 틀린다.
+    refAspect = img.naturalWidth / img.naturalHeight;
+
+    $("refn").textContent =
+      `${img.naturalWidth}×${img.naturalHeight} · 비율 ${refAspect.toFixed(2)}` +
+      (res.landmarks.length > 1 ? ` · ⚠️ ${res.landmarks.length}명` : "");
+    // ⚠️ 방금 img.hidden 을 풀고 drop 을 숨겼다. 다음 프레임에 그려야
+    //    getBoundingClientRect 가 최종 위치를 준다.
+    requestAnimationFrame(() => drawSkeleton($("refcv"), refLm, $("refview")));
+
+    setStatus(running
+      ? "레퍼런스를 잡았습니다. 같은 자세로 서보세요."
+      : "레퍼런스를 잡았습니다. 이제 카메라를 켜세요.", "ok");
+  } catch (e) {
+    setStatus(`사진을 읽지 못했습니다: ${e.message}`, "bad");
+  }
+}
+
+// ── 4. 카메라 ──────────────────────────────────────────────────────────────
+$("cam").onclick = async () => {
+  try {
+    await ensureLandmarkers();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: 960, height: 1280, facingMode: "user" },
+    });
+    const v = $("video");
+    v.srcObject = stream;
+    await v.play();
+    $("liven").textContent = `${v.videoWidth}×${v.videoHeight} · 비율 ${videoAspect().toFixed(2)}`;
+    running = true;
+    $("cam").disabled = true;
+    $("reshoot").disabled = false;
+    setStatus("카메라가 켜졌습니다. 전신이 나오게 2m 이상 물러서세요.", "ok");
+    loop();
+  } catch (e) {
+    setStatus(`카메라를 켜지 못했습니다: ${e.message}`, "bad");
+  }
+};
+
+$("mirror").onchange = (e) => $("liveview").classList.toggle("mirror", e.target.checked);
+$("reshoot").onclick = () => {
+  captured = false;
+  setStatus("이어서 진행합니다. 자세를 맞추면 다시 찍힙니다.", "ok");
+};
+
+// ── 5. 그리기 ──────────────────────────────────────────────────────────────
+function drawSkeleton(cv, lm, view) {
+  const r = view.getBoundingClientRect();
+  cv.width = r.width; cv.height = r.height;
+  const ctx = cv.getContext("2d");
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!lm) return;
+
+  // ⚠️ 사진은 letterbox 로 들어간다(가운데 정렬 + 여백). 좌표는 **사진 기준**
+  //    0~1 이므로 사진이 실제로 그려진 사각형에 맞춰야 한다.
+  //
+  // ⚠️ 여백을 직접 계산했다가 틀렸다. naturalWidth 와 CSS 크기로 역산하는
+  //    방식은 max-width/max-height, aspect-ratio, 소수점 반올림이 겹치면
+  //    어긋난다. **브라우저에게 그려진 위치를 직접 물어보는 게 맞다.**
+  const media = view.querySelector("img:not([hidden]), video");
+  if (!media) return;
+  const mb = media.getBoundingClientRect();
+  const dw = mb.width, dh = mb.height;
+  if (!(dw > 0 && dh > 0)) return;
+  const ox = mb.left - r.left, oy = mb.top - r.top;
+  const X = (p) => ox + p.x * dw, Y = (p) => oy + p.y * dh;
+
+  ctx.strokeStyle = "#4fb3d0"; ctx.lineWidth = 3; ctx.lineCap = "round";
+  for (const [, a, b] of SEGMENTS) {
+    if (!lm[a] || !lm[b]) continue;
+    ctx.beginPath(); ctx.moveTo(X(lm[a]), Y(lm[a])); ctx.lineTo(X(lm[b]), Y(lm[b])); ctx.stroke();
+  }
+  const sh = [IDX.shoulderL, IDX.shoulderR], hp = [IDX.hipL, IDX.hipR];
+  ctx.beginPath();
+  ctx.moveTo((X(lm[sh[0]]) + X(lm[sh[1]])) / 2, (Y(lm[sh[0]]) + Y(lm[sh[1]])) / 2);
+  ctx.lineTo((X(lm[hp[0]]) + X(lm[hp[1]])) / 2, (Y(lm[hp[0]]) + Y(lm[hp[1]])) / 2);
+  ctx.stroke();
+
+  // ⚠️ MediaPipe 는 가려진 관절도 **추측해서** 좌표를 준다. 그 점이 몸 밖으로
+  //    튀어나가는데, 똑같이 그리면 "오버레이가 틀렸다"로 보인다.
+  //    신뢰도가 낮으면 흐리게 + 작게 그려서 추측값임을 알 수 있게 한다.
+  for (const i of Object.values(IDX)) {
+    if (!lm[i]) continue;
+    const v = typeof lm[i].visibility === "number" ? lm[i].visibility : 1;
+    const weak = v < (criteria?.min_visibility ?? 0.5);
+    ctx.fillStyle = weak ? "rgba(232,235,239,.3)" : "#e8ebef";
+    ctx.beginPath(); ctx.arc(X(lm[i]), Y(lm[i]), weak ? 2.5 : 4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// ── 6. 매 프레임 ───────────────────────────────────────────────────────────
+function loop() {
+  if (!running) return;
+  const v = $("video");
+  if (v.readyState >= 2) {
+    const res = vidLm.detectForVideo(v, performance.now());
+    personCount = res.landmarks.length;
+    liveLm = res.landmarks[0] ?? null;
+    drawSkeleton($("livecv"), liveLm, $("liveview"));
+
+    if (refLm && liveLm) {
+      const r = evaluate(refLm, liveLm, criteria, {
+        multiPerson: personCount > 1,
+        refAspect,
+        userAspect: videoAspect(),
+      });
+      render(r);
+
+      // ⚠️ 숫자는 촬영 후에도 계속 갱신한다. 멈추는 건 셔터만이면 된다.
+      const fired = !captured && hold(r.pass);
+      $("holdbar").style.width = (fired ? 1 : (captured ? 0 : hold.progress)) * 100 + "%";
+      if (fired) {
+        captured = true;
+        setStatus("촬영 조건을 만족했습니다. ⚠️ 숫자는 계속 갱신되니 실험을 이어가도 됩니다.", "ok");
+      }
+    } else {
+      $("guide").textContent = refLm ? "사람이 보이지 않습니다" : "레퍼런스 사진을 올려주세요";
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+// ── 7. 표시 ────────────────────────────────────────────────────────────────
+function render(r) {
+  $("guide").textContent = r.message + (r.blocked ? "   (지금 올리면 서버가 거부합니다)" : "");
+  $("guide").style.background = r.pass ? "#173a2a" : r.blocked ? "#3a1e1a" : "#3a2e14";
+
+  const set = (v, f, val, pct, bad) => {
+    $(v).textContent = val;
+    $(f).style.width = Math.max(0, Math.min(100, pct)) + "%";
+    $(f).className = "fill" + (bad ? " bad" : "");
+  };
+  set("pv", "pf", r.pose_similarity.toFixed(1), r.pose_similarity,
+      r.pose_similarity < criteria.threshold);
+  set("fv", "ff", r.framing_score.toFixed(3), r.framing_score * 100,
+      r.framing_score < criteria.f_hard);
+  set("rv", "rf", r.facing_delta.toFixed(3), r.facing_delta * 100,
+      r.facing_delta > criteria.r_max);
+  // ⚠️ OKS 는 bad 표시를 하지 않는다 — 임계값이 아직 없다. 있는 척하면 안 된다.
+  set("kv", "kf", r.oks.toFixed(3), r.oks * 100, false);
+
+  const spread = (lm) => {
+    const sl = lm[IDX.shoulderL], sr = lm[IDX.shoulderR];
+    if (typeof sl?.z !== "number" || typeof sr?.z !== "number") return null;
+    const w = Math.hypot(sl.x - sr.x, sl.y - sr.y);
+    return w > 0 ? (sl.z - sr.z) / w : null;
+  };
+  const show = (x) => x === null ? "z없음"
+    : `${x >= 0 ? "+" : ""}${x.toFixed(2)}` +
+      (Math.abs(x) < 0.25 ? "(모름)" : x < 0 ? "(왼쪽앞)" : "(오른쪽앞)");
+
+  $("rraw").textContent =
+    `어깨폭비  ${shoulderRatio(refLm).toFixed(3)} → ${shoulderRatio(liveLm).toFixed(3)}\n` +
+    `깊이차    ${show(spread(refLm))} → ${show(spread(liveLm))}`;
+
+  // ⚠️ message 는 **제일 먼저 걸린 것 하나만** 알려준다. 자동 촬영이 안 될 때
+  //    "그럼 나머지는 통과인가"를 알 수 없어서, 네 조건을 다 펼쳐 보여준다.
+  const c = criteria;
+  const checks = [
+    ["사람 1명", personCount <= 1],
+    [`자세 ≥ ${c.threshold}`, r.pose_similarity >= c.threshold],
+    [`거리 ≥ ${c.f_min}`, r.framing_score >= c.f_min],
+    [`방향 ≤ ${c.r_max}`, r.facing_delta <= c.r_max],
+  ];
+  $("checks").innerHTML = checks.map(([t, ok]) =>
+    `<span style="padding:3px 9px;border-radius:4px;background:${ok ? "#173a2a" : "#3a1e1a"};` +
+    `color:${ok ? "#39b57e" : "#dd6a5c"}">${ok ? "✓" : "✗"} ${t}</span>`).join("");
+
+  $("kraw").textContent = Object.entries(r.detail.oksPer)
+    .sort((a, b) => a[1] - b[1]).slice(0, 4)
+    .map(([k, v]) => `${k} ${v.toFixed(2)}`).join("  ");
+}
+
+addEventListener("resize", () => {
+  drawSkeleton($("refcv"), refLm, $("refview"));
+  drawSkeleton($("livecv"), liveLm, $("liveview"));
+});
+
+setStatus("‘기준 받아오기’를 누른 다음, 레퍼런스 사진을 올리고 카메라를 켜세요.", "warn");
+</script>
+</body>
+</html>

@@ -122,20 +122,22 @@ def main() -> int:
 
     # ── 2. 정적 서버 ──────────────────────────────────────────────────────
     _serve_web()
+    live = f"http://localhost:{WEB_PORT}/pose-live.html"
     demo = f"http://localhost:{WEB_PORT}/pose-demo.html"
     tests = f"http://localhost:{WEB_PORT}/pose-score.test.html"
 
     print()
     print("=" * 62)
-    print(f"  데모       {demo}")
+    print(f"  실서비스형 {live}      ← 사진 올리고 따라 서기")
+    print(f"  실험용     {demo}      ← 웹캠으로 기준까지 잡기")
     print(f"  자가진단   {tests}")
     print("=" * 62)
     print()
-    print("  데모 쓰는 법")
-    print("    1. '카메라 켜기' → 브라우저가 권한을 물어봅니다")
-    print("    2. 레퍼런스 자세로 서서 '이 자세를 기준으로'")
-    print("    3. 자세를 바꿔보면 점수가 실시간으로 움직입니다")
-    print("    4. 조건을 만족한 채로 유지하면 자동으로 찍힙니다")
+    print("  실서비스형 쓰는 법")
+    print("    1. '기준 받아오기'")
+    print("    2. 왼쪽에 닮고 싶은 몸 사진을 끌어다 놓기 (전신)")
+    print("    3. '카메라 켜기' → 권한 허용")
+    print("    4. 사진과 같은 자세로 서면 점수가 올라갑니다")
     print()
     print("  ⚠️ 전신이 나와야 합니다. 노트북 웹캠이면 2m 이상 떨어지세요.")
     print("  ⚠️ 화면을 눕히지 마세요 — 위에서 내려다보면 다리가 잘립니다.")
@@ -146,7 +148,7 @@ def main() -> int:
     #    정작 필요한 순간에 화면이 비어 있게 된다.
     sys.stdout.flush()
 
-    webbrowser.open(demo)
+    webbrowser.open(live)
 
     try:
         while True:

@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-08-14 - F10 루틴 생성 로직 완성 + 운동명 한글화 (B)
+
+**무엇이**:
+- `app/services/routine.py`: `build_routine()` — PM 확정 로직 구현
+    L0 모드(체지방률 1차) → L1 골격(주기당 N일, CUT은 유산소 항목 포함)
+    → L2 약점 가중(+2~4세트/주) → ExerciseDB 후보 필터 → LLM 선택(후보 제약)
+    → 검증·조립(RIR 처방, 주간 중복 제한). LLM 실패 시 결정론 폴백으로 완주
+- `app/services/routine_templates.py`: 전면 재작업 — Day 1~28 폐기,
+    주기당 N일(휴식일 행 없음), CUT/BALANCE 골격, 수치 출처(ACSM 등) 주석 명기
+- `app/prompts/routine_gen.py`: 후보 제약형 재작성 — LLM은 exercise_ref 선택만
+- `scripts/localize_exercises.py`: 운동명 한글화 배치 (200/200 완료, 캐시 저장)
+- `scripts/verify_routine_build.py`: 확정 로직 계약 검증 30항목 통과
+- 실호출 검증: CUT 시나리오에서 LLM 선택 교정 0건, 비대칭 부위에 단측 운동
+    (원암 로우·싱글 레그 카프) 자동 배치, 비용 $0.019/호출
+
+**확정 반영 (D1·D3·D10 결정됨)**:
+- D1: 체지방률 남 ≥25 / 여 ≥36 → CUT, 미만·인바디 없음 → BALANCE
+- D3: CUT 유산소는 문구가 아니라 Day 목록의 운동 항목 (완료 체크 대상)
+- D10: 진단 실패 부위도 기본 볼륨 유지(가이드라인 근거), 개인화는 진단 부위만
+
+**남은 것 (A 협의 후)**: 루틴 스키마 반영(routine-schema-draft.md) → 라우터·워커 배선
+
+---
+
 ## 2026-08-14 - F08·F09 진단 파이프라인 구현 + 부위별 병렬 폐기 (B)
 
 **무엇이**:

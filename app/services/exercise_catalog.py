@@ -61,6 +61,33 @@ PART_TO_SLOTS: dict[str, tuple[str, ...]] = {
     "Right_Lower_Leg": ("종아리",),
 }
 
+#: 슬롯의 주동근 (ExerciseDB `/muscles` 실측 enum).
+#:
+#: ⚠️ **bodyParts 만으로는 이두/삼두를 못 가른다** — 둘 다 UPPER ARMS 라서,
+#:    실호출에서 이두 슬롯에 삼두성 프레스("원암 해머 프레스")가 뽑혔다.
+#:    그래서 정렬 1순위를 targetMuscles 일치로 둔다. bodyParts 는 후보를
+#:    **거르는** 기준(넓게), targetMuscles 는 **줄 세우는** 기준(정밀하게)이다.
+#:    필터로 쓰지 않는 이유: 표기 변형·누락 시 후보가 0개가 되는 쪽이 더 위험하다.
+SLOT_TARGET_MUSCLES: dict[str, set[str]] = {
+    "가슴": {"PECTORALIS MAJOR CLAVICULAR HEAD", "PECTORALIS MAJOR STERNAL HEAD"},
+    "등": {
+        "LATISSIMUS DORSI",
+        "TRAPEZIUS UPPER FIBERS",
+        "TRAPEZIUS MIDDLE FIBERS",
+        "TRAPEZIUS LOWER FIBERS",
+        "TERES MAJOR",
+    },
+    "어깨": {"ANTERIOR DELTOID", "LATERAL DELTOID"},
+    "후면 어깨": {"POSTERIOR DELTOID", "INFRASPINATUS", "TERES MINOR"},
+    "이두": {"BICEPS BRACHII", "BRACHIALIS", "BRACHIORADIALIS"},
+    "삼두": {"TRICEPS BRACHII"},
+    "팔": {"BICEPS BRACHII", "TRICEPS BRACHII", "WRIST FLEXORS", "WRIST EXTENSORS"},
+    "대퇴사두": {"QUADRICEPS"},
+    "햄스트링·둔근": {"HAMSTRINGS", "GLUTEUS MAXIMUS", "GLUTEUS MEDIUS"},
+    "종아리": {"GASTROCNEMIUS", "SOLEUS"},
+    "코어": {"RECTUS ABDOMINIS", "OBLIQUES", "TRANSVERSUS ABDOMINIS"},
+}
+
 #: 좌우 비대칭이 클 때 우선할 단측 운동 힌트.
 #: ⚠️ API 에 좌우 구분 필드가 없어 이름으로 찾는다. RCT 근거가 아니라 관행이다.
 SINGLE_SIDE_HINTS = ("single", "one arm", "one-arm", "one leg", "lunge", "split", "alternate")
@@ -132,9 +159,11 @@ def candidates_for_slot(
     """슬롯 하나의 후보 운동 목록. LLM 은 이 안에서만 고른다.
 
     정렬 우선순위 (앞일수록 먼저):
-        ① 장비 운동      헬스장 전제이므로 장비 운동을 앞세운다
-        ② 복합 운동      ACSM: 초보자에게 다관절 강조
-        ③ 단측 운동      좌우 비대칭이 클 때만 (prefer_single_side)
+        ① 주동근 일치    targetMuscles ∩ SLOT_TARGET_MUSCLES — 이두/삼두처럼
+                        bodyParts 가 같은 슬롯을 정밀하게 가른다
+        ② 장비 운동      헬스장 전제이므로 장비 운동을 앞세운다
+        ③ 복합 운동      ACSM: 초보자에게 다관절 강조
+        ④ 단측 운동      좌우 비대칭이 클 때만 (prefer_single_side)
 
     ⚠️ 장비 운동은 **우선순위이지 필터가 아니다.** 수집된 200개 중 79%가
        BODY WEIGHT 라, 장비로 걸러내면 이두·삼두 슬롯의 후보가 0개가 된다.
@@ -153,9 +182,13 @@ def candidates_for_slot(
         and (not beginner_only or e.get("is_beginner_safe", True))
     ]
 
+    primary = SLOT_TARGET_MUSCLES.get(slot, set())
+
     def rank(e: dict[str, Any]) -> tuple:
         single = any(h in (e.get("name_en") or "").lower() for h in SINGLE_SIDE_HINTS)
+        muscle_hit = bool(primary & set(e.get("target_muscles") or []))
         return (
+            not muscle_hit,
             not _uses_equipment(e),
             not _is_compound(e),
             not (prefer_single_side and single),

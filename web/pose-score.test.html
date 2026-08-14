@@ -45,15 +45,15 @@
 </table>
 
 <script type="module">
-import { poseScore, framingScore, facingDelta, evaluate, oksScore,
+import { poseScore, framingScore, facingDelta, evaluate, oksScore, createHoldGate,
          KEYPOINT_SIGMA, COCO_17, COCO_BODY_12, COCO_FROM_MEDIAPIPE, IDX }
   from "./pose-score.js";
 
-// 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md)
+// 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md · 2026-08-14 재조정)
 const C = {
-  tol_deg: 45, hard_tol_deg: 60, threshold: 70,
-  f_min: 0.65, f_hard: 0.40, r_max: 0.25,
-  min_visible_angles: 4, min_visibility: 0.5, n_hold: 15,
+  tol_deg: 60, hard_tol_deg: 70, threshold: 70,
+  f_min: 0.65, f_hard: 0.40, min_seg_ratio: 0.25,
+  min_visible_angles: 4, min_visibility: 0.5, n_hold: 10,
 };
 
 // ── 시험용 골격 만들기 ────────────────────────────────────────────────────
@@ -115,27 +115,48 @@ const tests = [
   },
   {
     name: "왼쪽 상완만 30도 틀어짐",
-    why: "하나만 어긋났을 때 부분 감점이 되는가 (1 − 30/45 = 0.33 한 개 + 나머지 8개)",
-    expect: 92.6,
+    why: "하나만 어긋났을 때 부분 감점이 되는가 (1 − 30/60 = 0.5 한 개 + 나머지 8개)",
+    expect: 94.4,
     run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 30 }), C).score,
   },
   {
     name: "전체가 10도씩 틀어짐",
-    why: "고르게 어긋나면 고르게 깎이는가",
-    expect: 80.2,
+    why: "고르게 어긋나면 고르게 깎이는가 (몸통은 어깨·골반 고정이라 0°)",
+    expect: 85.2,
     run: () => poseScore(REF, build(shift(10)), C).score,
   },
   {
-    name: "왼쪽 상완만 70도 틀어짐",
-    why: "★ 평균만 쓰면 통과해버린다. 한 관절이라도 크게 벌어지면 0이어야 함",
+    name: "왼쪽 상완만 80도 틀어짐",
+    why: "★ 평균만 쓰면 통과해버린다. 한 관절이라도 HARD=70 넘게 벌어지면 0이어야 함 — 팔 하나가 명백히 딴 방향이면 육안으로도 딴 자세다",
     expect: 0,
-    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 70 }), C).score,
+    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 80 }), C).score,
   },
   {
     name: "위 상황의 사유",
     why: "왜 0인지 화면에 표시할 수 있어야 함",
     expect: "JOINT_TOO_FAR",
-    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 70 }), C).reason,
+    run: () => poseScore(REF, build({ ...BASE, upperArmL: BASE.upperArmL + 80 }), C).reason,
+  },
+  {
+    name: "카메라 쪽으로 뻗은 팔은 계산에서 뺀다",
+    why: "★★ 투영 길이 < 몸통×min_seg_ratio 면 2D 각도가 난수라 뺀다. 예전엔 이게 하드컷을 오발시켜 육안으로 같은 자세를 통째로 0점 냈다",
+    expect: 8,
+    run: () => {
+      const u = build();
+      // 왼쪽 손목을 팔꿈치 바로 옆으로 — 전완이 카메라를 향해 투영이 짧아진 상황
+      u[IDX.wristL] = { ...u[IDX.elbowL], index: IDX.wristL, x: u[IDX.elbowL].x + 0.02 };
+      return poseScore(REF, u, C).usedAngles;
+    },
+  },
+  {
+    name: "단축된 팔의 엉뚱한 각도가 점수를 깎지 않는다",
+    why: "★ 위 상황의 점수. 나머지가 다 맞으면 100 이어야 한다",
+    expect: 100,
+    run: () => {
+      const u = build();
+      u[IDX.wristL] = { ...u[IDX.elbowL], index: IDX.wristL, x: u[IDX.elbowL].x + 0.02 };
+      return poseScore(REF, u, C).score;
+    },
   },
   {
     name: "골반이 가려진 경우",
@@ -188,13 +209,23 @@ const tests = [
     run: () => round1(facingDelta(REF, build())),
   },
   {
-    name: "정면성 — 어깨폭이 절반",
-    why: "★ 몸이 옆으로 돌면 어깨폭이 줄어든다. 각도로는 못 잡는 것",
+    name: "정면성 — 어깨폭이 절반 (관찰용 지표)",
+    why: "★ 몸이 옆으로 돌면 어깨폭이 줄어든다. 지표 자체는 계속 회전을 감지해야 한다 — 관문에서만 뺐다",
     expect: true,
     run: () => {
       const turned = build();
       turned[IDX.shoulderL].x = .46; turned[IDX.shoulderR].x = .54;   // 어깨폭 0.16 → 0.08
-      return facingDelta(REF, turned) > C.r_max;
+      return facingDelta(REF, turned) > 0.4;
+    },
+  },
+  {
+    name: "정면성 — 달라도 더는 막지 않는다",
+    why: "★ 2026-08-14 — R 은 관찰용. 어깨폭 잡음 오발이 잦아 서버와 함께 관문에서 뺐다",
+    expect: false,
+    run: () => {
+      const turned = build();
+      turned[IDX.shoulderL].x = .46; turned[IDX.shoulderR].x = .54;
+      return evaluate(REF, turned, C).blocked;
     },
   },
   {
@@ -211,9 +242,9 @@ const tests = [
   },
   {
     name: "종합 판정 — 자세만 나쁨",
-    why: "★★ 프레이밍·정면성이 멀쩡하면 POSE 여야 한다. 예전 방식에서는 FRAMING 이 나왔다 — 사용자가 고칠 수 없는 안내였다",
+    why: "★★ 프레이밍이 멀쩡하면 POSE 여야 한다. 예전 방식에서는 FRAMING 이 나왔다 — 사용자가 고칠 수 없는 안내였다 (35° 균일: 48.1점 < 70)",
     expect: "POSE",
-    run: () => evaluate(REF, build(shift(20)), C).reason,
+    run: () => evaluate(REF, build(shift(35)), C).reason,
   },
   {
     name: "거리 — 1.4배 가까이: 안내는 하되 막지 않음",
@@ -239,6 +270,34 @@ const tests = [
     why: "★ 유도선과 거부선은 다르다. 이미 찍힌 사진을 유도선으로 막으면 처음부터 다시 하라는 뜻",
     expect: false,
     run: () => evaluate(REF, build(BASE, { scale: 1.6 }), C).blocked,
+  },
+  {
+    name: "거리 — 1.6배 가까이: 셔터도 막지 않는다",
+    why: "★ 2026-08-14 — 서버가 f_min 으로 거부하지 않는데 셔터만 막으면 '업로드는 되는데 안 찍히는' 사진이 된다. 문구만 안내",
+    expect: true,
+    run: () => evaluate(REF, build(BASE, { scale: 1.6 }), C).pass,
+  },
+  {
+    name: "홀드 — 한 프레임 튀어도 리셋되지 않는다",
+    why: "★★ lite 모델은 수시로 튄다. 연속 조건이면 통과선 근처에서 영영 안 찍혔다. 최근 n_hold+3 창에서 n_hold 개면 발사",
+    expect: true,
+    run: () => {
+      const g = createHoldGate(C);
+      let fired = false;
+      for (const ok of [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1]) if (g(Boolean(ok))) fired = true;
+      return fired;
+    },
+  },
+  {
+    name: "홀드 — 잠깐 스친 통과로는 안 찍힌다",
+    why: "★ 완화의 반대쪽 경계. 손이 지나가다 우연히 몇 프레임 맞은 것으로는 셔터가 안 나가야 한다",
+    expect: false,
+    run: () => {
+      const g = createHoldGate(C);
+      let fired = false;
+      for (const ok of [0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]) if (g(Boolean(ok))) fired = true;
+      return fired;
+    },
   },
   {
     name: "거리 — 3배 가까이: 서버가 막음",

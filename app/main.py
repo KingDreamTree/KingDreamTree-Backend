@@ -16,6 +16,7 @@ from app.routes.body_parts import router as body_parts_router
 from app.routes.inbody import router as inbody_router
 from app.routes.jobs import router as jobs_router
 from app.routes.photos import router as photos_router
+from app.routes.pose_criteria import router as pose_criteria_router
 from app.routes.segmentation import router as segmentation_router
 from app.routes.sessions import router as sessions_router
 from app.routes.storage import router as storage_router
@@ -73,6 +74,7 @@ for _router in (
     users_router,
     sessions_router,
     photos_router,
+    pose_criteria_router,
     segmentation_router,
     storage_router,
     inbody_router,
@@ -83,6 +85,8 @@ for _router in (
 
 # 구 스캐폴드(/analyze, /compare)는 F08·F09 가 새 구조로 대체해 삭제했다.
 # 관련 DTO(schemas/analyze.py, schemas/compare.py)도 함께 제거됐다.
+# ⚠️ 되살려 참고하지 말 것 — 폭 몇 개(shoulder_width 등)를 재는 방식이라
+#    지금의 부위 단위 설계와 맞지 않는다. docs/removed-code.md 참고.
 
 
 @app.get("/health", tags=["health"])

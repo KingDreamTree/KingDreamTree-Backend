@@ -210,18 +210,44 @@ def ensure_same_scale_basis(reference_basis: str | None, user_basis: str | None)
         )
 
 
+def criteria() -> dict[str, float | int]:
+    """프론트가 실시간 화면에서 쓸 판정 기준.
+
+    ⚠️ 프론트에 숫자를 하드코딩하면 서버에서 조정한 순간 어긋난다 —
+       화면에서는 통과인데 저장이 거부되는 상황이 생긴다. 값을 내려준다.
+    """
+    return {
+        "tol_deg": settings.pose_tol_deg,
+        "hard_tol_deg": settings.pose_hard_tol_deg,
+        "threshold": settings.pose_threshold,
+        "f_min": settings.framing_f_min,
+        "r_max": settings.pose_facing_max_delta,
+        "min_visible_angles": settings.pose_min_visible_angles,
+        "min_visibility": settings.pose_min_visibility,
+        "n_hold": settings.pose_n_hold,
+    }
+
+
 def judge_user_photo(
     pose_similarity: float,
     framing_score: float,
     scale_basis: PoseScaleBasis | str,
     reference_scale_basis: str | None,
     multi_person: bool,
+    facing_delta: float = 0.0,
 ) -> None:
     """사용자 사진의 저장 가부를 판정한다. 통과하면 아무것도 반환하지 않는다.
 
-    순서가 의미를 갖는다 — 프레이밍이 깨진 상태의 포즈 점수는 신뢰할 수 없으므로
-    프레이밍을 먼저 본다. 안내 문구도 달라야 한다.
-      "몸이 화면에 다 나오게 서주세요" vs "포즈를 맞춰주세요"
+    산식은 docs/pose-scoring.md 참조. 여기서는 **임계값 비교만** 한다.
+
+    ⚠️ **순서가 의미를 갖는다.** 프레이밍이 깨졌거나 몸이 돌아간 상태의 자세 점수는
+       믿을 수 없다. 그리고 안내 문구가 각각 달라야 한다 — 사용자가 취해야 할
+       행동이 다르기 때문이다.
+         FRAMING "몸이 다 나오게 서주세요" / FACING "정면을 보고 서주세요"
+         POSE    "포즈를 맞춰주세요"
+
+    ⚠️ facing_delta 기본값이 0.0 인 것은 **미전달 시 통과**를 뜻한다.
+       프론트가 아직 이 값을 안 보내는 동안 업로드가 막히면 안 된다.
     """
     ensure_single_person(multi_person)
     ensure_same_scale_basis(reference_scale_basis, str(scale_basis))
@@ -229,14 +255,25 @@ def judge_user_photo(
     detail = {
         "pose_similarity": pose_similarity,
         "framing_score": framing_score,
+        "facing_delta": facing_delta,
         "threshold": settings.pose_threshold,
         "f_min": settings.framing_f_min,
+        "r_max": settings.pose_facing_max_delta,
     }
 
     if framing_score < settings.framing_f_min:
         raise pose_mismatch(
             "몸이 화면에 다 나오도록 서주세요.",
             reason="FRAMING",
+            detail=detail,
+        )
+
+    # ⚠️ 몸이 돌아가면 어깨폭이 좁아 보여 실루엣 굵기가 왜곡된다.
+    #    각도만으로는 안 잡힌다 — 팔을 내린 자세는 돌아서도 각도가 거의 같다.
+    if facing_delta > settings.pose_facing_max_delta:
+        raise pose_mismatch(
+            "몸이 옆으로 돌아가 있습니다. 정면을 보고 서주세요.",
+            reason="FACING",
             detail=detail,
         )
 

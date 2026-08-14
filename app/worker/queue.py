@@ -305,10 +305,6 @@ def list_jobs(
     return q.order("created_at").execute().data
 
 
-def all_settled(session_id: UUID, kind: JobKind) -> bool:
-    """해당 종류의 잡이 전부 종결(DONE/FAILED)됐는지.
-
-    인바디처럼 "있으면 쓰고 없으면 그냥 진행"할 때 대기 여부 판정에 쓴다.
-    """
-    jobs = list_jobs(session_id, kind=kind)
-    return not jobs or all(j["status"] not in OPEN_STATUSES for j in jobs)
+# ⚠️ all_settled(session_id, kind) 는 2026-08-14 에 지웠다.
+#    "인바디처럼 있으면 쓰고 없으면 진행"할 때 쓰려고 미리 만들었는데 그 코드가
+#    아직 없다. 필요해지면 list_jobs() + OPEN_STATUSES 로 다시 만들면 된다.

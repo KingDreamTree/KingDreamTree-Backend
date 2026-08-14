@@ -22,10 +22,12 @@ from app.routes.inbody import router as inbody_router
 from app.routes.jobs import router as jobs_router
 from app.routes.photos import router as photos_router
 from app.routes.pose_criteria import router as pose_criteria_router
+from app.routes.routines import router as routines_router
 from app.routes.segmentation import router as segmentation_router
 from app.routes.sessions import router as sessions_router
 from app.routes.storage import router as storage_router
 from app.routes.users import router as users_router
+from app.routes.workout_logs import router as workout_logs_router
 
 app = FastAPI(
     title="KingDreamTree Backend",
@@ -152,9 +154,10 @@ for _router in (
     storage_router,
     inbody_router,
     analysis_router,
+    routines_router,
+    workout_logs_router,
 ):
     app.include_router(_router, prefix=API_PREFIX)
-# TODO(B): routines, workout_logs 라우터
 
 # 구 스캐폴드(/analyze, /compare)는 F08·F09 가 새 구조로 대체해 삭제했다.
 # 관련 DTO(schemas/analyze.py, schemas/compare.py)도 함께 제거됐다.

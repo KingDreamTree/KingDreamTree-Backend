@@ -6,7 +6,7 @@
     A. 인바디 없음 → BALANCE + 진단 실패 부위도 기본 볼륨 (D10)
     B. 체지방률 초과 → CUT + 근력일마다 유산소 항목 (D1·D3)
     C. 체지방률 미만 → BALANCE + 약점 가중 (D1)
-    D. 가중 상한 (부위당 +4세트/주, 슬롯 5세트, 총 20세트/주)
+    D. 가중 적용 + 근육군 주간 총량 상한 (정밀 상한은 verify_routine_rules.py)
     E. 선택 무결성 — 모든 운동이 카탈로그 후보에서만 나옴
     F. RIR 처방 · 중량 미표기 (D9)
 """
@@ -25,7 +25,7 @@ settings.use_mock = True  # LLM 없이 결정론 폴백 경로 검증
 
 from app.services import exercise_catalog as ec  # noqa: E402
 from app.services.routine import build_routine  # noqa: E402
-from app.services.routine_templates import SLOT_SETS_CAP, WEEKLY_BOOST_CAP  # noqa: E402
+from app.services.routine_templates import WEEKLY_GROUP_SET_CAP  # noqa: E402
 
 PASS, FAIL = "[OK]", "[X]"
 _failures: list[str] = []
@@ -99,15 +99,17 @@ def main() -> int:
     check("BMI 26 이어도 BALANCE", fit["mode"] == "BALANCE")
     check("가중 없음 (우선 부위 없음)", not fit["boosts"])
 
-    # ── D. 가중 상한 ─────────────────────────────────────────────────────────
-    print("\nD. 볼륨 상한")
+    # ── D. 가중 ──────────────────────────────────────────────────────────────
+    # ⚠️ 상한은 **근육군 단위**다 (부위 단위가 아니다). Torso 는 가슴·등·어깨·
+    #    코어 4개 군에 걸치므로 부위 합계는 군당 상한을 넘을 수 있다 — 정상이다.
+    #    슬롯·근육군 상한의 정밀 검증은 verify_routine_rules.py 가 한다.
+    print("\nD. 볼륨 가중")
+    check("가중이 실제로 붙었다", sum(plan["boosts"].values()) > 0, str(plan["boosts"]))
     check(
-        f"부위당 주간 가산 ≤ {WEEKLY_BOOST_CAP}",
-        all(v <= WEEKLY_BOOST_CAP for v in plan["boosts"].values()),
+        f"근육군 주간 총량 ≤ {WEEKLY_GROUP_SET_CAP}",
+        all(v <= WEEKLY_GROUP_SET_CAP for v in plan["weekly_sets"].values()),
+        str(plan["weekly_sets"]),
     )
-    all_sets = [e["sets"] for d in plan["days"] for e in d["exercises"] if e["kind"] == "STRENGTH"]
-    check(f"슬롯 세트 ≤ {SLOT_SETS_CAP}", max(all_sets) <= SLOT_SETS_CAP, f"max={max(all_sets)}")
-    check("근육군 주간 ≤ 20세트", max(plan["weekly_sets"].values()) <= 20, str(plan["weekly_sets"]))
 
     # ── E. 선택 무결성 ───────────────────────────────────────────────────────
     print("\nE. 선택 무결성")

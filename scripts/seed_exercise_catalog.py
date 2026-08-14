@@ -10,9 +10,13 @@
    여기서 안 넣으면 전부 제외되고 후보가 0건이 된다 — 조용히 위험한 운동이
    나가는 것보다 티 나게 비어 있는 쪽이 낫다는 판단이다 (담당 A 지적 반영).
 
-⚠️ 스크리닝 근거는 이름·키워드 기반 제외 목록이다(fetch_exercisedb.ADVANCED_KEYWORDS).
-   휴리스틱이라는 점을 숨기지 않는다 — D8 로 승인 대기 중인 항목이다.
-   여기서는 그 결과를 그대로 반영하고, 목록이 바뀌면 재수집 후 다시 seed 한다.
+⚠️ **수집본 JSON 의 is_beginner_safe 를 믿지 않고 여기서 다시 평가한다**
+   (`exercise_catalog.is_beginner_safe`). 제외 목록을 고칠 때마다 API 를
+   재수집해야 한다면 한글화가 날아가고, 그러면 아무도 목록을 안 고친다.
+   원본은 raw 로 두고 판정은 코드 한 곳에서만 한다.
+
+⚠️ 스크리닝은 이름 기반 휴리스틱이다 — D8 로 승인 대기 중인 항목이라
+   근거를 주장하지 않는다.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.services.db import get_client  # noqa: E402
+from app.services.exercise_catalog import is_beginner_safe  # noqa: E402
 
 CATALOG = Path(__file__).resolve().parent.parent / "data" / "exercise_catalog.json"
 
@@ -58,19 +63,22 @@ def main() -> int:
             "exercise_type": e["exercise_type"],
             "keywords": e.get("keywords") or [],
             "image_url": e.get("image_url"),
-            # ⚠️ 명시적으로 넣는다 (모듈 주석)
-            "is_beginner_safe": bool(e.get("is_beginner_safe", False)),
+            # ⚠️ 수집본 값이 아니라 **지금 규칙으로 다시 평가**한다 (모듈 주석)
+            "is_beginner_safe": is_beginner_safe(e["name_en"], e["exercise_type"]),
         }
         for e in items
     ]
 
     types = Counter(r["exercise_type"] for r in rows)
     unsafe = sum(1 for r in rows if not r["is_beginner_safe"])
+    unsafe_names = [r["name_en"] for r in rows if not r["is_beginner_safe"]]
     no_ko = sum(1 for r in rows if not r["name_ko"])
 
     print(f"수집본: {len(rows)}개  (fetched_at={doc.get('fetched_at')})")
     print(f"  타입: {dict(types)}")
-    print(f"  초보 제외 표시: {unsafe}개")
+    print(f"  초보 제외: {unsafe}개")
+    for n in sorted(unsafe_names):
+        print(f"     - {n.strip()}")
     print(
         f"  한글명 없음: {no_ko}개" + ("  ← localize_exercises.py 먼저 돌리세요" if no_ko else "")
     )

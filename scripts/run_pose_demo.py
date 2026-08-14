@@ -125,13 +125,26 @@ def main() -> int:
     live = f"http://localhost:{WEB_PORT}/pose-live.html"
     demo = f"http://localhost:{WEB_PORT}/pose-demo.html"
     tests = f"http://localhost:{WEB_PORT}/pose-score.test.html"
+    e2e = f"http://localhost:{WEB_PORT}/e2e-test.html"
 
     print()
     print("=" * 62)
+    print(f"  전 구간    {e2e}       ← 사진 2장 → 진단 → 루틴")
     print(f"  실서비스형 {live}      ← 사진 올리고 따라 서기")
     print(f"  실험용     {demo}      ← 웹캠으로 기준까지 잡기")
     print(f"  자가진단   {tests}")
     print("=" * 62)
+    print()
+    print("  전 구간 쓰는 법")
+    print("    1. 레퍼런스 사진 + 내 사진을 각각 고르기 (둘 다 전신)")
+    print("    2. 다른 사람이면 자세 점수가 낮게 나옵니다 — 정상입니다.")
+    print("       '관문 무시'를 켜면 뒷단(세그·진단·루틴)까지 볼 수 있습니다.")
+    print("    3. '전 구간 실행'")
+    print()
+    print("  ⚠️ 워커 2개가 떠 있어야 합니다 (없으면 잡이 PENDING 에서 멈춥니다)")
+    print("       python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER")
+    print("       python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,"
+          "ROUTINE_GEN,ROUTINE_PATCH")
     print()
     print("  실서비스형 쓰는 법")
     print("    1. '기준 받아오기'")

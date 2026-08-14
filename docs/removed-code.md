@@ -125,3 +125,61 @@ WARNING config: .env 에 모르는 키가 있습니다 (무시됨): FOO_BAR_TYPO
 
 ⚠️ **막지는 않는다.** 같은 `.env` 를 다른 도구가 쓸 수도 있어서 에러로 만들지
 않았다. 보이게만 한다.
+
+---
+
+## 2026-08-14 (2차) — 전수 정리
+
+### 코드
+
+| 대상 | 왜 |
+|---|---|
+| `app/schemas/routine.py` 의 `RoutineRequest` · `Exercise` · `RoutineResponse` | v1 `POST /routine` 의 DTO. **`analysis_id`(= /analyze 응답)를 참조**하는데 그 테이블도 엔드포인트도 v4 에서 사라졌다. `analyze.py`·`compare.py` 를 지울 때 같이 빠졌어야 했다. F10 은 같은 파일의 `RoutineGenerate*` 를 쓴다 |
+| `web/pose-score.js` 의 `angleOf` · `angleDiff` export | 내부 계산용 헬퍼인데 밖으로 열려 있었다. 쓰는 곳이 없다. 함수는 남기고 `export` 만 뗐다 |
+| `ANTHROPIC_API_KEY` (설정) | `vlm.py` 가 진단용으로 재작성되며 openai 전용이 됐다. 키만 남겨두면 "`VLM_PROVIDER=claude` 로 바꾸면 되겠지"라는 오해를 만든다 |
+| `docs/FRONTEND.md` (구본) | 새 가이드와 내용이 겹친 채 둘 다 살아 있었다. 반드시 어긋난다. 새 것을 같은 이름으로 승격 |
+
+### 문서 — 낡은 스펙 버전
+
+`docs/api-spec-v1.md` · `docs/db-design-v3.md` 를 지웠다.
+
+⚠️ 단순히 "안 읽어서"가 아니다. **틀린 정의가 적혀 있었다.**
+
+```
+api-spec-v1.md §287   F = Jaccard(레퍼런스 인물 bbox, 사용자 인물 bbox)
+db-design-v3.md §144  framing_score … 프레이밍 일치도 F (Jaccard)
+```
+
+`framing_score` 는 2026-08-14 에 **몸통 길이 비율**로 바뀌었다. bbox 방식은
+팔다리 움직임을 프레이밍 문제로 오인해, 사용자가 물러서도 고칠 수 없는 안내를
+띄웠기 때문이다. 옛 문서를 그대로 두면 **읽은 사람이 틀린 걸 구현한다.**
+
+v2·v4 의 "이전 버전" 줄은 파일 링크 대신 삭제 사실을 적도록 고쳤고,
+`work-split.md` 의 기준 문서도 v4·v2 로 갱신했다.
+
+### ⚠️ 담당 B 영역이라 손대지 않은 것
+
+`app/services/segmap.py` 의 `part_stats()` 가 어디서도 호출되지 않는다.
+확인 후 정리 부탁드립니다.
+
+---
+
+## 2026-08-14 (3차) — 문서에 남은 틀린 서술
+
+코드가 아니라 **문서가 지금과 다른 걸 말하고 있던 것**들. 지우지 않고 고쳤다.
+
+| 문서 | 무엇이 틀렸나 |
+|---|---|
+| `api-spec-v2.md` §339 | `F = Jaccard(bbox)` — 현재는 **몸통 길이 비율**이다. 그리고 거부선이 `F_MIN` 이 아니라 `F_HARD` 다. 판정 순서에 `FACING` 도 빠져 있었다 |
+| `handoff-to-a.md` §107 | `Eyeglasses` (복수형) — 공식 문서 기준은 `Eyeglass` |
+| `work-b.md` §101, §254 | 같은 철자 오류 |
+| `app/services/segmap.py` §16 | 같은 철자 오류 (주석) |
+
+⚠️ **철자 하나가 왜 문제인가** — 워커가 기동할 때 `label_map` 을 `body_part`
+마스터와 대조한다. 복수형으로 seed 하면 "마스터에 없는 클래스"로 걸려 잡이
+통째로 실패한다. 실제로 한 번 겪고 고친 것이라, 문서에 옛 철자가 남아 있으면
+다음 사람이 그대로 다시 넣는다.
+
+⚠️ **`api-spec-v2.md` 의 산식은 특히 위험했다.** 프론트가 명세서를 보고 구현하는데
+bbox 로 재면 팔다리 움직임이 프레이밍 문제로 보고되고, 사용자는 물러서도
+고칠 수 없는 안내를 받는다. 오늘 그걸 고쳤는데 명세서에는 옛 정의가 남아 있었다.

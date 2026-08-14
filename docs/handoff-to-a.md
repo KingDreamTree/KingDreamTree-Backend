@@ -104,7 +104,7 @@ A 샘플(몸에 붙는 상의) 실측:
 | 항목 | 실측 |
 |---|---|
 | 종횡비 | `sx=0.9115` `sy=1.0244` (11% 차이). 단일 배율이면 Torso bbox 가로 **31px** 어긋남 |
-| 보간 | BILINEAR 시 라벨 종류 23 → **28**. 없던 `Apparel`·`Eyeglasses`·`Upper_Clothing`·`Sock` 생성 |
+| 보간 | BILINEAR 시 라벨 종류 23 → **28**. 없던 `Apparel`·`Eyeglass`·`Upper_Clothing`·`Sock` 생성 |
 | 픽셀 수 | 9개 부위 전부 `segmentation.json`과 정확히 일치 |
 | bbox | Torso 실측 `x=272 y=219 w=227 h=289` — 명세와 완전 일치 |
 | 좌우 | 인물 왼팔이 화면 오른쪽 ✓ |

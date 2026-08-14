@@ -16,7 +16,6 @@
    세션에 누적한다 — 안전은 [적용] 버튼 뒤에 두지 않는다.
 """
 
-import asyncio
 import logging
 from typing import Any
 from uuid import UUID

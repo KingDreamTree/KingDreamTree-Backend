@@ -173,6 +173,16 @@ class Settings(BaseSettings):
     #    되살리려면 vlm.py 에 분기를 다시 구현해야 한다.
 
     # ------------------------------------------------------------------ #
+    # ExerciseDB (운동 카탈로그, 담당 B 영역)
+    # ------------------------------------------------------------------ #
+    #: RapidAPI 키. 운동 풀 배치 수집(scripts/fetch_exercisedb.py)에만 쓴다.
+    #  ⚠️ 런타임에는 필요 없다 — 수집한 카탈로그를 로컬 캐시에서 읽으므로
+    #     API 프로세스와 워커는 이 키 없이 돈다. 외부 API 장애가 서비스 장애가
+    #     되지 않게 하려는 설계다 (docs/routine-logic-decision.md D6).
+    rapidapi_key: str = ""
+    rapidapi_exercisedb_host: str = "edb-with-videos-and-images-by-ascendapi.p.rapidapi.com"
+
+    # ------------------------------------------------------------------ #
     # 개발 모드
     # ------------------------------------------------------------------ #
     use_mock: bool = False

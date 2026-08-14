@@ -83,11 +83,14 @@ def _mock_parts(class_names: list[str]) -> dict[str, Any]:
 
 
 def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    # ⚠️ 점수는 여기 없다 — scoring.compute_similarity() 가 실제 계산한다 (mock 여부 무관).
     ranked = sorted(parts, key=lambda p: p.get("priority") or 99)
     return {
-        "similarity_score": 68,
-        "score_rationale": "상체 격차가 크고 하체는 근접 (mock)",
-        "summary": "상체 중심 개선이 필요합니다. 어깨와 팔 근육 강화가 우선입니다. (mock)",
+        "summary": (
+            "하체는 이미 목표 체형에 가깝게 균형이 잡혀 있어요. "
+            "차이는 상체, 특히 양쪽 팔 근육에서 가장 큽니다. "
+            "4주간 팔 위주의 상체 운동에 집중하면 실루엣이 눈에 띄게 달라질 거예요. (mock)"
+        ),
         "priority_parts": [p["class_name"] for p in ranked[:3]],
         "strengths": ["하체 균형이 좋습니다"],
         "cautions": ["좌우 차이가 있어 균형 운동을 권합니다"],
@@ -281,15 +284,16 @@ def parse_overall_response(
     parsed: dict[str, Any],
     class_names: set[str],
 ) -> dict[str, Any]:
-    """종합 진단 응답 검증. priority_parts 는 실재하는 부위 이름만 남긴다."""
+    """종합 진단 응답 검증. priority_parts 는 실재하는 부위 이름만 남긴다.
+
+    ⚠️ similarity_score 는 여기 없다 — 점수는 scoring.compute_similarity() 가
+       규칙으로 계산한다 (score_source=RULE). LLM 이 점수를 보내와도 버린다.
+    """
     priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:5]
 
     summary = parsed.get("summary")
-    rationale = parsed.get("score_rationale")
 
     return {
-        "similarity_score": _clamp_score(parsed.get("similarity_score")),
-        "score_rationale": rationale.strip() if isinstance(rationale, str) else None,
         "summary": summary.strip() if isinstance(summary, str) else None,
         "priority_parts": priority,
         "strengths": _as_str_list(parsed.get("strengths")),
@@ -355,12 +359,15 @@ async def diagnose_overall(
     results: list[dict[str, Any]],
     failed: list[str],
     inbody: dict[str, Any] | None,
+    score: int | None = None,
 ) -> dict[str, Any]:
     """F09 — 부위별 진단을 종합한다. **이미지를 보내지 않는다** (텍스트 전용).
 
     Args:
         results: F08 에서 저장에 성공한 부위 진단 전체 (판단 불가 포함)
         failed:  기술적으로 실패한 부위 이름
+        score:   scoring.compute_similarity() 결과. 프롬프트에 주입해 summary 가
+                 점수와 모순되지 않게 한다. LLM 출력의 점수는 어차피 버린다.
     """
     judged = [p for p in results if p.get("gap_level")]
     blocked = [p for p in results if not p.get("gap_level")]
@@ -368,7 +375,9 @@ async def diagnose_overall(
     if settings.use_mock:
         return _mock_overall(judged or results)
 
-    text = build_overall_prompt(parts=judged, blocked=blocked, failed=failed, inbody=inbody)
+    text = build_overall_prompt(
+        parts=judged, blocked=blocked, failed=failed, inbody=inbody, score=score
+    )
     parsed, raw = await _call_json(
         OVERALL_SYSTEM, [{"type": "text", "text": text}], OVERALL_MAX_TOKENS
     )

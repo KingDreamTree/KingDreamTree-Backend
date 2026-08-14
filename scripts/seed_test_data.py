@@ -10,8 +10,9 @@
     2) Supabase Storage 버킷 4개가 있어야 한다.
        (photos / segmentations / body-parts / inbody-temp)
 
-⚠️ label_map 의 픽셀 인덱스(1~9)는 임시값이다.
-   A가 RunPod 실측값을 공유하면 COMPARABLE_PARTS 의 pixel_value 컬럼만 교체한다.
+⚠️ **여기서 만드는 데이터는 전부 가짜다.** 사각형을 그린 것이지 사람 몸이 아니다.
+   진단 품질·정확도 평가에 쓰면 안 되고, 용도는 API 배선과 잡 흐름 확인뿐이다.
+   품질 확인은 실제 사진과 실제 추론으로만 한다.
 """
 
 import io
@@ -35,17 +36,31 @@ MAP_W, MAP_H = 400, 600  # seg_map PNG 해상도
 PHOTO_W, PHOTO_H = 400, 600  # 더미 사진 해상도
 
 # (class_name, pixel_value, bbox_x, bbox_y, bbox_w, bbox_h)
-# ⚠️ pixel_value 는 임시값. A 실측 후 교체 예정.
+#
+# ⚠️ **이 파일의 데이터는 전부 가짜다.** 사각형 몇 개를 그린 것이고 사람 몸이
+#    아니다. 픽셀 수·bbox·인바디 수치 어느 것도 실제 측정이 아니므로 진단 품질
+#    평가에 쓰면 안 된다. 용도는 API 배선·잡 흐름 확인뿐이다.
+#
+# pixel_value 만은 Sapiens2 의 클래스 인덱스와 맞춰 둔다. 모델이 Torso 를 22 번으로
+# 내보내는데 픽스처가 1 번으로 넣으면, 이걸로 검증한 코드가 실제 추론에서 어긋난다.
+#   → app/services/sapiens_labels.py 의 LABEL_NAMES 가 유일한 출처
+#
+# ⚠️ 여기가 라벨 값을 하드코딩하는 **유일한 곳**이다. 런타임 코드는 절대 이러지
+#    않는다 — segmentation.label_map 을 DB 에서 읽는다. 더미 픽스처는 DB 에 넣을
+#    label_map 을 스스로 만들어야 해서 어쩔 수 없이 값을 안다.
+#
+# ⚠️ 좌/우가 화면 좌표와 반대인 것이 정상이다. 정면 사진에서 피사체의 왼쪽은
+#    화면 오른쪽(x 가 큼)에 온다. bbox 도 그 규칙에 맞춰 배치했다.
 COMPARABLE_PARTS = [
-    ("Torso", 1, 160, 150, 80, 200),
-    ("Left_Upper_Arm", 2, 95, 155, 60, 100),
-    ("Left_Lower_Arm", 3, 85, 260, 50, 90),
-    ("Right_Upper_Arm", 4, 245, 155, 60, 100),
-    ("Right_Lower_Arm", 5, 265, 260, 50, 90),
-    ("Left_Upper_Leg", 6, 145, 355, 55, 120),
-    ("Left_Lower_Leg", 7, 140, 480, 50, 100),
-    ("Right_Upper_Leg", 8, 200, 355, 55, 120),
-    ("Right_Lower_Leg", 9, 210, 480, 50, 100),
+    ("Torso", 22, 160, 150, 80, 200),
+    ("Left_Upper_Arm", 11, 245, 155, 60, 100),
+    ("Left_Lower_Arm", 7, 265, 260, 50, 90),
+    ("Right_Upper_Arm", 20, 95, 155, 60, 100),
+    ("Right_Lower_Arm", 16, 85, 260, 50, 90),
+    ("Left_Upper_Leg", 12, 200, 355, 55, 120),
+    ("Left_Lower_Leg", 8, 210, 480, 50, 100),
+    ("Right_Upper_Leg", 21, 145, 355, 55, 120),
+    ("Right_Lower_Leg", 17, 140, 480, 50, 100),
 ]
 
 INBODY_SEGMENTS = [
@@ -57,7 +72,9 @@ INBODY_SEGMENTS = [
 ]
 
 MODEL_NAME = "sapiens2"
-MODEL_VERSION = "dummy-seed-v1"  # 실측 후 A가 실제 체크포인트명으로 교체
+#: ⚠️ 실제 체크포인트명(sapiens2-seg-5b)을 쓰지 않는다. 더미 행이 실추론 결과로
+#:    오인되면 안 된다 — 이 세그멘테이션은 사각형 몇 개일 뿐이다.
+MODEL_VERSION = "dummy-seed-v1"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

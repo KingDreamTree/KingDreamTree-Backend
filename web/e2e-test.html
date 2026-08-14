@@ -230,6 +230,33 @@
     <div id="diff" style="margin-top:12px"></div>
   </div>
 
+  <!-- 5.6 코치 대화 (F12-b) -->
+  <div class="card step" id="s56">
+    <h2>5.6 코치와 대화 (F12-b) — GPT 가 직접 말하는 곳</h2>
+    <div class="dim" style="margin-bottom:10px">
+      5.5 는 피드백 한 줄을 <b>도구 호출로만</b> 처리해서 GPT 문장이 안 남습니다
+      (실측: <code>content=null</code>). 코치와 말이 오가는 건 여기입니다.
+    </div>
+    <div id="chatlog" style="background:#0c0e13; border:1px solid var(--line);
+      border-radius:6px; padding:12px; max-height:320px; overflow:auto;
+      margin-bottom:10px; min-height:60px">
+      <span class="dim">전 구간 실행(또는 지난 실행 이어쓰기) 후 대화할 수 있습니다.</span>
+    </div>
+    <div id="finalcard" style="margin-bottom:10px"></div>
+    <div class="row">
+      <div class="col" style="flex:3">
+        <input id="chatin" placeholder="예: 스쿼트 할 때 무릎이 좀 아팠어"
+          style="width:100%; padding:9px; background:#0c0e13; color:var(--tx);
+          border:1px solid var(--line); border-radius:6px; font-size:13px">
+      </div>
+      <div class="col" style="flex:0 0 auto">
+        <button id="chatsend" disabled>보내기</button>
+        <button id="chatapply" class="ghost" disabled>이 내용으로 적용</button>
+      </div>
+    </div>
+    <div id="chatturn" class="dim" style="margin-top:6px"></div>
+  </div>
+
   <!-- 6. 원본 -->
   <div class="card step" id="s6">
     <h2>6. 원본 응답 (JSON)</h2>
@@ -589,7 +616,10 @@ async function openFeedbackLoop(sid, headers = H) {
   }
   localStorage.setItem(LAST, JSON.stringify({ user: H["X-User-Id"], sid }));
   $("sendfb").disabled = false;
+  $("chatsend").disabled = false;          // 코치 대화도 같이 열린다
   step("s55", "on");
+  step("s56", "on");
+  $("chatlog").innerHTML = "";
   await refreshToday();
   return true;
 }
@@ -684,6 +714,93 @@ $("sendfb").onclick = async () => {
     flog(`\n실패: ${explain(e)}`, "bad");
   } finally {
     $("sendfb").disabled = false;
+  }
+};
+
+// ── F12-b 코치 대화 ─────────────────────────────────────────────────────────
+//
+// ⚠️ **상태 없는(stateless) API 다.** 서버가 대화를 기억하지 않으므로 매 턴
+//    지금까지의 messages 를 통째로 다시 보낸다. 응답의 messages 를 그대로
+//    보관했다가 다음 턴에 넘기는 게 계약이다 — 직접 조립하면 어긋난다.
+//
+// ⚠️ 적용(apply)은 **finalize 카드가 나온 뒤에만** 된다. 서버가 히스토리를
+//    다시 검증하므로 클라이언트가 조작해도 규칙 밖 변경은 안 나간다.
+let chatMsgs = [];
+
+function bubble(role, text, cls = "") {
+  const mine = role === "user";
+  $("chatlog").insertAdjacentHTML("beforeend", `
+    <div style="margin:6px 0; text-align:${mine ? "right" : "left"}">
+      <span style="display:inline-block; max-width:80%; padding:7px 11px;
+        border-radius:10px; background:${mine ? "#1e2a3d" : "#1a1f28"};
+        border:1px solid var(--line); text-align:left; white-space:pre-wrap"
+        class="${cls}">${text}</span>
+    </div>`);
+  $("chatlog").scrollTop = $("chatlog").scrollHeight;
+}
+
+async function sendChat() {
+  const text = $("chatin").value.trim();
+  if (!text || !F12.sid) return;
+  $("chatin").value = "";
+  $("chatsend").disabled = true;
+  bubble("user", text);
+  chatMsgs.push({ role: "user", content: text });
+
+  try {
+    const r = await api("POST", `/api/v1/sessions/${F12.sid}/coach-chat`,
+                        { json: { messages: chatMsgs } });
+    chatMsgs = r.messages;                 // ⚠️ 서버가 준 것을 그대로 쓴다
+    bubble("assistant", r.reply);
+
+    // 도구 호출은 화면에 배지로 — 무엇이 기록됐는지 사용자가 알아야 한다
+    for (const e of r.tool_events || []) {
+      const a = e.args || {};
+      bubble("assistant",
+        `[${e.name}] ${a.body_part || a.exercise_name || a.old_exercise_name || ""} ` +
+        `${a.severity || ""} ${a.reason || ""}`.trim(), "dim");
+    }
+
+    $("chatturn").textContent = `${r.turn} / ${r.max_turns} 턴`;
+    if (r.finalized) {
+      $("finalcard").innerHTML = `
+        <div style="border:1px solid var(--accent); border-radius:8px; padding:10px">
+          <b>정리</b> — ${r.finalized.summary}
+          <table><tbody>${(r.finalized.changes || []).map((c) =>
+            `<tr><td style="width:40%">${c.what || ""}</td>
+                 <td class="dim">${c.why || ""}</td></tr>`).join("")}</tbody></table>
+        </div>`;
+      $("chatapply").disabled = false;
+    }
+  } catch (e) {
+    bubble("assistant", `실패: ${explain(e)}`, "bad");
+  } finally {
+    $("chatsend").disabled = false;
+  }
+}
+
+$("chatsend").onclick = sendChat;
+$("chatin").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
+
+$("chatapply").onclick = async () => {
+  $("chatapply").disabled = true;
+  try {
+    const r = await api("POST", `/api/v1/sessions/${F12.sid}/coach-chat/apply`,
+                        { json: { messages: chatMsgs } });
+    if (r.no_change) {
+      bubble("assistant", "적용할 루틴 변경이 없습니다 (기록만 남았습니다).", "warn");
+      return;
+    }
+    bubble("assistant", `v${r.version} 새 버전으로 적용됐습니다 ` +
+      `(변경 ${r.applied_changes.length}건).`, "ok");
+    const after = await api("GET", `/api/v1/sessions/${F12.sid}/routines/active`);
+    renderRoutine(after, null);
+    await refreshToday();
+    chatMsgs = [];
+    $("finalcard").innerHTML = "";
+  } catch (e) {
+    bubble("assistant", `적용 실패: ${explain(e)}`, "bad");
+    $("chatapply").disabled = false;
   }
 };
 

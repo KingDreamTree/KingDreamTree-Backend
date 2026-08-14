@@ -1,142 +1,163 @@
-from typing import Any
+"""F10~F12 — 루틴 생성·조회·수행 기록 DTO.
+
+⚠️ 주기 모델: 루틴 1개 = Day 1..N (N = 주당 운동 일수), 4주기 반복.
+   Day 1~28 이 아니고 요일도 아니다. `day_order` 는 주기 내 순서다.
+
+⚠️ `InbodySnapshot` 은 제거했다 (2026-08-14). 필드명을 DB 와 다르게 두었는데
+   (`body_fat_pct` ↔ `body_fat_percentage`), 지금 루틴 생성은 인바디 **행을
+   그대로** 받는다(`routine_mode.decide_mode`). 이 DTO 를 넘기면 체지방률을
+   못 읽어 **에러 없이 BALANCE 로 떨어진다.** 아무도 쓰지 않는 채로 그 함정만
+   남아 있어 지웠다.
+"""
+
+from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-# ── F10 — 루틴 생성 ──────────────────────────────────────────────────────────
+from app.schemas.enums import DomainStatus, GenerationType
+
+# ── F10 — 생성 ───────────────────────────────────────────────────────────────
 
 
-class InbodySnapshot(BaseModel):
-    """루틴 생성에 쓰이는 인바디 수치 (선택). 전체 inbody 행이 아니라 필요한 필드만.
+class RoutineCreateRequest(BaseModel):
+    """POST /sessions/{id}/routines — 생성 및 운동 일수 조정.
 
-    ⚠️ **필드명이 DB 컬럼과 일부러 다르다** (프롬프트 가독성용).
-       그래서 DB에서 채울 때는 반드시 `from_inbody()` 를 쓴다. 손으로 dict를
-       만들면 이름 하나만 어긋나도 조용히 None이 들어가 프롬프트에서 수치가
-       통째로 빠진다 — 에러 없이 루틴 품질만 나빠지는 종류의 사고다.
-
-       DTO            ← DB
-       skeletal_muscle_kg ← skeletal_muscle_mass
-       body_fat_pct       ← body_fat_percentage
-       visceral_fat_level ← raw_ocr (컬럼 아님. db-design-v4 §7 항등식 전용 항목)
+    ⚠️ month_routine_id 를 클라이언트가 보내지 않는다. 서버가 활성 버전을 정한다.
     """
 
-    weight_kg: float | None = None
-    skeletal_muscle_kg: float | None = None
-    body_fat_pct: float | None = None
-    bmi: float | None = None
-    smi: float | None = None
-    visceral_fat_level: int | None = None
-    segmental_muscle: dict[str, float | None] | None = None
+    exercise_days_per_week: int = Field(ge=1, le=7, description="주당 운동 일수 (N)")
 
-    @classmethod
-    def from_inbody(
-        cls,
-        row: dict[str, Any],
-        segments: list[dict[str, Any]] | None = None,
-        smi: float | None = None,
-    ) -> "InbodySnapshot":
-        """inbody 행(+ inbody_segment 행들) → 스냅샷. **DB→DTO 매핑은 여기 한 곳뿐.**
-
-        Args:
-            row: inbody 테이블 행
-            segments: inbody_segment 행들 (segment/lean_mass)
-            smi: ocr.calc_smi(row) 결과. ⚠️ DB 컬럼이 아니라 파생값이라 주입받는다.
-        """
-        raw = row.get("raw_ocr") or {}
-        return cls(
-            weight_kg=row.get("weight"),
-            skeletal_muscle_kg=row.get("skeletal_muscle_mass"),
-            body_fat_pct=row.get("body_fat_percentage"),
-            bmi=row.get("bmi"),
-            smi=smi,
-            # 컬럼으로 만들지 않기로 한 항목 — raw_ocr 에서만 읽는다.
-            visceral_fat_level=raw.get("visceral_fat_level"),
-            segmental_muscle=(
-                {s["segment"]: s.get("lean_mass") for s in segments} if segments else None
-            ),
-        )
+    model_config = {"json_schema_extra": {"example": {"exercise_days_per_week": 3}}}
 
 
-class RoutineGenerateRequest(BaseModel):
-    """POST /routines 요청 — 4주 루틴 생성."""
+class RoutineCreateResponse(BaseModel):
+    month_routine_id: UUID
+    job_id: UUID
+    version: int
+    status: DomainStatus
+    #: 이미 같은 일수로 진행 중인 생성이 있어 기존 잡을 돌려줬는가 (요금 중복 방지)
+    reused: bool = False
+
+
+# ── 조회 ─────────────────────────────────────────────────────────────────────
+
+
+class ExerciseDto(BaseModel):
+    order_index: int
+    name: str
+    #: ExerciseDB 원본 id. 이미지로 되짚을 수 있고 "지어낸 운동이 아님"의 근거다.
+    exercise_ref: str | None = None
+    image_url: str | None = None
+    exercise_kind: str = "STRENGTH"
+    muscle_group: str | None = None
+
+    sets: int | None = None
+    reps: int | None = None
+    duration_min: int | None = None
+    rest_sec: int | None = None
+    #: "N회 남기고 멈추는 무게". ⚠️ 중량(kg)은 추정하지 않는다 (D9).
+    rir: int | None = None
+    #: 이 운동이 어느 진단 부위 때문에 볼륨을 더 받았는지 (개인화 문구 근거)
+    boosted_by: str | None = None
+    note: str | None = None
+
+
+class RoutineDayDto(BaseModel):
+    day_order: int = Field(description="주기 내 순서 (1..N). 요일 아님")
+    title: str | None = None
+    estimated_duration_min: int | None = None
+    exercises: list[ExerciseDto] = Field(default_factory=list)
+
+
+class RoutineProgressDto(BaseModel):
+    completed_count: int
+    total_count: int
+    cycle_no: int = Field(description="현재 주기 (1~4)")
+    next_day_order: int
+    is_completed: bool
+    percent: int
+    #: 진행 계산 방식. 나중에 날짜 기준으로 바꿔도 프론트가 구분할 수 있게.
+    day_source: str = "COUNT"
+
+
+class RoutineDetailResponse(BaseModel):
+    month_routine_id: UUID
+    version: int
+    exercise_days_per_week: int
+    total_cycles: int = 4
+    goal: str | None = None
+    focus_areas: list[str] = Field(default_factory=list)
+    generation_type: GenerationType = GenerationType.INITIAL
+    status: DomainStatus
+    is_active: bool
+
+    days: list[RoutineDayDto] = Field(default_factory=list)
+    progress: RoutineProgressDto
+    notice: str | None = None
+    disclaimer: str
+
+
+class RoutineVersionItem(BaseModel):
+    month_routine_id: UUID
+    version: int
+    exercise_days_per_week: int
+    goal: str | None = None
+    generation_type: GenerationType
+    is_active: bool
+    status: DomainStatus
+
+
+class TodayRoutineResponse(BaseModel):
+    """오늘 해야 할 Day. 요일이 아니라 **다음 미완료 Day** 다."""
+
+    month_routine_id: UUID
+    cycle_no: int
+    day: RoutineDayDto
+    progress: RoutineProgressDto
+    disclaimer: str
+
+
+# ── F12 — 수행 기록 ──────────────────────────────────────────────────────────
+
+
+class WorkoutLogCreateRequest(BaseModel):
+    """POST /sessions/{id}/workout-logs — 완료 + 피드백.
+
+    ⚠️ month_routine_id 는 서버가 활성 버전으로 채운다. 클라이언트가 보내지 않는다.
+    """
+
+    day_order: int = Field(ge=1, le=7)
+    cycle_no: int = Field(ge=1, le=4)
+    feedback_text: str | None = Field(default=None, max_length=1000)
 
     model_config = {
         "json_schema_extra": {
-            "example": {
-                "exercise_days_per_week": 3,
-                "overall_diagnosis": {
-                    "body_type": "역삼각형",
-                    "overall_score": 72,
-                    "priority_improvements": ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"],
-                    "weak_points": ["어깨 전면 근력 부족", "코어 안정성"],
-                    "strong_points": ["하체 균형"],
-                    "summary": "어깨 너비가 레퍼런스 대비 좁고 코어 안정성이 부족합니다.",
-                },
-                "inbody": {
-                    "weight_kg": 72.5,
-                    "skeletal_muscle_kg": 33.2,
-                    "body_fat_pct": 18.4,
-                    "bmi": 22.1,
-                },
-            }
+            "example": {"day_order": 1, "cycle_no": 1, "feedback_text": "무릎이 좀 아팠어요"}
         }
     }
 
-    exercise_days_per_week: int = Field(ge=1, le=7, description="주당 운동 가능 일수 (1~7)")
-    overall_diagnosis: dict[str, Any] = Field(
-        description="F09 종합 진단 결과 (VLM_OVERALL job.result)"
-    )
-    inbody: InbodySnapshot | None = Field(
-        default=None, description="인바디 데이터. 없으면 세그 데이터만으로 루틴 생성"
-    )
+
+class WorkoutLogCreateResponse(BaseModel):
+    workout_log_id: UUID
+    #: 피드백이 있어 루틴 패치 잡을 등록했으면 그 id. 없으면 null.
+    job_id: UUID | None = None
+    progress: RoutineProgressDto
 
 
-class RoutineGenerateResponse(BaseModel):
-    """POST /routines 응답."""
-
-    job_id: str = Field(description="ROUTINE_GEN 잡 ID. GET /jobs/{job_id}로 폴링")
-    month_routine_id: str | None = Field(
-        default=None, description="생성 완료 시 채워짐 (동기 처리 시)"
-    )
-
-
-# ── F10 일수 변경 ─────────────────────────────────────────────────────────────
+class WorkoutLogItem(BaseModel):
+    workout_log_id: UUID
+    routine_day_id: UUID
+    cycle_no: int
+    completed_at: str
+    feedback_text: str | None = None
 
 
-class RoutineDaysChangeRequest(BaseModel):
-    """POST /routines/{id}/change-days — 운동 일수 변경 → 새 버전 생성."""
-
-    exercise_days_per_week: int = Field(ge=1, le=7)
-
-
-# ── F11 오늘의 루틴 ───────────────────────────────────────────────────────────
-
-
-class DayRoutineExercise(BaseModel):
-    order_index: int
-    name: str
-    equipment: str | None
-    target_muscle: str | None
-    sets: int
-    reps: int | None
-    weight_kg: float | None
-    rest_sec: int | None
-    note: str | None
-
-
-class DayRoutineResponse(BaseModel):
-    day_number: int
-    is_rest: bool
-    title: str | None
-    estimated_duration_min: int | None
-    exercises: list[DayRoutineExercise]
-    disclaimer: str = "weight_kg는 LLM 추정치입니다. 본인의 체력에 맞게 조정하세요."
-
-
-# ── 구 스캐폴드 (참고용, 라우터 미등록) ───────────────────────────────────────
-
-
-# ⚠️ RoutineRequest / Exercise / RoutineResponse 는 2026-08-14 에 지웠다.
-#    v1 의 `POST /routine` 요청·응답 DTO 였고 `analysis_id`(= /analyze 응답)를
-#    참조했는데, analysis 테이블도 그 엔드포인트도 v4 에서 사라졌다.
-#    analyze.py · compare.py 를 지울 때 같이 빠졌어야 할 것들이다.
-#    F10 은 위의 RoutineGenerate* 를 쓴다. docs/removed-code.md 참고.
+class RevisionItem(BaseModel):
+    routine_revision_id: UUID
+    month_routine_id: UUID
+    interpretation: str | None = None
+    changes: list[dict] = Field(default_factory=list)
+    contraindications_added: list[dict] = Field(default_factory=list)
+    #: workout_log 에서 조인해 온 원본 피드백 (revision 에 중복 저장하지 않는다)
+    feedback_text: str | None = None
+    created_at: str

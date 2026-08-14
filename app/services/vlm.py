@@ -201,7 +201,9 @@ def _enum_or_none(value: Any, allowed: type[GapLevel] | type[Confidence]) -> str
     return candidate if candidate in {str(m) for m in allowed} else None
 
 
-def _coerce_part(item: Any, allowed: set[str]) -> dict[str, Any] | None:
+def _coerce_part(
+    item: Any, allowed: set[str], inbody_available: bool = True
+) -> dict[str, Any] | None:
     """부위 항목 하나를 검증한다. 못 쓰면 None (호출부가 FAILED 로 남긴다)."""
     if not isinstance(item, dict):
         return None
@@ -217,6 +219,19 @@ def _coerce_part(item: Any, allowed: set[str]) -> dict[str, Any] | None:
     if gap_level is None and item.get("gap_level") is not None and blocked is None:
         # 판단 불가(null)도 아니고 유효한 등급도 아니다 = 형식 오류.
         return None
+
+    # ⚠️ 시각 판단 불가 + 인바디 없음 → gap_level 은 없어야 한다 (2026-08-14 실연동).
+    #    프롬프트가 null 을 강제하지만 LLM 이 어기고 등급을 보내오는 케이스가 실물로
+    #    나왔다 — SIGNIFICANT 2건이 이 경로로 점수에 들어가 56점(빼면 88점)을 만들었다.
+    #    "시각으로도 못 봤고 실측도 없는" 등급은 근거가 0 이므로 코드가 무효화한다.
+    #    (인바디가 있으면 유지 — 인바디를 근거로 등급을 매기는 건 프롬프트가 허용한 경로다)
+    if blocked is not None and not inbody_available and gap_level is not None:
+        log.warning(
+            "%s: blocked 인데 인바디 없이 gap_level=%s — 근거 없음, null 로 강등",
+            class_name,
+            gap_level,
+        )
+        gap_level = None
 
     confidence = _enum_or_none(item.get("confidence"), Confidence)
     if confidence is None:
@@ -242,7 +257,9 @@ def _coerce_part(item: Any, allowed: set[str]) -> dict[str, Any] | None:
     }
 
 
-def parse_part_response(parsed: dict[str, Any], class_names: list[str]) -> dict[str, Any]:
+def parse_part_response(
+    parsed: dict[str, Any], class_names: list[str], inbody_available: bool = True
+) -> dict[str, Any]:
     """응답 → (검증 통과한 부위, 못 쓴 부위 이름).
 
     ⚠️ 요청한 부위가 응답에 없으면 그 부위는 missing 이다. 조용히 넘기면
@@ -261,7 +278,7 @@ def parse_part_response(parsed: dict[str, Any], class_names: list[str]) -> dict[
         )
 
     for item in items:
-        part = _coerce_part(item, allowed)
+        part = _coerce_part(item, allowed, inbody_available)
         if part is None:
             log.warning("부위 항목을 검증하지 못했습니다: %.200s", item)
             continue
@@ -350,7 +367,7 @@ async def diagnose_parts(
     ]
 
     parsed, raw = await _call_json(PART_SYSTEM, content, PART_MAX_TOKENS)
-    out = parse_part_response(parsed, class_names)
+    out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     return out
 
@@ -360,6 +377,7 @@ async def diagnose_overall(
     failed: list[str],
     inbody: dict[str, Any] | None,
     score: int | None = None,
+    excluded: list[str] | None = None,
 ) -> dict[str, Any]:
     """F09 — 부위별 진단을 종합한다. **이미지를 보내지 않는다** (텍스트 전용).
 
@@ -376,7 +394,12 @@ async def diagnose_overall(
         return _mock_overall(judged or results)
 
     text = build_overall_prompt(
-        parts=judged, blocked=blocked, failed=failed, inbody=inbody, score=score
+        parts=judged,
+        blocked=blocked,
+        failed=failed,
+        inbody=inbody,
+        score=score,
+        excluded=excluded,
     )
     parsed, raw = await _call_json(
         OVERALL_SYSTEM, [{"type": "text", "text": text}], OVERALL_MAX_TOKENS

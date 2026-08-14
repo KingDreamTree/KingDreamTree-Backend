@@ -51,8 +51,11 @@ JSON 하나만 반환합니다. `<>` 는 채워 넣을 자리 표시입니다 �
 ## 필드 규칙
 
 - summary          : 한국어 2~3문장. 사용자가 가장 먼저 읽는 문장입니다. (아래 §summary)
-- priority_parts   : 개선 우선순위 class_name **배열**, 시급한 순. 최대 5개.
+- priority_parts   : 개선 우선순위 class_name **배열**, 시급한 순. **1~3개만.**
                      주어진 부위 목록에 있는 이름만 쓰세요.
+                     ⚠️ 판단된 부위를 전부 넣으면 우선순위가 아닙니다 — 이 목록은
+                     운동 루틴의 보강 대상이 되므로, 전부 넣으면 보강이 모든
+                     부위에 흩어져 개인화가 사라집니다. 격차가 큰 순으로 고르세요.
 - strengths        : 이미 좋은 점 **배열**. 없으면 빈 배열.
 - cautions         : 주의할 점 **배열**. 좌우 불균형, 판단 불가 부위가 많음 등.
                      없으면 빈 배열.
@@ -118,7 +121,8 @@ strengths 배열도 같은 자격을 따릅니다: NONE/SLIGHT 근거가 있는 
 
 ⚠️ 부위 범례에 없는 이름을 만들지 마세요. 어깨·복근처럼 비교 부위에 없는 단어를
    쓰면 사용자가 화면에서 그 항목을 찾다가 못 찾습니다.
-⚠️ 인바디 수치가 주어졌다면 summary 에 한 번은 근거로 반영하세요."""
+⚠️ 인바디 수치가 주어졌다면 summary 에 한 번은 반영하되, '평균 대비' 수치를
+   목표 체형과의 거리처럼 쓰지 마세요 — 평균과 목표는 다른 잣대입니다."""
 
 
 def _part_line(p: dict[str, Any]) -> str:
@@ -162,6 +166,7 @@ def _inbody_block(inbody: dict[str, Any] | None) -> str:
             bits.append(f"{label} {body[key]}{unit}")
 
     lines = [" · ".join(bits)] if bits else []
+    has_pct = False
     for segment, s in (inbody.get("segments") or {}).items():
         if s.get("lean_mass") is not None:
             extra = (
@@ -169,8 +174,14 @@ def _inbody_block(inbody: dict[str, Any] | None) -> str:
                 if s.get("lean_percentage") is not None
                 else ""
             )
+            has_pct = has_pct or s.get("lean_percentage") is not None
             lines.append(f"- {segment}: 제지방 {s['lean_mass']}kg{extra}")
 
+    if has_pct:
+        lines.append(
+            "※ 표준 대비 %는 **일반인 평균과의 비교**입니다. "
+            "목표 체형과의 거리처럼 인용하지 마세요."
+        )
     return "\n".join(lines) if lines else "인바디 수치 없음"
 
 
@@ -235,7 +246,10 @@ def build_overall_prompt(
             "",
             "※ 사진에서 검출되지 않아 **아무 정보가 없는** 부위입니다.",
             "  이 부위를 strengths·summary 의 근거로 쓰지 마세요 — 본 적이 없습니다.",
-            "  cautions 에 '○○는 이번 사진에서 확인할 수 없었다'로만 언급할 수 있습니다.",
+            "  cautions 에 언급한다면 **전부 묶어 한 문장**으로 쓰세요.",
+            "  예) '왼쪽·오른쪽 허벅지와 종아리는 이번 사진에서 확인할 수 없었습니다'",
+            "  부위마다 한 문장씩 반복하면 주의 목록이 같은 말로 도배됩니다.",
+            "  괄호 안의 한글 이름을 쓰세요 — 영문 코드는 화면에 그대로 노출됩니다.",
         ]
 
     sections += [

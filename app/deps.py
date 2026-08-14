@@ -13,7 +13,7 @@ from uuid import UUID
 
 from fastapi import Depends, Header, Path
 
-from app.errors import missing_user_id, not_found
+from app.errors import invalid_user_id, missing_user_id, not_found
 from app.services import db
 
 
@@ -26,7 +26,7 @@ async def get_user_id(
     try:
         return UUID(x_user_id)
     except ValueError:
-        raise missing_user_id() from None
+        raise invalid_user_id() from None
 
 
 UserId = Annotated[UUID, Depends(get_user_id)]

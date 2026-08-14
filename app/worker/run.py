@@ -191,8 +191,38 @@ def _is_retryable(e: Exception) -> bool:
     return bool(getattr(e, "retryable", True))
 
 
+#: 내부 정보가 섞였다는 신호. 하나라도 있으면 원문을 내보내지 않는다.
+#  ⚠️ job.error 는 **프론트에 그대로 노출된다.** 실측에서 Supabase 시크릿 키가
+#     통째로 새어 나왔다:
+#       RuntimeError("connect to https://xxx.supabase.co/... apikey=sb_secret_9xQ...")
+#     예외 원문을 그냥 통과시키는 한 이런 건 계속 나온다 — 미리 다 알 수 없다.
+#     그래서 **의심스러우면 감추는** 쪽으로 뒤집는다.
+_LEAK_MARKERS: tuple[str, ...] = (
+    "http://",
+    "https://",
+    "apikey",
+    "api_key",
+    "token",
+    "secret",
+    "password",
+    "sk-",  # OpenAI
+    "sb_",  # Supabase
+    "eyJ",  # JWT
+    "/",  # 경로
+    "\\",  # 윈도 경로
+    "Traceback",
+)
+
+GENERIC_ERROR = "처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
+
+
 def _user_message(e: Exception) -> str:
-    """사용자에게 보여줘도 되는 문구로 축약."""
+    """사용자에게 보여줘도 되는 문구로 축약.
+
+    ⚠️ 여기서 만든 문자열은 job.error 로 저장돼 **화면까지 그대로 간다.**
+       상세 원인은 서버 로그(log.exception)에 이미 남아 있으므로, 여기서는
+       내보내도 되는 것만 통과시킨다.
+    """
     from app.services.sapiens_labels import LabelsNotVerifiedError
 
     if isinstance(e, LabelsNotVerifiedError):
@@ -201,8 +231,18 @@ def _user_message(e: Exception) -> str:
         return "서버에 모델이 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
     if isinstance(e, MemoryError):
         return "서버 자원이 부족합니다. 잠시 후 다시 시도해주세요."
-    text = str(e).strip().splitlines()[0] if str(e).strip() else e.__class__.__name__
-    return text[:200]
+
+    raw = str(e).strip()
+    if not raw:
+        return GENERIC_ERROR
+
+    text = raw.splitlines()[0][:200]
+    lowered = text.lower()
+    if any(m.lower() in lowered for m in _LEAK_MARKERS):
+        # ⚠️ 여기 걸린 원문은 로그에만 남는다. 화면에는 일반 문구를 준다.
+        log.warning("잡 실패 문구에 내부 정보가 섞여 감춥니다: %.200s", text)
+        return GENERIC_ERROR
+    return text
 
 
 def main() -> int:

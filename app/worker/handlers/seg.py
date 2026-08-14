@@ -171,6 +171,18 @@ def _preflight() -> None:
     # 이 라벨 목록이 적용되는 모델인지 — 아니면 부위가 통째로 어긋난 채 저장된다
     sapiens_labels.ensure_supported(segmenter.model_version())
 
+    # ⚠️ body_part 마스터가 비어 있으면(= seed 를 안 돌렸으면) 모든 부위가
+    #    NOT_COMPARABLE 로 찍혀 **비교 가능 부위가 늘 0** 이 된다. 잡은 성공으로
+    #    끝나고 화면에는 "재촬영하세요"만 뜬다 — 사진을 아무리 다시 찍어도 그대로다.
+    #    잡을 받기 전에 여기서 막는다.
+    comparable = db.comparable_class_names()
+    if not comparable:
+        raise RuntimeError(
+            "body_part 마스터가 비어 있습니다 (is_comparable=true 인 행이 없음).\n"
+            "  python scripts/seed_body_parts.py 를 먼저 돌리세요."
+        )
+    log.info("비교 대상 부위 %d개: %s", len(comparable), ", ".join(comparable))
+
 
 register_preflight(_preflight)
 register(JobKind.SEG_REFERENCE, _handle)

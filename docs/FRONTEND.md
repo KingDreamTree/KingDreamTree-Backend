@@ -37,11 +37,20 @@
               GET  /sessions/active    → steps 를 보고 어느 화면으로 갈지 결정
 
 분석 시작      POST /sessions
+처음부터 다시  POST /sessions/{id}/archive  → 그 다음 POST /sessions
 레퍼런스       POST /sessions/{id}/photos/reference   → job_id (세그 시작)
 촬영 화면      GET  /sessions/{id}/photos/reference   → 기준 랜드마크
 사용자 사진    POST /sessions/{id}/photos/user        → job_id (세그 시작)
 진행 확인      GET  /jobs/{job_id}      → 폴링 (세그 1.5초 간격 권장)
 ```
+
+---
+
+## CORS
+
+서버가 `CORS_ORIGINS` 에 적힌 오리진만 허용합니다. 기본값은 `*` (전부 허용)입니다.
+
+⚠️ **브라우저에서만 실패하고 Postman 에서는 되는 증상**이면 이걸 의심하세요. 배포 주소가 정해지면 백엔드에 알려주시면 목록에 넣습니다.
 
 ---
 
@@ -78,10 +87,13 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 | 값 | 범위 | 무엇 |
 |---|---|---|
 | `pose_similarity` | 0~100 | 관절 **각도** 유사도 |
-| `framing_score` | 0~1 | 인물 bbox IoU |
+| `framing_score` | 0~1 | **촬영 거리 일치도** (몸통 길이 비율). ⚠️ bbox IoU 아님 — 아래 참고 |
 | `facing_delta` | 0~1 | 어깨폭/몸통길이 비율 차 — 몸이 돌아간 정도 |
 
-**📄 산식·근거·바로 쓸 수 있는 JS 구현은 [`docs/pose-scoring.md`](pose-scoring.md) 에 있습니다.**
+**📄 산식과 근거: [`docs/pose-scoring.md`](pose-scoring.md)**
+**📦 바로 쓸 수 있는 구현: `web/pose-score.js`** — 의존성 없는 ES 모듈입니다. `web/pose-score.test.html` 을 브라우저로 열면 스스로 검사합니다.
+
+⚠️ **`framing_score` 는 bbox 겹침(IoU)이 아닙니다.** 몸통 길이 비율로 "비슷한 거리에서 찍었는가"만 봅니다. bbox 로 재면 **팔다리를 움직인 것이 프레이밍 문제로 보고돼**, 사용자에게 "몸이 다 나오게 서주세요"라는 고칠 수 없는 안내가 나갑니다 (실측 확인).
 
 ⚠️ **좌표를 직접 비교하면 안 됩니다.** 사용자가 레퍼런스보다 한 발 뒤에 서면 모든 좌표가 달라지지만 자세는 같습니다. 좌표로 점수를 매기면 자세가 아니라 **서 있는 위치를 재게 됩니다.** 그래서 각도를 씁니다 — 위치·거리·사람 크기에 불변입니다.
 
@@ -91,13 +103,29 @@ X-User-Id: 8f14e45f-ceea-467a-9b21-0c3e7d1a55b2
 GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 
 { "tol_deg": 45, "hard_tol_deg": 60, "threshold": 70,
-  "f_min": 0.65, "r_max": 0.25,
+  "f_min": 0.65, "f_hard": 0.40, "r_max": 0.25,
   "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 15 }
 ```
 
 하드코딩하면 서버에서 조정한 순간 어긋나고, **"실시간 촬영은 자동으로 통과"라는 전제가 깨집니다** — 화면에선 통과인데 저장이 거부됩니다.
 
 `n_hold`는 자동 촬영용입니다. 조건을 만족한 상태가 **15프레임(≈0.5초) 이어질 때** 셔터를 누르세요. 손이 지나가다 우연히 맞는 순간에 찍히면 안 됩니다.
+
+### 진행 중 세션 종료 — `POST /sessions/{session_id}/archive`
+
+**사용자당 진행 중 분석은 하나뿐입니다.** 이미 있는 상태에서 `POST /sessions` 를 부르면 409 입니다.
+
+"처음부터 다시 하기" 버튼은 이렇게 만드세요.
+
+```
+POST /sessions/{id}/archive     → 200, status: "ARCHIVED"
+POST /sessions                  → 201, 새 session_id
+```
+
+- 사진과 분석 결과는 **지워지지 않습니다.** 지난 분석은 그대로 남습니다
+- **여러 번 눌러도 안전합니다** — 이미 종료된 세션에 다시 불러도 200 입니다
+
+⚠️ 이 버튼이 없으면 사용자는 **첫 세션에 갇힙니다.** 레퍼런스를 잘못 올렸을 때 빠져나갈 길이 계정 삭제밖에 없습니다.
 
 ---
 
@@ -123,6 +151,10 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 
 **응답 201** — `photo_id` / `job_id` / `width` / `height` / `pose_scale_basis` / `was_mirrored` / `pose_landmarks` / `signed_url` / `signed_url_expires_at` / `segmented`
 
+⚠️ **재업로드하면 이전 사진과 그 분석 결과는 통째로 사라집니다.** 진행 중이던 부위 분리 작업도 취소됩니다(`FAILED`, `error: "사진이 교체되어 취소되었습니다."`). 폴링 중이었다면 **새 `job_id` 로 갈아타세요** — 옛 job_id 를 계속 보면 실패로 뜹니다.
+
+⚠️ 조회(`GET`) 시 `job_id` 는 **null 일 수 있습니다.** null 이면 폴링하지 마세요.
+
 ### ⚠️ 레퍼런스 복장 안내가 꼭 필요합니다
 
 **레퍼런스에서 안 잡힌 부위는 사용자 사진이 아무리 잘 나와도 비교가 안 됩니다.** 두 사진의 교집합만 비교하기 때문입니다.
@@ -143,6 +175,14 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 { "detected": 12, "valid_comparable": 2,
   "invalid": [ { "class_name": "Left_Upper_Arm", "reason": "TOO_SMALL" } ] }
 ```
+
+> 💡 `detected` 는 **배경을 뺀** 검출 클래스 수입니다. 팔레트 항목 수와 같습니다.
+
+### 부위마다 `is_truncated` 가 옵니다
+
+팔레트의 각 항목에 `is_truncated` 가 들어 있습니다. **화면 가장자리에 닿아 잘렸을 수 있다**는 표시입니다.
+
+⚠️ **무효 처리는 하지 않습니다.** 전신 사진은 발이 바닥 경계에 닿는 게 정상이라, 잘림만으로 빼면 너무 많이 빠집니다. 대신 **굵기 값의 신뢰도가 낮다**는 신호로 쓰세요 — 예를 들어 결과 화면에서 그 부위에만 작게 표시를 달 수 있습니다.
 
 사용자 사진까지 다 찍게 한 다음에 "비교할 게 없습니다"라고 하면 두 번 일하게 됩니다.
 
@@ -195,9 +235,14 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 
 | HTTP | code | 화면에서 할 일 |
 |---|---|---|
-| 401 | `MISSING_USER_ID` | 헤더 누락. `POST /users` 로 재발급 |
+| 401 | `MISSING_USER_ID` | 헤더 자체가 없음 |
+| 401 | `INVALID_USER_ID` | 헤더는 있는데 UUID 형식이 아님 → **저장된 값이 깨진 것.** `POST /users` 로 재발급 |
+| 404 | `NOT_FOUND` (세션 생성 시) | **저장된 `user_id` 가 서버에 없음.** DB 초기화 등. `POST /users` 로 재발급 |
+| 405 | `METHOD_NOT_ALLOWED` | 요청 메서드가 틀림 (개발 중 실수) |
+| 500 | `INTERNAL_ERROR` | 서버 오류. `message` 를 그대로 보여주고 재시도 안내 |
 | 404 | `NOT_FOUND` | 없거나 **남의 것**. 403을 주지 않는 건 의도된 설계입니다 |
-| 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행** |
+| 404 | `NO_ACTIVE_SESSION` | 진행 중인 분석 없음. **오류가 아니라 상태입니다** — 시작 화면으로 |
+| 409 | `ACTIVE_SESSION_EXISTS` | `detail.session_id` 로 **이어서 진행**하거나, 처음부터 다시 하려면 archive 후 재생성 |
 | 409 | `PRECONDITION_NOT_MET` | 선행 단계 미완료 (예: 레퍼런스 없이 사용자 사진) |
 | 413 | `FILE_TOO_LARGE` | 10MB 초과 |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | 이미지로 열리지 않는 파일 (해상도가 과도하게 큰 경우 포함) |
@@ -210,7 +255,7 @@ GET /api/v1/pose-criteria        (헤더 불필요, 앱 시작 시 한 번)
 | reason | 사용자가 해야 할 행동 | 예시 문구 |
 |---|---|---|
 | `POSE` | 자세를 바꿔야 함 | "레퍼런스와 포즈를 맞춰주세요" |
-| `FRAMING` | 카메라와의 거리·위치를 바꿔야 함 | "몸이 화면에 다 나오도록 서주세요" |
+| `FRAMING` | 촬영 거리가 너무 다름 | "비슷한 거리에서 다시 촬영해주세요" |
 | `FACING` | 몸이 옆으로 돌아감 | "정면을 보고 서주세요" |
 | `NO_PERSON` | 사람이 안 잡힘 | "전신이 보이도록 다시 촬영해주세요" |
 

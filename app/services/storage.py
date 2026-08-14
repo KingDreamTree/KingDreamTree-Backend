@@ -56,11 +56,23 @@ def download(bucket: str, path: str) -> bytes:
     return get_client().storage.from_(bucket).download(path)
 
 
+#: 한 번에 조회·삭제할 개수.
+#  ⚠️ Supabase 의 list 기본값은 100 이고 **넘으면 조용히 잘린다** (에러가 아니다).
+#     그대로 두면 유저 삭제에서 101번째 파일부터 남는다 — 사람 몸 사진이 남는다.
+_PAGE = 100
+
+
 def remove(bucket: str, paths: list[str]) -> None:
-    """파일 삭제. 없는 경로가 섞여 있어도 에러로 보지 않는다."""
+    """파일 삭제. 없는 경로가 섞여 있어도 에러로 보지 않는다.
+
+    ⚠️ 한 번에 다 보내지 않고 나눠 보낸다. 경로 수백 개를 한 요청에 실으면
+       본문 크기 제한에 걸릴 수 있고, 그때 **아무것도 안 지워진다.**
+    """
     if not paths:
         return
-    get_client().storage.from_(bucket).remove(paths)
+    bucket_api = get_client().storage.from_(bucket)
+    for i in range(0, len(paths), _PAGE):
+        bucket_api.remove(paths[i : i + _PAGE])
 
 
 def list_prefix(bucket: str, prefix: str) -> list[str]:
@@ -71,23 +83,36 @@ def list_prefix(bucket: str, prefix: str) -> list[str]:
 
     while stack:
         current = stack.pop()
-        try:
-            entries: list[dict[str, Any]] = client.storage.from_(bucket).list(current)
-        except Exception:  # noqa: BLE001 — 없는 폴더는 조용히 건너뛴다
-            continue
-        for e in entries or []:
-            name = e.get("name")
-            if not name:
-                continue
-            child = f"{current}/{name}" if current else name
-            # ⚠️ 폴더와 파일을 id 로 가른다. 실제 응답을 찍어 확인한 것이다:
-            #     {"name": "sub",     "id": null}                    ← 폴더
-            #     {"name": "top.png", "id": "fa2baf0d-6a17-..."}     ← 파일
-            #    여기가 틀리면 유저 삭제에서 하위 폴더를 안 훑어 사람 사진이 남는다.
-            if e.get("id") is None:
-                stack.append(child)
-            else:
-                found.append(child)
+        offset = 0
+        while True:
+            try:
+                entries: list[dict[str, Any]] = client.storage.from_(bucket).list(
+                    current, {"limit": _PAGE, "offset": offset}
+                )
+            except Exception:  # noqa: BLE001 — 없는 폴더는 조용히 건너뛴다
+                break
+            if not entries:
+                break
+
+            for e in entries:
+                name = e.get("name")
+                if not name:
+                    continue
+                child = f"{current}/{name}" if current else name
+                # ⚠️ 폴더와 파일을 id 로 가른다. 실제 응답을 찍어 확인한 것이다:
+                #     {"name": "sub",     "id": null}                    ← 폴더
+                #     {"name": "top.png", "id": "fa2baf0d-6a17-..."}     ← 파일
+                #    여기가 틀리면 유저 삭제에서 하위 폴더를 안 훑어 사람 사진이 남는다.
+                if e.get("id") is None:
+                    stack.append(child)
+                else:
+                    found.append(child)
+
+            # ⚠️ 한 페이지가 가득 찼으면 뒤가 더 있을 수 있다. 여기서 멈추면
+            #    **에러 없이** 파일이 남는다.
+            if len(entries) < _PAGE:
+                break
+            offset += _PAGE
 
     return found
 

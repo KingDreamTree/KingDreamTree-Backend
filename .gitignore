@@ -67,3 +67,6 @@ htmlcov/
 
 # Mypy
 .mypy_cache/
+
+# ExerciseDB 배치 수집 캐시 (fetch_exercisedb.py 산출물 — 재수집 가능)
+/data/

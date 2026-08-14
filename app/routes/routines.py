@@ -48,6 +48,8 @@ def _day_dto(day: dict) -> RoutineDayDto:
 
 def _detail(routine: dict) -> RoutineDetailResponse:
     month_routine_id = UUID(str(routine["month_routine_id"]))
+    # 진행도는 세션 전체에서 센다 — 피드백으로 버전이 갈려도 이어져야 한다.
+    session_id = UUID(str(routine["session_id"]))
     days = routine_repo.list_days(month_routine_id)
     return RoutineDetailResponse(
         month_routine_id=month_routine_id,
@@ -60,7 +62,7 @@ def _detail(routine: dict) -> RoutineDetailResponse:
         is_active=routine["is_active"],
         days=[_day_dto(d) for d in days],
         progress=RoutineProgressDto(
-            **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"])
+            **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"], session_id)
         ),
         notice=(routine.get("raw_response") or {}).get("notice"),
         disclaimer=DISCLAIMER,
@@ -151,12 +153,15 @@ async def get_active_routine(session: OwnedSession) -> RoutineDetailResponse:
 )
 async def get_today(session: OwnedSession) -> TodayRoutineResponse:
     """⚠️ 요일이 아니라 **다음 미완료 Day** 다. 하루 밀려도 순서가 안 깨진다."""
-    routine = routine_repo.get_active(UUID(str(session["session_id"])))
+    session_id = UUID(str(session["session_id"]))
+    routine = routine_repo.get_active(session_id)
     if routine is None:
         raise not_found("활성 루틴")
 
     month_routine_id = UUID(str(routine["month_routine_id"]))
-    progress = routine_repo.progress(month_routine_id, routine["exercise_days_per_week"])
+    progress = routine_repo.progress(
+        month_routine_id, routine["exercise_days_per_week"], session_id
+    )
     day = routine_repo.get_day(month_routine_id, progress["next_day_order"])
     if day is None:
         raise not_found("오늘의 루틴")

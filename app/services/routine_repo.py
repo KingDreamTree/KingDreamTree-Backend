@@ -303,13 +303,63 @@ def count_logs(month_routine_id: UUID) -> int:
     )
 
 
-def progress(month_routine_id: UUID, days_per_week: int) -> dict[str, Any]:
+def count_session_logs(session_id: UUID) -> int:
+    """이 세션에서 완료한 총 수행 횟수 — **버전 무관**.
+
+    ⚠️ 진행도를 month_routine_id 로 세면 **피드백으로 버전이 갈릴 때마다
+       0 으로 돌아간다.** 새 버전에는 기록이 하나도 없기 때문이다.
+       실측(2026-08-15): 4회 수행해 2주기 2일차(33%)이던 사용자가 피드백
+       한 번에 1주기 1일차(0%)로 리셋됐다. 이미 한 운동을 처음부터 다시
+       하라는 화면이 뜬다.
+
+       프로그램의 단위는 버전이 아니라 **세션**이다 (N일 × 4주기).
+       피드백은 남은 일정의 내용을 바꾸는 것이지 일정을 되감는 게 아니다.
+       그래서 세션으로 센다.
+
+    ⚠️ count_logs(month_routine_id) 는 그대로 둔다 — "그 버전에서 몇 번
+       했는가"는 이력 확인에 여전히 필요하다 (버전 교체 후에도 이전 버전
+       기록이 남아 있는지 보는 검사가 그걸 쓴다).
+    """
+    return (
+        get_client()
+        .table("workout_log")
+        .select("workout_log_id", count="exact")
+        .eq("session_id", str(session_id))
+        .limit(1)
+        .execute()
+        .count
+        or 0
+    )
+
+
+def progress(
+    month_routine_id: UUID,
+    days_per_week: int,
+    session_id: UUID | None = None,
+) -> dict[str, Any]:
     """완료 수행 횟수로 현재 위치를 계산한다 (요일 무관 — 하루 밀려도 안 깨진다).
 
     ⚠️ 날짜가 아니라 **수행 횟수** 기준이다. 응답에 day_source 를 실어
        나중에 날짜 기준으로 바꿔도 프론트가 어느 방식인지 알 수 있게 한다.
+
+    ⚠️ 횟수는 **세션 전체**에서 센다 (count_session_logs 주석 참고).
+       session_id 를 넘기면 조회 한 번을 아낀다.
     """
-    done = count_logs(month_routine_id)
+    if session_id is None:
+        row = get_routine(month_routine_id)
+        if row is None:
+            return {
+                "completed_count": 0,
+                "total_count": days_per_week * TOTAL_CYCLES,
+                "cycle_no": 1,
+                "next_day_order": 1,
+                "is_completed": False,
+                "percent": 0,
+                "day_source": "COUNT",
+            }
+        session_id = UUID(str(row["session_id"]))
+
+    done = count_session_logs(session_id)
     total = days_per_week * TOTAL_CYCLES
     completed = done >= total
     return {

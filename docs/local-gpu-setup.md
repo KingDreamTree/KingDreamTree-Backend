@@ -63,3 +63,48 @@ LLM 워커와 **따로** 띄운다 (`app/worker/run.py` 주석 — 모델 1.6GB 
 
 ⚠️ 다만 **A 의 RunPod 은 5b, 로컬은 0.4b** 다. 백본이 다르면 검출 품질과
 label_map 이 다를 수 있으니, 로컬 결과를 A 환경의 근거로 쓰지 말 것.
+
+
+---
+
+## 테스트 픽스처 (2026-08-15 리포 안으로 이동)
+
+```
+tests/fixtures/sample-photo.jpg    스모크가 Storage 에 올리는 사진
+tests/fixtures/sample-map.png      라벨 맵 (라벨 값이 _PARTS 와 일치해야 함)
+data/exercise_catalog.json         루틴 후보 (없으면 루틴 생성이 죽는다)
+```
+
+⚠️ 이전에는 픽스처가 `../map/map.png` 처럼 **리포 바깥**을 가리켰다. 만든 사람
+컴퓨터에서만 돌고, 다른 기계에서는 진단 단계를 통째로 건너뛰면서 그 사실이
+경고 한 줄로만 표시됐다 (A 발견). 테스트 픽스처는 코드와 같이 버전 관리한다.
+
+### `data/exercise_catalog.json` 은 gitignore 예외다
+
+```gitignore
+/data/*                          # 수집 캐시는 무시 (재수집 가능)
+!/data/exercise_catalog.json     # 카탈로그만 예외
+```
+
+`/data/` 로 디렉터리째 무시하면 하위 `!` 예외가 **먹지 않는다** — git 이 디렉터리
+단계에서 가지치기하기 때문이다. 그래서 `/data/*` 로 파일 단위 무시를 쓴다.
+
+**예외로 둔 이유**: 재수집에 RapidAPI 키가 필요한데, 없으면 루틴 생성이 통째로
+죽는다. clone 만으로 돌아가야 EC2 배포와 신규 합류자가 막히지 않는다.
+
+## EC2 배포 체크리스트
+
+```bash
+git clone … && cd body-analysis-backend
+bash scripts/install_cpu.sh          # torch CPU 빌드 (GPU 없음)
+cp .env.example .env && vi .env      # 키 채우기
+
+# ⚠️ 확인 — 이게 없으면 루틴 기능만 조용히 죽는다
+test -f data/exercise_catalog.json && echo OK || echo "카탈로그 없음!"
+
+python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+> 이제 카탈로그가 git 에 포함되므로 **별도 복사가 필요 없다.** 위 `test -f` 는
+> 혹시 모를 누락을 잡는 안전망이다.

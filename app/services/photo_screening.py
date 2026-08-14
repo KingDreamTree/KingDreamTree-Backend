@@ -24,12 +24,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import json
 import logging
 from dataclasses import dataclass
 
 from app.config import settings
 from app.prompts import photo_screening as prompt
+from app.services import images
 
 log = logging.getLogger("services.photo_screening")
 
@@ -52,13 +54,26 @@ class ScreenResult:
 _PASS = ScreenResult(suitable=True, skipped=True)
 
 
-def _data_url(image_bytes: bytes, content_type: str = "image/jpeg") -> str:
-    """VLM 에 그대로 넣을 수 있는 data URL.
+def _data_url(image_bytes: bytes) -> str:
+    """VLM 에 넣을 data URL. **판정용으로 줄여서** 보낸다.
 
     ⚠️ Storage 에 올리고 signed URL 을 만드는 대신 이걸 쓴다. 거부될 사진을
        먼저 저장했다가 지우는 왕복을 없애기 위해서다.
+
+    ⚠️ **저장용 크기(긴 변 최대 4096px)를 그대로 보내면 안 된다.** 이미지는
+       해상도에 비례해 토큰을 먹고, 우리는 **두 장**을 보낸다.
+       이 판정이 보는 것 — 옷이 몸에 붙었나 / 촬영 거리가 비슷한가 / 팔다리가
+       잘렸나 — 은 전부 작은 이미지로도 판별된다. 원본 해상도가 필요 없다.
     """
-    return f"data:{content_type};base64,{base64.b64encode(image_bytes).decode()}"
+    img = images.load_rgb(image_bytes)
+    side = settings.photo_screening_max_side
+    if max(img.size) > side:
+        scale = side / max(img.size)
+        img = img.resize((max(1, round(img.width * scale)), max(1, round(img.height * scale))))
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
 def _parse(raw: str) -> ScreenResult | None:

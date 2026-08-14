@@ -158,7 +158,9 @@ def main() -> int:
 
     # ── 비교가 성립하는가 ───────────────────────────────────────────────
     print("\n[5] 두 장을 견줄 수 있는가")
-    r = client.get(f"{API}/sessions/{session_id}", headers=H)
+    # ⚠️ 세션 단건 조회 경로는 /sessions/{id} 가 아니라 /sessions/active 다.
+    #    (틀린 경로로 404 를 받고 "실패 1" 로 찍혔던 원인)
+    r = client.get(f"{API}/sessions/active", headers=H)
     check("세션 조회 → 200", r.status_code == 200, r.text[:150])
     steps = r.json().get("steps", {})
     print(f"      단계: {json.dumps(steps, ensure_ascii=False)}")

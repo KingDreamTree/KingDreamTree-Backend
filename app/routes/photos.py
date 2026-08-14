@@ -11,6 +11,7 @@
    임계값 판정만 한다. 이유는 app/services/pose.py 모듈 주석 참조.
 """
 
+import logging
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -23,12 +24,15 @@ from app.errors import (
     file_too_large,
     not_found,
     precondition_not_met,
+    unsuitable_photo,
     unsupported_media_type,
 )
 from app.schemas.enums import CaptureSource, JobKind, PhotoKind, PoseScaleBasis
 from app.schemas.photo import ReferencePhotoResponse, UserPhotoResponse
-from app.services import db, images, pose, storage
+from app.services import db, images, photo_screening, pose, storage
 from app.worker import queue
+
+log = logging.getLogger("routes.photos")
 
 router = APIRouter(tags=["photos"])
 
@@ -109,6 +113,19 @@ def _store(
     job_kind = JobKind.SEG_REFERENCE if kind == PhotoKind.REFERENCE else JobKind.SEG_USER
     job = queue.enqueue(session_id, job_kind, {"photo_id": photo["photo_id"]})
     return photo, job
+
+
+def _reference_bytes(reference: dict[str, Any]) -> bytes | None:
+    """2차 검사에 넣을 레퍼런스 원본. 못 읽으면 None (검사는 건너뛴다).
+
+    ⚠️ 여기서 실패해도 업로드를 막지 않는다. 레퍼런스를 못 읽는 건 사용자 잘못이
+       아니고, 그것 때문에 사진을 반려하면 사용자가 할 수 있는 게 없다.
+    """
+    try:
+        return storage.download(reference["storage_bucket"], reference["storage_path"])
+    except Exception:  # noqa: BLE001
+        log.exception("레퍼런스 원본을 읽지 못했습니다 — 2차 검사를 건너뜁니다")
+        return None
 
 
 def _landmarks_for_storage(raw_json: str | None, is_mirrored: bool) -> list[dict[str, Any]]:
@@ -230,9 +247,12 @@ async def upload_user_photo(
     file: Annotated[UploadFile, File()],
     capture_source: Annotated[CaptureSource, Form()],
     pose_landmarks: Annotated[str, Form()],
-    pose_similarity: Annotated[float, Form(description="0~100. 프론트 계산값")],
-    framing_score: Annotated[float, Form(description="0~1. 프론트 계산값")],
+    pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
+    framing_score: Annotated[float, Form(description="0~1. 인물 bbox IoU")],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
+    facing_delta: Annotated[
+        float, Form(description="0~1. 어깨폭/몸통길이 비율 차. 몸이 돌아간 정도")
+    ] = 0.0,
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
     multi_person: Annotated[bool, Form()] = False,
     is_mirrored: Annotated[bool, Form()] = False,
@@ -246,6 +266,7 @@ async def upload_user_photo(
     img = await _read_upload(file)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
+    # ── 1차 관문: 자세 ────────────────────────────────────────────────────
     # ⚠️ 판정을 통과하지 못하면 **저장하지 않는다.** 실패한 사진이 Storage에 쌓이면
     #    유저 삭제 시 고아 파일이 되고, 무료 티어 용량도 먹는다.
     pose.judge_user_photo(
@@ -254,7 +275,24 @@ async def upload_user_photo(
         scale_basis=pose_scale_basis,
         reference_scale_basis=reference.get("pose_scale_basis"),
         multi_person=multi_person,
+        facing_delta=facing_delta,
     )
+
+    # ── 2차 관문: 이 둘로 비교 진단이 성립하는가 ──────────────────────────
+    # ⚠️ **레퍼런스와 함께** 판단한다. 사용자 사진만 보면 "괜찮은 사진"인데
+    #    촬영 거리가 딴판이라 비율 비교가 무의미해지는 경우를 못 잡는다.
+    # ⚠️ VLM 에 이미지를 직접(base64) 보내므로 **거부될 사진은 Storage 에 안 올라간다.**
+    # ⚠️ 판정 실패·타임아웃은 통과로 처리한다 (photo_screening 모듈 주석 참조).
+    jpeg_for_screening, _, _ = images.encode_photo(img, mirrored=is_mirrored)
+    screening = await photo_screening.screen(
+        jpeg_for_screening,
+        _reference_bytes(reference),
+    )
+    if not screening.suitable:
+        raise unsuitable_photo(
+            screening.message,
+            {"reason": screening.reason, "confidence": screening.confidence},
+        )
 
     _discard_existing(user_id, session_id, PhotoKind.USER)
     photo, job = _store(

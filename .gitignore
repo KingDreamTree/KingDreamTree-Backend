@@ -71,3 +71,7 @@ htmlcov/
 # 2차 검사 시험용 사진 (scripts/verify_photo_screening.py)
 # 실제 사람 몸 사진이다. 절대 커밋하지 말 것.
 photos/
+
+# 임계값 측정용 사진 (scripts/measure_pose_tolerance.py)
+# 실제 사람 몸 사진이다. 절대 커밋하지 말 것.
+tolerance/

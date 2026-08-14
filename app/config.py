@@ -95,7 +95,11 @@ class Settings(BaseSettings):
     job_reclaim_interval_sec: int = 60
     # ⚠️ t3.large는 GPU가 없고 메모리 8GB다. 세그 워커를 2개 이상 돌리면 OOM.
     seg_worker_concurrency: int = 1
-    vlm_worker_concurrency: int = 3
+    # vlm_worker_concurrency 는 제거했다 (2026-08-14).
+    #   부위별 병렬 호출을 폐기하고 전 부위를 한 번에 진단하게 바뀌면서
+    #   "동시에 몇 부위를 부를지"라는 값 자체가 의미를 잃었다. 잡 1개가 전 부위를
+    #   처리하므로 조절할 동시성이 없다. 안 쓰는 값을 남겨두면 다음 사람이
+    #   "3으로 올리면 빨라지나"를 시도하게 된다. (llm-strategy.md §F08)
 
     # ------------------------------------------------------------------ #
     # Sapiens2 (세그멘테이션 워커 전용 — API 프로세스는 로드하지 않는다)

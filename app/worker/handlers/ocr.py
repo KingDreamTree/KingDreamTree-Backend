@@ -23,7 +23,11 @@ from uuid import UUID
 
 from app.schemas.enums import DomainStatus, JobKind
 from app.services import inbody_repo, ocr, storage
-from app.worker.run import register
+
+# ⚠️ registry 에서 직접 가져온다. `from app.worker.run import register` 로 쓰면
+#    `python -m app.worker.run` 이 __main__ 으로 로드한 run.py 를
+#    app.worker.run 이라는 별개 모듈로 한 번 더 로드하게 된다 (registry.py 주석 참고).
+from app.worker.registry import register
 
 log = logging.getLogger("worker.ocr")
 

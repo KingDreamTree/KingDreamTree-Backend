@@ -6,14 +6,54 @@ from pydantic import BaseModel, Field
 
 
 class InbodySnapshot(BaseModel):
-    """루틴 생성에 쓰이는 인바디 수치 (선택). 전체 inbody 행이 아니라 필요한 필드만."""
+    """루틴 생성에 쓰이는 인바디 수치 (선택). 전체 inbody 행이 아니라 필요한 필드만.
+
+    ⚠️ **필드명이 DB 컬럼과 일부러 다르다** (프롬프트 가독성용).
+       그래서 DB에서 채울 때는 반드시 `from_inbody()` 를 쓴다. 손으로 dict를
+       만들면 이름 하나만 어긋나도 조용히 None이 들어가 프롬프트에서 수치가
+       통째로 빠진다 — 에러 없이 루틴 품질만 나빠지는 종류의 사고다.
+
+       DTO            ← DB
+       skeletal_muscle_kg ← skeletal_muscle_mass
+       body_fat_pct       ← body_fat_percentage
+       visceral_fat_level ← raw_ocr (컬럼 아님. db-design-v4 §7 항등식 전용 항목)
+    """
 
     weight_kg: float | None = None
     skeletal_muscle_kg: float | None = None
     body_fat_pct: float | None = None
     bmi: float | None = None
+    smi: float | None = None
     visceral_fat_level: int | None = None
     segmental_muscle: dict[str, float | None] | None = None
+
+    @classmethod
+    def from_inbody(
+        cls,
+        row: dict[str, Any],
+        segments: list[dict[str, Any]] | None = None,
+        smi: float | None = None,
+    ) -> "InbodySnapshot":
+        """inbody 행(+ inbody_segment 행들) → 스냅샷. **DB→DTO 매핑은 여기 한 곳뿐.**
+
+        Args:
+            row: inbody 테이블 행
+            segments: inbody_segment 행들 (segment/lean_mass)
+            smi: ocr.calc_smi(row) 결과. ⚠️ DB 컬럼이 아니라 파생값이라 주입받는다.
+        """
+        raw = row.get("raw_ocr") or {}
+        return cls(
+            weight_kg=row.get("weight"),
+            skeletal_muscle_kg=row.get("skeletal_muscle_mass"),
+            body_fat_pct=row.get("body_fat_percentage"),
+            bmi=row.get("bmi"),
+            smi=smi,
+            # 컬럼으로 만들지 않기로 한 항목 — raw_ocr 에서만 읽는다.
+            visceral_fat_level=raw.get("visceral_fat_level"),
+            segmental_muscle=(
+                {s["segment"]: s.get("lean_mass") for s in segments} if segments else None
+            ),
+        )
 
 
 class RoutineGenerateRequest(BaseModel):

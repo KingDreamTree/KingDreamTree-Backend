@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.errors import ApiError
+from app.routes.analysis import router as analysis_router
 from app.routes.body_parts import router as body_parts_router
 from app.routes.inbody import router as inbody_router
 from app.routes.jobs import router as jobs_router
@@ -77,14 +78,13 @@ for _router in (
     segmentation_router,
     storage_router,
     inbody_router,
+    analysis_router,
 ):
     app.include_router(_router, prefix=API_PREFIX)
-# TODO(B): analysis, routines, workout_logs 라우터
+# TODO(B): routines, workout_logs 라우터
 
-# ⚠️ 구 스캐폴드 라우터(/analyze, /compare, /routine)는 등록하지 않는다.
-#    `analysis` 테이블이 v4 스키마에서 제거되어 호출하면 런타임에 실패한다.
-#    app/routes/analyze.py · compare.py 파일은 참고용으로 남겨두었고,
-#    각 담당이 새 구조로 옮긴 뒤 삭제한다.
+# 구 스캐폴드(/analyze, /compare)는 F08·F09 가 새 구조로 대체해 삭제했다.
+# 관련 DTO(schemas/analyze.py, schemas/compare.py)도 함께 제거됐다.
 
 
 @app.get("/health", tags=["health"])

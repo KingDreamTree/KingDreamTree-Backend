@@ -306,7 +306,12 @@ def parse_overall_response(
     ⚠️ similarity_score 는 여기 없다 — 점수는 scoring.compute_similarity() 가
        규칙으로 계산한다 (score_source=RULE). LLM 이 점수를 보내와도 버린다.
     """
-    priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:5]
+    # ⚠️ 상위 3개만 남긴다 — "전부 시급"은 우선순위가 아니다. 실측(2026-08-15):
+    #    판단된 5부위가 전부 priority_parts 로 내려와 루틴 보강(L2 가중)이 모든
+    #    슬롯에 흩어졌다. 가중이 흩어지면 주간 상한에 눌려 사실상 균등 배분이
+    #    되어 개인화 신호가 사라진다. 프롬프트도 1~3개로 지시하지만, 지시는
+    #    어겨질 수 있으므로 코드가 자른다.
+    priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:3]
 
     summary = parsed.get("summary")
 

@@ -260,13 +260,30 @@ def _excluded_parts(session_id: UUID, diagnosed: set[str]) -> list[str]:
     못한 부위들이다. F09 에 알려주지 않으면 LLM 이 본 적 없는 부위를 근거로
     쓴다 — 실연동에서 "하체 균형이 좋습니다"가 나왔는데 하체는 검출조차
     안 된 상태였다 (A 발견).
+
+    ⚠️ 한글 이름을 괄호로 붙여 준다. cautions 는 사용자에게 그대로 보이는
+       문장인데, 영문 코드만 주면 "Left_Lower_Leg는 확인할 수 없었습니다"가
+       화면에 그대로 떴다 (실측 2026-08-15). F09 프롬프트가 괄호 안 이름을
+       쓰라고 지시한다.
     """
     try:
-        master = set(db.comparable_class_names())
+        rows = (
+            db.get_client()
+            .table("body_part")
+            .select("class_name,name_ko")
+            .eq("is_comparable", True)
+            .order("display_order")
+            .execute()
+            .data
+        )
     except Exception:  # noqa: BLE001 — 부가 정보다. 실패해도 진단은 진행한다.
         log.warning("비교 대상 마스터를 읽지 못해 excluded 를 생략합니다.")
         return []
-    return sorted(master - diagnosed)
+    return [
+        f"{r['class_name']}({r['name_ko']})" if r.get("name_ko") else r["class_name"]
+        for r in rows
+        if r["class_name"] not in diagnosed
+    ]
 
 
 def _for_overall(row: dict[str, Any]) -> dict[str, Any]:

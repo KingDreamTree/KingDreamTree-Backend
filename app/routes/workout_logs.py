@@ -89,7 +89,7 @@ async def create_log(
         workout_log_id=log["workout_log_id"],
         job_id=job_id,
         progress=RoutineProgressDto(
-            **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"])
+            **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"], session_id)
         ),
     )
 

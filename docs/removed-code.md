@@ -82,5 +82,46 @@ keypoints = {"shoulder_width": 42.5, "hip_width": 38.0,
 | 대상 | 왜 남기나 |
 |---|---|
 | `app/schemas/enums.py` 의 미사용 열거형 (`GapLevel`, `Confidence`, `ScoreSource`, `GenerationType`, `Gender`, `VlmInputType`) | 파일 자체가 **`db/schema.sql` 의 CHECK 제약을 그대로 옮긴 미러**다. DB에 있는 값이 여기 없으면 미러가 아니게 된다 |
-| `SUPABASE_ANON_KEY` | "프론트가 Supabase에 직접 붙지 않으므로 서버에서는 쓰지 않는다"고 명시돼 있다. 비워두는 것 자체가 정보다 |
 | `app/services/routine.py`, `routine_templates.py`, `app/schemas/routine.py`, `app/prompts/routine_*.py`, `vlm.compare_body()` | **담당 B의 미구현 기능(F08~F12) 뼈대**다. 아직 호출되지 않을 뿐 폐기된 게 아니다 |
+
+---
+
+## 2026-08-14 — 설정 정리
+
+### 지운 설정
+
+| 설정 | 왜 |
+|---|---|
+| `SAPIENS_OFFLOAD` · `SAPIENS_GPU_MAX_GIB` | VRAM 보다 큰 모델을 CPU 로 흘려보내는 설정(accelerate `device_map`). **우리 두 환경 어디서도 타지 않는다** — RunPod 4090 은 24GB 라 5b(fp16 ~9.5GB)가 다 올라가고, 로컬은 CPU 라 `device == "cuda"` 조건에 걸리지 않는다. 한 번도 실행되지 않는 분기가 모델 로딩 경로에 있었다 |
+| `SUPABASE_ANON_KEY` | 프론트가 Supabase 에 직접 붙지 않아 서버에서 쓸 일이 없다. `.env` 에 빈 칸으로 남아 있으면 "채워야 하나?" 싶어진다 |
+
+되살릴 일이 생기면 `app/services/segmenter.py` 의 모델 로딩부에 이렇게 넣는다.
+
+```python
+budget = settings.sapiens_gpu_max_gib
+if budget <= 0:
+    budget = round(torch.cuda.get_device_properties(0).total_memory / 1024**3 * 0.9, 1)
+kwargs["device_map"] = "auto"
+kwargs["max_memory"] = {0: f"{budget}GiB", "cpu": "48GiB"}
+```
+
+⚠️ **그때는 `model.to(device)` 를 건너뛰어야 한다.** accelerate 가 이미 레이어를
+배치한 뒤라 `.to()` 를 부르면 배치가 깨진다. 코드에도 주석으로 남겨뒀다.
+
+### `.env` 에서 지운 죽은 줄
+
+`SAPIENS_REQUIRE_VERIFIED_LABELS` 가 남아 있었다. **`SAPIENS_STRICT_LABELS` 로
+이름이 바뀐 뒤의 잔재**다. `Settings` 가 `extra="ignore"` 라서 아무 말 없이
+무시되고 있었다 — 넣어둔 사람은 켜둔 줄 알았을 것이다.
+
+### 그래서 붙인 것 — 모르는 키 경고
+
+`app/config.py` 의 `_warn_unknown_env_keys()`. 기동할 때 `.env` 를 읽어
+`Settings` 가 모르는 키를 경고로 찍는다.
+
+```
+WARNING config: .env 에 모르는 키가 있습니다 (무시됨): FOO_BAR_TYPO
+```
+
+⚠️ **막지는 않는다.** 같은 `.env` 를 다른 도구가 쓸 수도 있어서 에러로 만들지
+않았다. 보이게만 한다.

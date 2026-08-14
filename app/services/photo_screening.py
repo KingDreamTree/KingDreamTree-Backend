@@ -1,7 +1,11 @@
-"""사용자 사진 적합성 판정 — 세그멘테이션을 돌릴 가치가 있는 사진인지.
+"""2차 검사 — 레퍼런스와 사용자 사진이 비교 가능한 상태인지.
 
 흐름에서의 위치
-    업로드 → 자세 판정(프론트 값) → **여기** → 저장 + 세그 큐잉
+    업로드 → 1차: 자세 판정(프론트 값) → **2차: 여기** → 저장 + 세그 큐잉
+
+⚠️ **두 장을 같이 본다.** 사용자 사진만 보면 "괜찮은 사진"인데 레퍼런스와 촬영
+   거리가 딴판이라 비율 비교가 무의미해지는 경우를 못 잡는다. 판단 대상은
+   사진 한 장의 품질이 아니라 **두 장의 비교 가능성**이다.
 
 ⚠️ **거부된 사진은 저장하지 않는다.** 이미지를 base64 로 VLM 에 직접 보내므로
    Storage 에 올릴 필요가 없다. 사람 몸 사진이라, 안 쓸 사진은 서버에 아예
@@ -85,12 +89,22 @@ def _parse(raw: str) -> ScreenResult | None:
     )
 
 
-async def screen(image_bytes: bytes) -> ScreenResult:
-    """사진 한 장을 판정한다. **예외를 던지지 않는다** — 실패는 통과로 처리한다."""
+async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResult:
+    """두 사진이 비교 가능한지 판정한다.
+
+    **예외를 던지지 않는다** — 어떤 실패든 통과로 처리한다.
+
+    ⚠️ reference_image 가 없으면 판정을 건너뛴다. 한 장만 보면 원근 불일치를
+       못 잡는데, 그 상태로 "검사했다"고 하면 통과 의미가 달라진다.
+       (레퍼런스는 라우터에서 이미 존재를 확인하므로 정상 경로에서는 항상 있다)
+    """
     if not settings.photo_screening_enabled:
         return _PASS
     if settings.use_mock or not settings.openai_api_key:
-        log.info("사진 적합성 판정 건너뜀 (mock 또는 API 키 없음)")
+        log.info("2차 검사 건너뜀 (mock 또는 API 키 없음)")
+        return _PASS
+    if reference_image is None:
+        log.warning("레퍼런스 이미지를 못 읽어 2차 검사를 건너뜁니다")
         return _PASS
 
     try:
@@ -100,22 +114,21 @@ async def screen(image_bytes: bytes) -> ScreenResult:
             call_vlm(
                 prompt.USER,
                 max_tokens=300,
-                image_urls=[_data_url(image_bytes)],
+                # ⚠️ 순서가 프롬프트의 전제다 — 첫 번째가 레퍼런스, 두 번째가 사용자.
+                image_urls=[_data_url(reference_image), _data_url(user_image)],
             ),
             timeout=settings.photo_screening_timeout_sec,
         )
     except asyncio.TimeoutError:
-        log.warning(
-            "사진 적합성 판정 타임아웃 (%.0fs) — 통과 처리", settings.photo_screening_timeout_sec
-        )
+        log.warning("2차 검사 타임아웃 (%.0fs) — 통과 처리", settings.photo_screening_timeout_sec)
         return _PASS
     except Exception:  # noqa: BLE001 — 어떤 실패든 업로드를 막지 않는다
-        log.exception("사진 적합성 판정 실패 — 통과 처리")
+        log.exception("2차 검사 실패 — 통과 처리")
         return _PASS
 
     result = _parse(raw)
     if result is None:
-        log.warning("사진 적합성 판정 응답을 해석하지 못함 — 통과 처리: %s", raw[:200])
+        log.warning("2차 검사 응답을 해석하지 못함 — 통과 처리: %s", raw[:200])
         return _PASS
 
     if not result.suitable and not result.message:
@@ -123,7 +136,7 @@ async def screen(image_bytes: bytes) -> ScreenResult:
         result.message = "사진으로 체형을 판단하기 어렵습니다. 몸에 붙는 옷으로 다시 촬영해주세요."
 
     log.info(
-        "사진 적합성 판정: suitable=%s reason=%s confidence=%s",
+        "2차 검사: suitable=%s reason=%s confidence=%s",
         result.suitable,
         result.reason,
         result.confidence,

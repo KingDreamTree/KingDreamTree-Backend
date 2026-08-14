@@ -60,6 +60,16 @@ def not_found(what: str = "리소스") -> ApiError:
     return ApiError(404, "NOT_FOUND", f"{what}를 찾을 수 없습니다.")
 
 
+def no_active_session() -> ApiError:
+    """진행 중인 세션이 없다. **오류라기보다 상태다.**
+
+    ⚠️ NOT_FOUND 와 코드를 나눈다. 둘 다 404 라서 코드가 같으면 프론트가
+       "계정이 사라졌다(→ 재발급)"와 "아직 시작 안 했다(→ 시작 화면)"를
+       구분하지 못한다. 앱 진입 때 어느 화면으로 보낼지가 여기서 갈린다.
+    """
+    return ApiError(404, "NO_ACTIVE_SESSION", "진행 중인 분석이 없습니다.")
+
+
 def invalid_request(message: str, detail: dict[str, Any] | None = None) -> ApiError:
     return ApiError(400, "INVALID_REQUEST", message, detail)
 

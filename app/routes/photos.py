@@ -254,7 +254,16 @@ async def upload_user_photo(
     capture_source: Annotated[CaptureSource, Form()],
     pose_landmarks: Annotated[str, Form()],
     pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
-    framing_score: Annotated[float, Form(description="0~1. 인물 bbox IoU")],
+    framing_score: Annotated[
+        float,
+        Form(
+            description=(
+                "0~1. 촬영 거리 일치도 = min(비율, 1/비율), "
+                "비율 = 사용자 몸통길이 / 레퍼런스 몸통길이. "
+                "⚠️ bbox IoU 아님 — 그건 팔다리 움직임을 프레이밍 문제로 오인한다"
+            )
+        ),
+    ],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
     facing_delta: Annotated[
         float, Form(description="0~1. 어깨폭/몸통길이 비율 차. 몸이 돌아간 정도")

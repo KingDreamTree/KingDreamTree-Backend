@@ -32,7 +32,6 @@ from app.services.routine_templates import (
     SEVEN_DAY_NOTICE,
     DayPlan,
     apply_weakness_boost,
-    build_weak_point_day,
     get_template,
     weekly_sets_by_group,
 )
@@ -225,10 +224,12 @@ async def build_routine(
     mode = str(mode_info["mode"])
 
     # L1 — 골격 (주기당 N일, CUT 이면 근력일마다 유산소 슬롯)
+    #
+    # ⚠️ 진단으로 Day 를 "구성"하지 않는다 (2026-08-14 정정). 5일차의 빈 "약점
+    #    보완" Day 를 priority_parts 로 채우던 분기를 제거했다 — 진단이 Day 하나의
+    #    구성 전체를 결정하는 구조라 D10(진단은 가중치, 포함/제외 아님)과 충돌했다.
+    #    이제 5일차도 전신 골격이 깔리고, 개인화는 아래 L2 가중으로만 들어간다.
     days = get_template(days_per_week, mode)
-    for day in days:
-        if day["title"] == "약점 보완" and not day["slots"]:
-            day["slots"] = build_weak_point_day(priority_parts, exercise_catalog.PART_TO_SLOTS)
 
     # L2 — 진단 가중 (진단 실패 부위는 여기 안 들어오고 기본 볼륨 유지 — D10)
     boosts = apply_weakness_boost(days, priority_parts, exercise_catalog.PART_TO_SLOTS)

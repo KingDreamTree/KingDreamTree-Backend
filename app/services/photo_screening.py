@@ -49,6 +49,10 @@ class ScreenResult:
     message: str = ""
     confidence: str | None = None
     skipped: bool = False
+    #: 모델이 1단계에서 관찰한 값과 적용한 규칙 번호. 사용자에게는 안 나가고
+    #  로그·튜닝용이다. ⚠️ 오판정이 났을 때 "무엇을 잘못 봤는지"를 여기서 본다.
+    observed: dict | None = None
+    rule: int | None = None
 
 
 _PASS = ScreenResult(suitable=True, skipped=True)
@@ -96,11 +100,15 @@ def _parse(raw: str) -> ScreenResult | None:
     if not isinstance(data, dict) or "suitable" not in data:
         return None
 
+    observed = data.get("observed")
+    rule = data.get("rule")
     return ScreenResult(
         suitable=bool(data.get("suitable")),
         reason=data.get("reason") or None,
         message=str(data.get("message") or ""),
         confidence=data.get("confidence") or None,
+        observed=observed if isinstance(observed, dict) else None,
+        rule=rule if isinstance(rule, int) else None,
     )
 
 
@@ -131,6 +139,11 @@ async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResu
                 max_tokens=300,
                 # ⚠️ 순서가 프롬프트의 전제다 — 첫 번째가 레퍼런스, 두 번째가 사용자.
                 image_urls=[_data_url(reference_image), _data_url(user_image)],
+                # ⚠️ 0 으로 고정한다. 기본값(1.0)이면 같은 사진이 실행마다
+                #    통과/반려를 오간다 — 실측에서 3회 중 2회가 뒤집혔다.
+                #    사용자가 같은 사진을 다시 올려 통과되는 상황은 판정이
+                #    있으나 마나 하다는 뜻이다.
+                temperature=0.0,
             ),
             timeout=settings.photo_screening_timeout_sec,
         )
@@ -151,9 +164,11 @@ async def screen(user_image: bytes, reference_image: bytes | None) -> ScreenResu
         result.message = "사진으로 체형을 판단하기 어렵습니다. 몸에 붙는 옷으로 다시 촬영해주세요."
 
     log.info(
-        "2차 검사: suitable=%s reason=%s confidence=%s",
+        "2차 검사: suitable=%s reason=%s rule=%s confidence=%s observed=%s",
         result.suitable,
         result.reason,
+        result.rule,
         result.confidence,
+        result.observed,
     )
     return result

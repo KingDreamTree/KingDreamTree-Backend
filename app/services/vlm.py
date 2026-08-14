@@ -74,10 +74,14 @@ async def _call_openai(
     prompt: str,
     max_tokens: int = 1024,
     image_urls: list[str] | None = None,
+    temperature: float | None = None,
 ) -> str:
     """OpenAI GPT-4o API 호출. VLM_PROVIDER=openai 일 때 사용.
 
     image_urls: signed URL 목록. 텍스트+이미지 멀티모달 호출.
+    temperature: None 이면 API 기본값(1.0). ⚠️ 판정처럼 같은 입력에 같은 답이
+        나와야 하는 호출은 0 을 넘길 것. 기본값으로 두면 같은 사진이 실행마다
+        통과/반려를 오간다 (실측 확인). 생성 계열(루틴 등)은 기본값이 낫다.
     """
     from openai import AsyncOpenAI
 
@@ -89,10 +93,15 @@ async def _call_openai(
             content.append({"type": "image_url", "image_url": {"url": url}})
     content.append({"type": "text", "text": prompt})
 
+    kwargs: dict = {}
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+
     response = await client.chat.completions.create(
         model="gpt-4o",
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": content}],
+        **kwargs,
     )
     return response.choices[0].message.content or ""
 
@@ -101,13 +110,17 @@ async def _call_vlm(
     prompt: str,
     max_tokens: int = 1024,
     image_urls: list[str] | None = None,
+    temperature: float | None = None,
 ) -> str:
-    """VLM_PROVIDER 설정에 따라 적절한 provider를 호출한다."""
+    """VLM_PROVIDER 설정에 따라 적절한 provider를 호출한다.
+
+    ⚠️ temperature 는 openai 에만 전달된다. claude 경로는 기존 동작 그대로다.
+    """
     provider = settings.vlm_provider.lower()
     if provider == "claude":
         return await _call_claude(prompt, max_tokens)
     if provider == "openai":
-        return await _call_openai(prompt, max_tokens, image_urls)
+        return await _call_openai(prompt, max_tokens, image_urls, temperature)
     raise ValueError(
         f"VLM_PROVIDER='{settings.vlm_provider}' 는 지원하지 않는 값입니다. "
         "'claude' | 'openai' 중 선택하거나 USE_MOCK=true로 우회하세요."

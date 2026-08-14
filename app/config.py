@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
     #    프론트가 GET /pose-criteria 로 이 값들을 받아 쓰므로, 여기만 고치면 양쪽이 같이 움직인다.
     pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=45 기준 평균 오차 13.5°
-    framing_f_min: float = 0.65  # F_MIN: 인물 bbox IoU 하한
+    framing_f_min: float = 0.65  # F_MIN: 촬영 거리 일치도 하한 (몸통 길이 비율)
     pose_tol_deg: float = 45.0  # TOL: 관절 하나가 0점이 되는 각도 차
     pose_hard_tol_deg: float = 60.0  # HARD: 하나라도 넘으면 즉시 탈락 (그 부위는 못 씀)
     pose_facing_max_delta: float = 0.25  # R_MAX: 어깨폭/몸통길이 비율 차 상한 (몸 돌아감)

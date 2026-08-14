@@ -268,18 +268,41 @@ async function api(method, path, { json, form } = {}) {
   const body = ct.includes("json") ? await r.json() : await r.text();
   if (!r.ok) {
     const e = body?.error || {};
-    throw new Error(`${method} ${path} → ${r.status} ${e.code || ""} ${e.message || body}`);
+    const err = new Error(`${method} ${path} → ${r.status} ${e.code || ""} ${e.message || body}`);
+    err.code = e.code;
+    err.detail = e.detail;
+    throw err;
   }
   return body;
+}
+
+// ⚠️ 실사진에서 자주 만나는 두 가지는 **버그가 아니라 관문이 일한 것**이다.
+//    그냥 빨간 줄로 던지면 "테스트 창이 고장났다"로 읽히므로 무엇을 하면 되는지
+//    같이 적어준다.
+function explain(e) {
+  if (e.code === "INSUFFICIENT_PARTS") {
+    const d = e.detail || {};
+    const ex = (d.excluded || []).map((x) => x.class_name || x).join(", ");
+    return [
+      `비교 가능한 부위가 ${d.count}개 — 최소 ${d.min_required}개 필요합니다.`,
+      ex ? `빠진 부위: ${ex}` : "",
+      "→ 팔·다리가 드러나고 몸 전체(머리~발)가 나오게 다시 찍으세요.",
+      "   긴팔·긴바지는 옷 병합이 있어도 부위가 죽을 수 있습니다.",
+    ].filter(Boolean).join("\n      ");
+  }
+  if (e.code === "POSE_MISMATCH" || e.code === "PRECONDITION_NOT_MET") {
+    return `${e.message}\n      → '관문 무시'를 켜면 뒷단까지 볼 수 있습니다.`;
+  }
+  return e.message;
 }
 
 const landmarksJson = (lm) => JSON.stringify(
   lm.map((p, i) => ({ index:i, x:p.x, y:p.y, z:p.z ?? 0,
                       visibility: p.visibility ?? 1 })));
 
-async function waitJob(jobId, label, timeoutSec = 600) {
+async function waitJob(jobId, label, timeoutSec = 900) {
   const t0 = Date.now();
-  let last = null;
+  let last = null, warned = false;
   while ((Date.now() - t0) / 1000 < timeoutSec) {
     const j = await api("GET", `/api/v1/jobs/${jobId}`);
     if (j.status !== last) {
@@ -288,9 +311,19 @@ async function waitJob(jobId, label, timeoutSec = 600) {
     }
     if (j.status === "DONE") return j;
     if (j.status === "FAILED") throw new Error(`${label} 실패 — ${JSON.stringify(j.error)}`);
+
+    // ⚠️ PENDING 이 오래 가면 잡이 느린 게 아니라 **그 종류를 처리할 워커가
+    //    안 떠 있는 것**이다. 5분 뒤 타임아웃으로 알려주면 원인을 찾기 어렵다.
+    if (!warned && j.status === "PENDING" && (Date.now() - t0) / 1000 > 20) {
+      warned = true;
+      log(`      ⚠️ ${label} 가 20초째 PENDING — 이 잡을 가져갈 워커가 없는 것 같습니다.`, "warn");
+      log(`         python -m app.worker.run --kinds ${
+        label.startsWith("SEG") ? "SEG_REFERENCE,SEG_USER"
+        : "OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH"}`, "warn");
+    }
     await new Promise((r) => setTimeout(r, 1500));
   }
-  throw new Error(`${label} 타임아웃 — 워커가 떠 있나요?`);
+  throw new Error(`${label} 타임아웃 (${timeoutSec}s) — 워커가 떠 있나요?`);
 }
 
 // ── 전 구간 실행 ────────────────────────────────────────────────────────
@@ -382,7 +415,7 @@ $("run").onclick = async () => {
     log("\n전 구간 완료", "ok");
     step("s2", "done");
   } catch (e) {
-    log(`\n실패: ${e.message}`, "bad");
+    log(`\n중단: ${explain(e)}`, e.code === "INSUFFICIENT_PARTS" ? "warn" : "bad");
   } finally {
     $("raw").textContent = JSON.stringify(raw, null, 2);
     step("s6", "done");

@@ -23,21 +23,29 @@ VLM 입력은 **크롭이 아니라 원본 + 하이라이트**다. 부위를 잘
 from __future__ import annotations
 
 import io
-from typing import Any, Iterable
+import logging
+import statistics
+from typing import TYPE_CHECKING, Any, Iterable
 
 from PIL import Image
 
-#: 의류 클래스를 어느 비교 부위에 합칠지.
+if TYPE_CHECKING:
+    import numpy as np
+
+log = logging.getLogger("services.segmap")
+
+#: ❌ 고정 매핑(`Upper_Clothing → Torso`)은 **폐기했다** (2026-08-14).
 #:
-#: ⚠️ 실측(A 샘플, 몸에 붙는 상의 착용)에서 `Upper_Clothing` 은 **0px** 이었고
-#:    상의가 통째로 `Torso` 로 분류됐다. 즉 이 병합은 흔한 경우 no-op 이다.
-#:    그래도 남겨두는 이유는 헐렁한 옷·다른 각도에서 옷이 별도 클래스로 잡히는
-#:    경우가 있기 때문이고, 비용이 마스크 OR 한 번뿐이라서다.
-#:    ⚠️ 좌우로 갈라야 하는 Lower_Clothing 은 중심선 분할이 필요해 MVP 범위 밖이다.
-#:       (허벅지는 반바지 아래로 대부분 노출되므로 실용상 문제가 적다)
-CLOTHING_MERGE: dict[str, str] = {
-    "Upper_Clothing": "Torso",
-}
+#:    긴팔에서 정확히 반대로 망가지기 때문이다 — 소매 픽셀이 전부 몸통으로
+#:    들어가 **정작 살리려던 팔은 여전히 0** 이고 몸통만 부푼다. 병합으로
+#:    구제하려던 케이스에서 병합이 목적을 무효화한다.
+#:
+#:    대신 `app/services/part_merge.py` 의 **가장 가까운 부위로 번지기**(BFS)를
+#:    쓴다. 소매는 팔로, 긴바지는 허벅지와 종아리로 자연히 나뉘고 좌우도 자동이다.
+#:
+#: ⚠️ **병합 구현은 part_merge 하나뿐이어야 한다.** 통계(A)와 마스크(B)가
+#:    서로 다른 병합을 쓰면 "숫자는 팔이 굵다는데 화면엔 몸통이 칠해지는"
+#:    상태가 되고, **에러 없이 조용히 어긋난다.**
 
 #: 하이라이트에서 비강조 영역을 얼마나 어둡게 할지 (0=검정, 1=원본)
 DIM_FACTOR = 0.28
@@ -104,23 +112,45 @@ def part_label_values(
     name_to_value: dict[str, int],
     merge_clothing: bool = True,
 ) -> list[int]:
-    """비교 부위 하나가 쓸 라벨 값 목록 (의류 병합 포함).
+    """비교 부위 하나가 쓸 라벨 값 목록.
 
-    맵에 없는 클래스는 조용히 건너뛴다 — 옷을 안 입었으면 의류 클래스가
-    애초에 없는 게 정상이다.
+    ⚠️ 의류 병합은 **여기서 하지 않는다.** `apply_clothing_merge()` 로 라벨 배열
+       자체를 먼저 병합한 뒤 이 함수를 부른다 (병합 구현은 part_merge 하나뿐).
+
+    merge_clothing 인자는 호출부 호환을 위해 남겨두었지만 아무 일도 하지 않는다.
     """
-    values: list[int] = []
-    if class_name in name_to_value:
-        values.append(name_to_value[class_name])
-
-    if merge_clothing:
-        for clothing, target in CLOTHING_MERGE.items():
-            if target == class_name and clothing in name_to_value:
-                values.append(name_to_value[clothing])
-
-    if not values:
+    if class_name not in name_to_value:
         raise SegMapError(f"'{class_name}' 이 label_map 에 없습니다.")
-    return values
+    return [name_to_value[class_name]]
+
+
+def apply_clothing_merge(
+    labels: "np.ndarray",
+    label_map: dict[str, str],
+    targets: set[str],
+) -> tuple["np.ndarray", dict[str, int]]:
+    """옷 픽셀을 인접 비교 부위로 흡수한 라벨 배열을 돌려준다.
+
+    구현은 `app/services/part_merge.py` (담당 A) 하나뿐이다. 여기서는
+    **위임만** 한다 — 두 벌로 구현하면 통계와 마스크가 조용히 어긋난다.
+
+    Returns:
+        (병합된 라벨 배열, {클래스명: 옷에서 흡수한 픽셀 수})
+
+    ⚠️ 두 번째 값을 반드시 같이 쓸 것. 병합은 헐렁한 옷 실루엣도 유효한 부위로
+       만들어버리므로, 어디까지가 실제 노출인지는 이 숫자로만 알 수 있다.
+       진단 프롬프트의 confidence 근거로 넘긴다.
+
+    part_merge 가 아직 머지되지 않았으면 병합 없이 원본을 그대로 돌려준다
+    (A의 `feature/clothing-merge` 머지 전까지의 과도기).
+    """
+    try:
+        from app.services.part_merge import merge_clothing as _merge
+    except ImportError:
+        log.warning("part_merge 미도입 — 의류 병합 없이 진행합니다.")
+        return labels.copy(), {}
+
+    return _merge(labels, label_map, targets)
 
 
 # --------------------------------------------------------------------------- #
@@ -405,6 +435,52 @@ def compare_parts(
     return {
         "parts": parts,
         "bounds": {"reference": ref_bounds, "user": user_bounds},
+        "framing_bias": framing_bias(parts),
+    }
+
+
+def framing_bias(parts: dict[str, Any]) -> dict[str, Any] | None:
+    """잘림(프레이밍) 편향 지표. **판정하지 않고 기록만 한다.**
+
+    왜 필요한가
+        `area_share` 의 분모는 인물 전체 픽셀이다. 발이나 머리가 잘리면 분모가
+        줄어 **모든 부위 share 가 같은 방향으로 같은 비율만큼 밀린다.**
+
+        원래는 A 의 프레이밍 게이트가 막아줬지만, 2026-08-14 에 게이트가
+        bbox Jaccard → **몸통 길이 비율**로 바뀌면서 잘림을 못 잡는다.
+        몸통 길이는 무릎까지 잘려도 1.0 이 나온다. (게이트 변경 자체는 옳다 —
+        옛 방식은 팔다리를 움직인 것을 프레이밍 문제로 오인해, 물러서도 고칠 수
+        없는 안내를 띄웠다.)
+        → 지금 잘림을 보는 곳은 여기뿐이다.
+
+    어떻게 구분하는가
+        실제 체형 차이는 부위마다 방향이 갈린다. 잘림은 **전 부위를 같은 방향으로**
+        민다. 그래서 "중앙값이 0에서 멀고 + 대부분이 같은 부호" 가 잘림의 서명이다.
+
+    ⚠️ **임계값을 두지 않는다.** 근거 데이터가 없는 상태에서 컷오프를 만들면
+       `clothing_ratio > 0.5` · `상완/전완 1.1~1.3` 과 같은 실수가 된다.
+       실호출 로그가 쌓인 뒤에 자른다.
+    """
+    diffs = [
+        p["diff_pct"]["area_share"]
+        for p in parts.values()
+        if p["diff_pct"]["area_share"] is not None
+    ]
+    if len(diffs) < 3:
+        return None
+
+    median = statistics.median(diffs)
+    # 부호가 중앙값과 같은 부위 수 — 잘림이면 거의 전부가 같은 쪽이다.
+    same_direction = sum(1 for d in diffs if (d >= 0) == (median >= 0))
+
+    return {
+        "median_area_diff_pct": round(median, 2),
+        "same_direction": same_direction,
+        "parts": len(diffs),
+        "note": (
+            "전 부위가 같은 방향으로 밀렸다면 체형 차이가 아니라 촬영 잘림일 수 있음. "
+            "판정하지 않고 기록만 함."
+        ),
     }
 
 

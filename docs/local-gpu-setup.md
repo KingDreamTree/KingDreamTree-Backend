@@ -2,16 +2,18 @@
 
 > 2026-08-14 실측. **A 없이도 세그 → 진단 → 루틴 → 피드백 전 구간이 로컬에서 돈다.**
 
-## 실측 결과 (RTX 5070 12GB)
+## 실측 결과 (RTX 5070 12GB · sapiens2-seg-0.4b, 2026-08-14 실사진)
 
 ```
-추론          4.5s   (sapiens2-seg-0.4b, fp16)
 맵            768x1024
 검출 클래스   18 / 29
 유효 비교대상 9 / 9        ← 전 부위 검출
 인물 비율     17.3%
 옷 병합       허벅지 27% · 몸통 10% 흡수 (정상 동작)
 ```
+
+> 백본별 속도·VRAM 은 아래 [백본별 실측](#백본별-실측-rtx-5070-12gb-2026-08-15--같은-사진-1장) 표를 볼 것.
+> **지금 기본값은 `1b` 다.**
 
 ## MediaPipe 는 파이썬에 설치하지 않는다
 
@@ -34,7 +36,7 @@ python scripts/run_pose_demo.py
 가중치 받기 (`.gitignore` 라 clone 에 안 딸려온다):
 
 ```bash
-python scripts/download_sapiens.py --size 0.4b
+python scripts/download_sapiens.py --size 1b
 ```
 
 ⚠️ **Windows 에서는 `HF_HUB_DISABLE_XET=1` 을 붙여라.** `hf_xet` 백엔드가
@@ -42,7 +44,7 @@ python scripts/download_sapiens.py --size 0.4b
 (2026-08-15 실측: 256MB 에서 정지). 일반 HTTP 로 내려받으면 정상이다.
 
 ```bash
-HF_HUB_DISABLE_XET=1 python scripts/download_sapiens.py --size 0.4b
+HF_HUB_DISABLE_XET=1 HF_HUB_DOWNLOAD_TIMEOUT=120 python scripts/download_sapiens.py --size 1b
 ```
 
 ```bash
@@ -56,7 +58,7 @@ HF_HUB_DISABLE_XET=1 python scripts/download_sapiens.py --size 0.4b
 `.env` 에 한 줄:
 
 ```
-SAPIENS_SIZE=0.4b
+SAPIENS_SIZE=1b
 ```
 
 > ⚠️ 기본값이 `5b` 다. 이 줄이 없으면 "모델 폴더 없음" 으로 죽는다.
@@ -65,8 +67,12 @@ SAPIENS_SIZE=0.4b
 
 | 크기 | 다운로드 | VRAM 피크 | 추론 | 로컬에서 |
 |---|---|---|---|---|
-| 0.4b | 1.6GB | 2.1GB | **0.6초** | ✅ 쓴다 |
+| 0.4b | 1.6GB | 2.1GB | **0.6초** | ✅ 가볍다 |
+| 1b | 5.9GB | **4.8GB** | **1.0초** | ✅ **기본값으로 쓴다** |
 | 5b | **20.4GB** | **12.5GB** | **376초** | ❌ 못 쓴다 |
+
+**1b 가 12GB 에서 가장 좋은 선택이다.** VRAM 4.8GB 로 절반도 안 쓰고 1초 안에
+끝난다. 0.4b 대비 0.4초 더 쓰는 대신 백본이 2.5배 크다.
 
 **5b 는 12GB 카드에서 OOM 이 나지 않는다. 대신 640배 느려진다.**
 
@@ -84,8 +90,15 @@ WDDM 은 이 초과분을 공유 시스템 메모리로 흘려보내므로 CUDA 
 > ⚠️ 배치를 줄이는 튜닝은 소용없다 — 이미 1장씩 추론한다. 해상도를 낮추면
 > 활성화는 줄지만 **가중치 10.2GB 자체가 안 줄어든다.**
 
-**결론 — 로컬은 `SAPIENS_SIZE=0.4b` 로 둔다.** 5b 는 A 의 RunPod(24GB)용이다.
-품질을 더 보고 싶으면 `1b` 까지가 12GB 에서 현실적인 선이다.
+**결론 — 로컬은 `SAPIENS_SIZE=1b`.** 5b 는 A 의 RunPod(24GB)용이다.
+
+> ⚠️ 다운로드가 `httpx.ReadTimeout` 으로 끊길 수 있다 (1b 5.9GB 에서 실제로 겪음).
+> HF 기본 read 타임아웃이 10초라 짧다. **끊기면 받던 조각도 지워져 처음부터**
+> 받으므로, 큰 파일은 처음부터 늘려서 시작하는 편이 낫다:
+>
+> ```bash
+> HF_HUB_DISABLE_XET=1 HF_HUB_DOWNLOAD_TIMEOUT=120 python scripts/download_sapiens.py --size 1b
+> ```
 
 > 위 22클래스 검출 수치는 **합성 픽스처**(`make_fixture_photo.py` — 라벨 맵에서
 > 만든 그림) 기준이라 백본 간 **품질 비교의 근거로 쓸 수 없다.** 근육 윤곽·질감이
@@ -100,7 +113,7 @@ WDDM 은 이 초과분을 공유 시스템 메모리로 흘려보내므로 CUDA 
 
 ## 로컬에서 전 구간 돌리기 — 터미널 3개
 
-워커를 **두 종류로 나눠 띄운다.** 세그 워커만 GPU 모델(1.6GB)을 들고 있고,
+워커를 **두 종류로 나눠 띄운다.** 세그 워커만 GPU 모델(1b = 5.9GB)을 들고 있고,
 LLM 워커는 안 들고 있어야 한다 (`app/worker/run.py` 주석).
 
 ### 터미널 1 — 세그 워커 (GPU)
@@ -196,7 +209,7 @@ python scripts/run_pose_demo.py
 전 구간을 혼자 돌릴 수 있으므로, A 와의 합동 세션은 **A 파이프라인 자체의 검증**
 (라벨 순서 눈 확인 등)에만 쓰면 된다.
 
-⚠️ 다만 **A 의 RunPod 은 5b, 로컬은 0.4b** 다. 백본이 다르면 검출 품질과
+⚠️ 다만 **A 의 RunPod 은 5b, 로컬은 1b** 다. 백본이 다르면 검출 품질과
 label_map 이 다를 수 있으니, 로컬 결과를 A 환경의 근거로 쓰지 말 것.
 
 

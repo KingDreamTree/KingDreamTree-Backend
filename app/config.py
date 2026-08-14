@@ -54,7 +54,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------ #
     # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
     #    프론트가 GET /pose-criteria 로 이 값들을 받아 쓰므로, 여기만 고치면 양쪽이 같이 움직인다.
-    pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=45 기준 평균 오차 13.5°
+    #
+    # ⚠️ 2026-08-14 재조정 — 목표는 "육안으로 비슷할 때만 통과".
+    #    오발을 만들던 **구조**를 고치고, 그 위에서 숫자를 실사용으로 맞췄다.
+    #      · 구조: 단축 세그먼트 제외(pose_min_seg_ratio) / 홀드 연속→슬라이딩 윈도 /
+    #        R(몸통 방향) 관문 제거(관찰용 강등 — 재도입은 git 이력의
+    #        pose_facing_max_delta) / 셔터 조건에서 f_min 제거
+    #      · THRESHOLD — 70(TOL=45, 평균 13.5°)은 통과 불가에 가까웠고, 55(평균 27°)로
+    #        내리니 조금만 비슷해도 찍혔다. TOL=60 기준 70(평균 18°)이 맞았다.
+    #      · HARD — 60은 단축 잡음으로 오발했지만 그건 단축 컷이 해결한다. 90까지
+    #        열어보니 팔 하나가 명백히 딴 방향(60~90°)인데 찍혔다 → 70.
+    pose_threshold: float = 70.0  # THRESHOLD: 자세 점수 하한. TOL=60 기준 평균 오차 18°
     #: F_MIN — **유도용**. 촬영 화면에서 "조금 뒤로 물러나세요"를 띄우고 자동 촬영
     #  조건에 넣는 선. ⚠️ 서버는 이걸로 거부하지 않는다.
     framing_f_min: float = 0.65
@@ -71,12 +81,14 @@ class Settings(BaseSettings):
     #  ⚠️ 이 선을 남겨두는 이유 — 2차 검사는 실패하면 통과시킨다(fail-open).
     #     OpenAI 가 죽었을 때 아무것도 안 걸러지는 상태는 피한다.
     framing_hard_min: float = 0.40
-    pose_tol_deg: float = 45.0  # TOL: 관절 하나가 0점이 되는 각도 차
-    pose_hard_tol_deg: float = 60.0  # HARD: 하나라도 넘으면 즉시 탈락 (그 부위는 못 씀)
-    pose_facing_max_delta: float = 0.25  # R_MAX: 어깨폭/몸통길이 비율 차 상한 (몸 돌아감)
+    pose_tol_deg: float = 60.0  # TOL: 관절 하나가 0점이 되는 각도 차
+    pose_hard_tol_deg: float = 70.0  # HARD: 하나라도 넘으면 즉시 탈락 (팔 하나가 명백히 딴 방향)
+    #: 단축(foreshortening) 컷 — 투영 길이가 몸통 길이 × 이 값 미만인 세그먼트는
+    #  각도 계산에서 뺀다. 카메라 쪽으로 뻗은 팔의 2D 각도는 잡음이라 HARD 를 오발시킨다.
+    pose_min_seg_ratio: float = 0.25
     pose_min_visible_angles: int = 4  # 유효 각도가 이보다 적으면 판정 불가
     pose_min_visibility: float = 0.5  # 이 미만인 관절은 각도 계산에서 뺀다
-    pose_n_hold: int = 15  # N_HOLD: 자동 촬영 유지 프레임 수 (프론트 참고용)
+    pose_n_hold: int = 10  # N_HOLD: 자동 촬영 유지 프레임 수 (프론트 참고용)
 
     # ------------------------------------------------------------------ #
     # 세그멘테이션 — ⚠️ 전부 튜닝 대상 잠정값

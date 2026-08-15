@@ -93,8 +93,7 @@ pip install torch==2.11.0 torchvision==0.26.0 \
 
 ## VLM provider
 
-지금은 **openai 만 지원한다.** `vlm.py` 가 진단용으로 재작성되면서 claude 경로는 없어졌고
-`ANTHROPIC_API_KEY` 도 제거됐다 (넣어도 안 쓰인다).
+**openai 만 지원한다.** 다른 값을 넣으면 `vlm.py` 가 기동 시 에러를 낸다.
 
 ```env
 VLM_PROVIDER=openai

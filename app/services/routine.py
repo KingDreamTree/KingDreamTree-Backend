@@ -152,8 +152,15 @@ def _collect_candidates(
     days: list[DayPlan],
     catalog: list[dict[str, Any]],
     single_side_parts: set[str],
+    *,
+    low_impact: bool = False,
 ) -> dict[str, list[dict[str, Any]]]:
-    """슬롯별 후보 목록. 여기 없는 운동은 최종 루틴에 들어갈 수 없다."""
+    """슬롯별 후보 목록. 여기 없는 운동은 최종 루틴에 들어갈 수 없다.
+
+    Args:
+        low_impact: CUT(=체지방률 컷오프 초과) 일 때 True. 착지 충격이 큰
+            동작을 뒤로 민다 — 체중이 무거울수록 관절 반력이 커진다.
+    """
     groups_of_asym = {
         g for p in single_side_parts for g in exercise_catalog.PART_TO_SLOTS.get(p, ())
     }
@@ -166,7 +173,10 @@ def _collect_candidates(
             if prefer_single:
                 slot["single_side"] = True  # 프롬프트 태그용
             out[_slot_id(day, idx)] = exercise_catalog.candidates_for_slot(
-                slot["muscle_group"], catalog, prefer_single_side=prefer_single
+                slot["muscle_group"],
+                catalog,
+                prefer_single_side=prefer_single,
+                prefer_low_impact=low_impact,
             )
     return out
 
@@ -341,7 +351,9 @@ async def build_routine(
 
     # 후보 수집 → 선택 (LLM 1회, 실패 시 결정론 폴백)
     catalog = exercise_catalog.load_catalog()
-    candidates = _collect_candidates(days, catalog, set(asymmetric_parts))
+    candidates = _collect_candidates(
+        days, catalog, set(asymmetric_parts), low_impact=(mode == "CUT")
+    )
 
     llm_meta: dict[str, Any] | None = None
     if settings.use_mock:
@@ -353,7 +365,7 @@ async def build_routine(
     source = "LLM" if raw_picks else "FALLBACK"
 
     # 조립 — 유산소는 코드가 직접 고른다 (머신 우선 라운드로빈)
-    cardio_pool = exercise_catalog.cardio_candidates(catalog)
+    cardio_pool = exercise_catalog.cardio_candidates(catalog, low_impact_only=(mode == "CUT"))
     cardio_i = 0
     by_ref = {c["exercise_ref"]: c for c in catalog}
 

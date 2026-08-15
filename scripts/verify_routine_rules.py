@@ -19,9 +19,12 @@ sys.path.insert(0, str(PROJECT_ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+from app.services import exercise_catalog  # noqa: E402
 from app.services.exercise_catalog import PART_TO_SLOTS  # noqa: E402
 from app.services.routine_mode import decide_mode  # noqa: E402
 from app.services.routine_templates import (  # noqa: E402
+    BOOST_MULTIPLIER_CAP,
+    CUT_MIN_REPS,
     WEEKLY_BOOST_CAP_PER_GROUP,
     WEEKLY_GROUP_SET_CAP,
     apply_weakness_boost,
@@ -58,18 +61,25 @@ def rule_cardio_last() -> None:
 
 
 def rule_boost_per_group() -> None:
-    """가중 예산은 부위가 아니라 **근육군** 단위로 공유된다.
+    """가중 예산은 **근육군 단위**로 공유되되, 좌우가 둘 다 약하면 2배까지 준다.
 
-    좌우 부위가 같은 근육군에 매핑되므로(Left/Right_Upper_Arm → 이두·삼두)
-    부위별 독립 예산이면 이중 가산된다.
+    두 문제를 구분한다 (routine_templates §WEEKLY_BOOST_CAP_PER_GROUP):
+        양쪽 다 약함 = 절대 볼륨 부족 → 예산 2배
+        한쪽만 약함  = 좌우 불균형   → 예산 1배 + 단측 운동으로 교정
+    배수는 BOOST_MULTIPLIER_CAP 에서 멈춘다 — 상완·전완이 같은 근육군을
+    공유해도 3배가 되지 않아야 한다.
     """
     print("\n[근육군당 가중 상한]")
-    pairs = [
-        ("좌우 팔", ["Left_Upper_Arm", "Right_Upper_Arm"]),
-        ("좌우 허벅지", ["Left_Upper_Leg", "Right_Upper_Leg"]),
-        ("몸통+좌우팔", ["Torso", "Left_Upper_Arm", "Right_Upper_Arm"]),
+    cap1 = WEEKLY_BOOST_CAP_PER_GROUP
+    cap2 = WEEKLY_BOOST_CAP_PER_GROUP * BOOST_MULTIPLIER_CAP
+
+    cases = [
+        ("한쪽 팔만", ["Left_Upper_Arm"], cap1),
+        ("좌우 팔", ["Left_Upper_Arm", "Right_Upper_Arm"], cap2),
+        ("좌우 허벅지", ["Left_Upper_Leg", "Right_Upper_Leg"], cap2),
+        ("몸통+좌우팔", ["Torso", "Left_Upper_Arm", "Right_Upper_Arm"], cap2),
     ]
-    for label, parts in pairs:
+    for label, parts, ceiling in cases:
         for n in (3, 4, 6):
             days = get_template(n)
             before = weekly_sets_by_group(days)
@@ -78,9 +88,82 @@ def rule_boost_per_group() -> None:
             over = {
                 g: (after[g] - before.get(g, 0))
                 for g in after
-                if after[g] - before.get(g, 0) > WEEKLY_BOOST_CAP_PER_GROUP
+                if after[g] - before.get(g, 0) > ceiling
             }
-            check(f"{label} {n}일", not over, str(over) if over else "")
+            check(f"{label} {n}일 ≤ {ceiling}", not over, str(over) if over else "")
+
+    # 양쪽이 한쪽보다 **실제로 더 받아야** 한다 — 상한만 검사하면 0 도 통과한다.
+    print("\n[좌우 이중 가산이 실제로 작동]")
+    for n in (4, 5, 6):
+        one, both = get_template(n), get_template(n)
+        b1 = weekly_sets_by_group(one)
+        apply_weakness_boost(one, ["Left_Upper_Arm"], PART_TO_SLOTS)
+        apply_weakness_boost(both, ["Left_Upper_Arm", "Right_Upper_Arm"], PART_TO_SLOTS)
+        a1, a2 = weekly_sets_by_group(one), weekly_sets_by_group(both)
+        gain1 = sum(a1[g] - b1.get(g, 0) for g in a1)
+        gain2 = sum(a2[g] - b1.get(g, 0) for g in a2)
+        check(f"{n}일 양쪽({gain2}) > 한쪽({gain1})", gain2 > gain1)
+
+
+def rule_cut_is_circuit() -> None:
+    """CUT 은 강도를 낮추지 않고 밀도를 올린다.
+
+    감량기에 무게를 빼면 제지방이 같이 빠진다. 근력 슬롯의 세트 수는 그대로
+    두고 휴식만 줄이며, 반복수는 중강도 구간(12+)으로 올린다.
+    """
+    print("\n[CUT 서킷화]")
+    for n in range(1, 8):
+        base = {
+            (d["day_order"], i): s
+            for d in get_template(n, "BALANCE")
+            for i, s in enumerate(d["slots"])
+        }
+        cut_days = get_template(n, "CUT")
+
+        rest_ok = reps_ok = sets_ok = True
+        for d in cut_days:
+            for i, s in enumerate(d["slots"]):
+                if s.get("kind") != "STRENGTH":
+                    continue
+                b = base[(d["day_order"], i)]
+                if s["sets"] != b["sets"]:
+                    sets_ok = False  # 강도(볼륨)를 깎지 않는다
+                if s["rest_sec"] >= b["rest_sec"]:
+                    rest_ok = False
+                if s["reps"] < CUT_MIN_REPS:
+                    reps_ok = False
+        check(f"{n}일 휴식 단축", rest_ok)
+        check(f"{n}일 반복 ≥ {CUT_MIN_REPS}", reps_ok)
+        check(f"{n}일 세트 수 불변 (볼륨을 깎지 않음)", sets_ok)
+
+
+def rule_cut_cardio_is_low_impact() -> None:
+    """CUT 유산소 후보에 달리기·줄넘기·버피가 없어야 한다.
+
+    CUT 은 체지방률로 판정되므로 체중이 무겁다. 무릎 반력은 걷기 체중 ~3배,
+    달리기 ~8배다. 다만 자전거는 이름에 "Run" 이 붙어도 통과해야 한다.
+    """
+    print("\n[CUT 저충격 유산소]")
+    catalog = exercise_catalog.load_catalog()
+    picked = exercise_catalog.cardio_candidates(catalog, low_impact_only=True)
+    names = [e.get("name_en", "") for e in picked]
+
+    check("후보가 비지 않음", len(picked) > 0, f"{len(picked)}개")
+    banned = [n for n in names if not exercise_catalog.is_low_impact(n)]
+    check("고충격 종목 없음", not banned, str(banned))
+
+    for name, want in [
+        ("Assault Bike Run", True),   # 장비가 이름을 이긴다
+        ("Stationary Bike Run", True),
+        ("Walking on Incline Treadmill", True),
+        ("Lever stepper", True),
+        ("Run on Treadmill", False),
+        ("Jump Rope", False),
+        ("Burpee", False),
+        ("Front Toe Touching", True),  # 오탐 회귀 방지
+    ]:
+        check(f"{name} → {'저충격' if want else '고충격'}",
+              exercise_catalog.is_low_impact(name) is want)
 
 
 def rule_caps() -> None:
@@ -197,6 +280,8 @@ def rule_sanitize_holds_under_partial_llm() -> None:
 def main() -> int:
     rule_cardio_last()
     rule_boost_per_group()
+    rule_cut_is_circuit()
+    rule_cut_cardio_is_low_impact()
     rule_caps()
     rule_no_diagnosis_shaped_days()
     rule_bmi_never_triggers_cut()

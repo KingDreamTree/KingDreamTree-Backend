@@ -38,7 +38,14 @@ jobs:
             cd ~/KingDreamTree-Backend
             git fetch origin
             git checkout main
-            git pull --ff-only origin main
+            # ⚠️ pull --ff-only 가 아니라 reset --hard 다. 배포 서버는 origin 을
+            #    **그대로 반영**하는 곳이지 머지하는 곳이 아니다. ff-only 로 두면
+            #    main 히스토리가 재작성되는 순간(2026-08-16 실제로 발생) 공통 조상이
+            #    없어져 pull 이 실패하고, set -e 때문에 배포가 통째로 멈춘다.
+            #    그때 서버에 SSH 로 들어가 손으로 고쳐야 하는데, 키가 없는 사람은
+            #    배포를 못 되살린다.
+            # ⚠️ 추적되는 파일만 되돌린다 — .env 는 .gitignore 라 그대로 남는다.
+            git reset --hard origin/main
             docker compose up -d --build
             # 재빌드가 쌓일수록 옛 레이어가 디스크(30GB)를 먹는다 — 매번 정리
             docker image prune -f

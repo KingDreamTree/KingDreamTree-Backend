@@ -650,8 +650,11 @@ export function evaluate(
  *   if (hold(result.pass)) shutter();
  */
 export function createHoldGate(criteria) {
-  const need = requireCriteria(criteria).n_hold ?? 10;
-  const SLACK = 3; // 허용하는 튐 프레임 수 — 창 크기는 need + SLACK
+  const need = requireCriteria(criteria).n_hold ?? 30;
+  // 허용하는 튐 프레임 수 — 창 크기는 need + SLACK.
+  // 튐은 프레임당 확률로 생기므로 need 에 비례(30%)해야 한다. 고정 3이면
+  // need=30 처럼 긴 유지에서 튐 몇 번에 영영 안 찍히는 문제가 돌아온다.
+  const SLACK = Math.ceil(need * 0.3);
   let window = [];
 
   const gate = (ok) => {

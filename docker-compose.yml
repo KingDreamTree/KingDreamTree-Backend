@@ -1,13 +1,40 @@
+# EC2 배포 구성 — 컨테이너 3개.
+#
+#   caddy   80/443 수신. HTTPS 인증서를 Let's Encrypt 에서 **자동 발급·갱신**하고
+#           api 로 프록시한다. (도메인은 Caddyfile 에서 설정)
+#   api     FastAPI. 내부 8000 — 보안그룹에서도, 여기서도 밖에 직접 열지 않는다.
+#   worker  LLM 잡 워커 (OCR·VLM·루틴). 세그멘테이션 워커는 RunPod — 여기 없다.
+#
+# 실행:  docker compose up -d --build
+# 로그:  docker compose logs -f api        (또는 worker / caddy)
+# 갱신:  git pull && docker compose up -d --build
+#
+# ⚠️ 같은 폴더에 .env 가 있어야 뜬다 (Supabase·OpenAI 키). 리포에는 없으므로
+#    서버에서 직접 만든다 — .env.example 참고.
 services:
-  app:
+  api:
     build: .
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    environment:
-      - USE_MOCK=${USE_MOCK:-true}
-    volumes:
-      # 모델 가중치는 이미지에 굽지 않고 볼륨으로 마운트
-      - ./models:/app/models:ro
     restart: unless-stopped
+    env_file: .env
+
+  worker:
+    build: .
+    command: python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
+    restart: unless-stopped
+    env_file: .env
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # 인증서 보관소 — 지우면 재발급하느라 Let's Encrypt 발급 한도를 깎아먹는다
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

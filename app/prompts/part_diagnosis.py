@@ -415,20 +415,33 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
     lines = []
     for p in parts:
         name = p["class_name"]
-        ratio = ((rows.get(name) or {}).get("user") or {}).get("clothing_ratio")
+        row = rows.get(name) or {}
+        ratio = (row.get("user") or {}).get("clothing_ratio")
+
+        # ⚠️ **옷 게이트는 '옷 때문에 가렸다'만 다룬다.** 잘림은 별개 사유다.
+        #    실측(2026-08-16) — 전완이 프레임에 잘렸는데(is_truncated) 옷 흡수가
+        #    50% 라 "가림 선언 금지" 가 그 줄에 박혔고, 모델이 잘린 부위를
+        #    MODERATE/HIGH 로 자신 있게 판단해버렸다. 금지의 범위를 옷으로 좁힌다.
         if not ratio:
-            gate = " — 옷 흡수 없음: 이 부위에 '옷에 가려 판단 불가' 선언 금지"
+            gate = " — 옷 흡수 없음: **옷 때문에** 판단 불가라고 하지 마세요"
         elif ratio < _BLOCK_ELIGIBLE_RATIO:
-            # ⚠️ 비율이 있다고 곧 '가림'이 아니다. 실측(2026-08-16) — 흡수 39% 인
-            #    몸통을 "옷에 가려 확인 어려움" 으로 빼버렸다. 나머지 61% 는 보였다.
             gate = (
-                f" — 옷 흡수 {ratio:.0%}: 대부분 보입니다."
-                " 실루엣으로 판단하고 **가림 선언 금지**"
+                f" — 옷 흡수 {ratio:.0%}: 옷 위로도 실루엣이 대부분 보입니다."
+                " **옷을 이유로** 판단 불가라고 하지 마세요"
             )
         else:
             gate = (
-                f" — 옷 흡수 {ratio:.0%}: 형태를 **전혀** 못 읽을 때만 가림 선언 가능"
-                " (윤곽이 조금이라도 보이면 판단하세요)"
+                f" — 옷 흡수 {ratio:.0%}: 형태를 **전혀** 못 읽을 때만 옷을 이유로"
+                " 판단 불가 가능 (윤곽이 조금이라도 보이면 판단하세요)"
+            )
+
+        # ⚠️ 잘림은 옷과 무관하게 그 부위 줄에 붙인다 — 전역 경고는 부위 줄의
+        #    지시에 묻힌다 (_citation_targets·옷 게이트와 같은 이유).
+        if row.get("user_truncated"):
+            gate += (
+                "\n  ⚠️ **이 부위는 프레임에 잘렸습니다.** 안 보이는 부분이 있으므로"
+                " 전체 형태를 판단하지 마세요 — 보이는 만큼만 쓰고 confidence 를"
+                " 낮추거나, 형태를 못 읽으면 판단 불가로 두세요."
             )
         lines.append(f"- {name} ({p.get('name_ko') or name}) = {p.get('color_hex') or '?'}{gate}")
     return "\n".join(lines)

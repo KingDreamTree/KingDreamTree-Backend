@@ -78,7 +78,7 @@ POST → { job_id }   →   GET /jobs/{job_id}  →  status: PENDING | PROCESSIN
 | 파일 | 내용 |
 |---|---|
 | `web/pose-score.js` | `poseScore()` · `framingScore()` · `facingDelta()` — **산식 원본** |
-| `web/pose-demo.html` | 웹캠 실시간 판정 + 자동 셔터 |
+| `web/e2e-test.html` | 사진 두 장 → 진단 → 루틴 → 코치 대화까지 전 구간 |
 | `web/pose-live.html` | 실시간 점수 표시 |
 | `web/score-photos.html` | 찍어둔 사진에 점수 매기기 |
 

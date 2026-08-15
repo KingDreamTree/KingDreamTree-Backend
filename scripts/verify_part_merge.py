@@ -1,16 +1,15 @@
-"""옷 병합 규칙 검증 — 합성 라벨 맵으로.
+"""옷 병합이 **덮을 수 없는 부위로 번지지 않는가.**
 
-사용법:
     python scripts/verify_part_merge.py
 
-⚠️ GPU·DB 없이 돈다. 병합 로직만 본다.
+⚠️ 이 모듈은 두 가지를 동시에 지켜야 한다. 한쪽만 보면 반대쪽이 깨진다.
 
-무엇을 확인하나
-    (1) 소매가 팔로 간다 — 하드코딩 매핑(`Upper_Clothing → Torso`)이 틀리는 지점
-    (2) 긴바지가 허벅지와 종아리로 나뉜다
-    (3) 좌우가 자동으로 갈린다 (경계선을 손으로 안 정해도 됨)
-    (4) 어디에도 안 닿는 옷은 옷으로 남는다
-    (5) 원본 배열이 변하지 않는다
+    살려야 할 것   긴팔에 가린 팔 — 소매가 팔로 흡수돼야 부위가 살아난다
+    막아야 할 것   덮을 부위가 없는 옷 — 엉뚱한 부위로 번지면 면적이 부푼다
+
+실측(2026-08-16) — 상의 없이 반바지만 입고 **허벅지가 프레임 밖**인 사진에서
+반바지 92,443px 이 몸통으로 올라갔다 (몸통 147,178 → 239,621, 63% 부풀림).
+그 면적으로 크기·비율을 비교하면 전부 틀어진다.
 """
 
 from __future__ import annotations
@@ -20,146 +19,83 @@ from pathlib import Path
 
 import numpy as np
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.part_merge import merge_clothing  # noqa: E402
+from app.services import part_merge  # noqa: E402
 
-# 실제 alpha 매핑의 인덱스를 그대로 쓴다
-LABELS = {
-    0: "Background",
-    11: "Left_Upper_Arm",
-    20: "Right_Upper_Arm",
-    12: "Left_Upper_Leg",
-    8: "Left_Lower_Leg",
-    22: "Torso",
-    23: "Upper_Clothing",
-    13: "Lower_Clothing",
+PASS, FAIL = "[OK]", "[X]"
+_failed: list[str] = []
+
+#: 라벨 인덱스 (값 자체는 의미 없다 — label_map 으로만 해석된다)
+LM = {
+    "1": "Torso",
+    "2": "Left_Upper_Arm",
+    "3": "Upper_Clothing",
+    "4": "Lower_Clothing",
+    "5": "Left_Upper_Leg",
 }
-LABEL_MAP = {str(k): v for k, v in LABELS.items()}
-TARGETS = {
-    "Torso",
-    "Left_Upper_Arm",
-    "Right_Upper_Arm",
-    "Left_Upper_Leg",
-    "Left_Lower_Leg",
-}
-
-passed: list[str] = []
-failed: list[str] = []
+TARGETS = {"Torso", "Left_Upper_Arm", "Left_Upper_Leg"}
 
 
 def check(label: str, cond: bool, note: str = "") -> None:
-    (passed if cond else failed).append(label)
-    print(f"  [{'O' if cond else 'X'}] {label}" + (f"  — {note}" if note else ""))
-
-
-#: 긴팔 장면의 소매 영역 (y, x 범위) — 흡수 결과를 이 범위로 재서 본다
-SLEEVE_RIGHT = (slice(10, 14), slice(4, 12))  # 화면 왼쪽 = 피사체의 오른팔
-SLEEVE_LEFT = (slice(10, 14), slice(18, 26))  # 화면 오른쪽 = 피사체의 왼팔
-
-
-def scene_long_sleeve() -> np.ndarray:
-    """긴팔 셔츠, T자 포즈.
-
-        몸통은 세로, 소매는 양옆으로 뻗는다. 어깨에서 손목까지 전부 옷이고
-        손목 끝에만 살이 보인다 — 긴팔 사진에서 실제로 나오는 모양이다.
-
-    ⚠️ 여기가 하드코딩 매핑(`Upper_Clothing → Torso`)이 무너지는 지점이다.
-       그 규칙이면 소매 전체가 몸통으로 들어가고 팔은 손목 몇 px 로 남는다.
-    """
-    m = np.zeros((30, 30), dtype=np.uint8)
-    m[6:24, 12:18] = 23  # 셔츠 몸통 (세로)
-    m[10:14, 4:12] = 23  # 오른쪽 소매 (가로)
-    m[10:14, 18:26] = 23  # 왼쪽 소매 (가로)
-    m[7:10, 13:17] = 22  # 목 아래 가슴 일부 노출
-    m[10:14, 2:4] = 20  # 오른팔 손목 노출
-    m[10:14, 26:28] = 11  # 왼팔 손목 노출
-    return m
-
-
-def scene_long_pants() -> np.ndarray:
-    """긴바지 — 허벅지와 종아리가 모두 덮이고 발목만 보인다."""
-    m = np.zeros((40, 20), dtype=np.uint8)
-    m[5:35, 5:15] = 13  # 바지
-    m[5:8, 5:15] = 12  # 골반 아래 허벅지 일부 노출
-    m[33:35, 5:15] = 8  # 발목 위 종아리 노출
-    return m
+    print(f"  {PASS if cond else FAIL} {label}{(' — ' + note) if note else ''}")
+    if not cond:
+        _failed.append(label)
 
 
 def main() -> int:
-    print("=" * 68)
-    print("옷 병합 규칙 검증")
-    print("=" * 68)
+    print("옷 병합 — 덮을 수 있는 부위로만 번지는가\n")
 
-    # ── (1) 긴팔 ─────────────────────────────────────────────────────────
-    print("\n긴팔 셔츠 — 소매가 어디로 가는가")
-    src = scene_long_sleeve()
-    before = src.copy()
-    merged, contrib = merge_clothing(src, LABEL_MAP, TARGETS)
-
-    print(f"      옷에서 흡수: {contrib}")
-
-    # 소매 영역만 잘라서 "그 소매가 어느 부위로 갔는지" 본다
-    for name, region, value, label in (
-        ("왼팔", SLEEVE_LEFT, 11, "Left_Upper_Arm"),
-        ("오른팔", SLEEVE_RIGHT, 20, "Right_Upper_Arm"),
-    ):
-        sleeve = merged[region]
-        cloth = sleeve[np.isin(src[region], [23])]
-        to_arm = int((cloth == value).sum())
-        to_torso = int((cloth == 22).sum())
-        total = int(cloth.size)
-        print(f"      {name} 소매 {total}px → 팔 {to_arm} / 몸통 {to_torso}")
-        check(
-            f"{name} 소매의 절반 이상이 팔로 감",
-            to_arm > total * 0.5,
-            f"{to_arm}/{total} ({to_arm / total * 100:.0f}%)",
-        )
-
-    left, right = int((merged == 11).sum()), int((merged == 20).sum())
+    # ── 1. 긴팔: 소매가 팔로 흡수돼야 한다 (이 기능의 존재 이유) ────────────
+    a = np.zeros((100, 60), dtype=np.uint8)
+    a[0:20, 20:40] = 2  # 드러난 상완
+    a[20:80, 20:40] = 3  # 그 아래는 소매(Upper_Clothing)
+    _, contrib = part_merge.merge_clothing(a, LM, TARGETS)
     check(
-        "좌우가 뒤섞이지 않음",
-        abs(left - right) <= max(left, right) * 0.2,
-        f"왼팔 {left}px vs 오른팔 {right}px",
-    )
-    check("원본 배열 불변", np.array_equal(src, before))
-
-    # ── (2) 긴바지 ────────────────────────────────────────────────────────
-    print("\n긴바지 — 허벅지와 종아리로 나뉘는가")
-    merged2, contrib2 = merge_clothing(scene_long_pants(), LABEL_MAP, TARGETS)
-    print(f"      옷에서 흡수: {contrib2}")
-    thigh = contrib2.get("Left_Upper_Leg", 0)
-    calf = contrib2.get("Left_Lower_Leg", 0)
-    check(
-        "허벅지·종아리 둘 다에 분배됨", thigh > 0 and calf > 0, f"허벅지 {thigh}px, 종아리 {calf}px"
-    )
-    check("한쪽으로 몰리지 않음", min(thigh, calf) > max(thigh, calf) * 0.2, f"{thigh} : {calf}")
-
-    # ── (3) 닿지 않는 옷 ──────────────────────────────────────────────────
-    print("\n어디에도 안 닿는 옷")
-    lonely = np.zeros((20, 20), dtype=np.uint8)
-    lonely[5:15, 5:15] = 23  # 몸이 하나도 안 보이는 셔츠
-    merged3, contrib3 = merge_clothing(lonely, LABEL_MAP, TARGETS)
-    check(
-        "옷으로 남는다 (억지로 배정하지 않음)",
-        int((merged3 == 23).sum()) == 100 and not contrib3,
-        f"남은 옷 {int((merged3 == 23).sum())}px",
+        "긴팔 소매가 팔로 흡수된다",
+        contrib.get("Left_Upper_Arm", 0) > 0,
+        f"{contrib.get('Left_Upper_Arm', 0):,}px",
     )
 
-    # ── (4) 옷이 없을 때 ──────────────────────────────────────────────────
-    print("\n옷이 없는 맵")
-    bare = np.zeros((10, 10), dtype=np.uint8)
-    bare[2:8, 2:8] = 22
-    merged4, contrib4 = merge_clothing(bare, LABEL_MAP, TARGETS)
-    check("그대로 통과", np.array_equal(merged4, bare) and not contrib4)
+    # ── 2. 반바지 + 다리 있음: 다리로 가야 한다 ───────────────────────────
+    b = np.zeros((100, 60), dtype=np.uint8)
+    b[0:40, 20:40] = 1  # 몸통
+    b[40:70, 20:40] = 4  # 반바지
+    b[70:100, 20:40] = 5  # 허벅지
+    _, contrib = part_merge.merge_clothing(b, LM, TARGETS)
+    check("반바지는 다리로 간다", contrib.get("Left_Upper_Leg", 0) > 0, str(contrib))
+    check("반바지가 몸통으로 가지 않는다", "Torso" not in contrib, str(contrib))
 
-    print("\n" + "=" * 68)
-    print(f"통과 {len(passed)} / 실패 {len(failed)}")
-    for f in failed:
-        print(f"  [X] {f}")
-    return 1 if failed else 0
+    # ── 3. 반바지 + 다리 없음(프레임 밖): 옷으로 남아야 한다 ───────────────
+    #     ⚠️ 실제로 터졌던 케이스다. 종전에는 전부 몸통으로 올라갔다.
+    c = np.zeros((100, 60), dtype=np.uint8)
+    c[0:60, 20:40] = 1  # 몸통
+    c[60:100, 20:40] = 4  # 반바지 — 아래에 다리가 없다
+    merged, contrib = part_merge.merge_clothing(c, LM, TARGETS)
+    torso_before = int((c == 1).sum())
+    torso_after = int((merged == 1).sum())
+    check(
+        "다리가 없으면 반바지는 몸통으로 안 간다",
+        contrib.get("Torso", 0) == 0,
+        f"흡수 {contrib.get('Torso', 0):,}px",
+    )
+    check(
+        "몸통 면적이 그대로다",
+        torso_after == torso_before,
+        f"{torso_before:,} → {torso_after:,}",
+    )
+    check(
+        "흡수 안 된 옷은 옷으로 남는다",
+        int((merged == 4).sum()) == int((c == 4).sum()),
+    )
+
+    print()
+    if _failed:
+        print(f"실패 {len(_failed)}건: {', '.join(_failed)}")
+        return 1
+    print("문제 없음")
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

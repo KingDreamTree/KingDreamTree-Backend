@@ -42,6 +42,34 @@ CLOTHING_CLASSES: tuple[str, ...] = ("Upper_Clothing", "Lower_Clothing", "Appare
 #:    근거 없는 숫자가 된다.
 MAX_STEPS = 256
 
+#: 옷이 **덮을 수 있는 부위**. 여기 없는 부위로는 번지지 않는다.
+#:
+#: ⚠️ 이건 모듈 주석이 경계한 "옷 → 부위 고정 매핑"이 아니다. 그건 소매를
+#:    전부 몸통으로 보내는 식의 **배정**이라 긴팔에서 망가졌다. 이건 반대로
+#:    **물리적으로 불가능한 방향만 막는** 제약이고, 어느 부위로 갈지는 여전히
+#:    번짐(가장 가까운 부위)이 정한다.
+#:
+#: ⚠️ 왜 필요한가 (실측 2026-08-16) — 상의를 안 입고 반바지만 입은 사진에서
+#:    **허벅지가 프레임 밖**이라 반바지가 갈 곳이 없었다. 그러자 유일하게 인접한
+#:    몸통으로 256스텝 밀고 올라가 92,443px 이 흡수됐다.
+#:      몸통  147,178px → 239,621px  (63% 부풀림, 그중 39% 가 반바지)
+#:    부위 면적이 그만큼 틀어지면 크기·비율 비교가 통째로 흔들린다.
+#:    덮을 부위가 검출되지 않은 옷은 **옷으로 남기는 것이 맞다.**
+_COVERS: dict[str, tuple[str, ...]] = {
+    "Upper_Clothing": ("Torso", "Upper_Arm", "Lower_Arm"),
+    "Lower_Clothing": ("Upper_Leg", "Lower_Leg"),
+    # 종류를 알 수 없는 옷은 제한하지 않는다 — 막을 근거가 없다.
+    "Apparel": (),
+}
+
+
+def _allowed_targets(cloth_name: str, targets: set[str]) -> set[str]:
+    """이 옷이 덮을 수 있는 부위만 남긴다. 좌우 접두사는 무시하고 비교한다."""
+    suffixes = _COVERS.get(cloth_name, ())
+    if not suffixes:
+        return targets
+    return {t for t in targets if any(t.endswith(s) for s in suffixes)}
+
 
 def merge_clothing(
     labels: np.ndarray,
@@ -63,9 +91,35 @@ def merge_clothing(
     """
     value_of = {name: int(idx) for idx, name in label_map.items()}
 
-    cloth_values = [value_of[c] for c in CLOTHING_CLASSES if c in value_of]
+    present = [c for c in CLOTHING_CLASSES if c in value_of]
+    if not present or not any(t in value_of for t in targets):
+        return labels.copy(), {}
+
+    # ⚠️ 옷 종류마다 **덮을 수 있는 부위가 다르다** (_COVERS). 한 번에 번지게 하면
+    #    반바지가 몸통으로 올라간다. 종류별로 나눠서 번지고 결과를 합친다.
+    merged = labels.copy()
+    total: dict[str, int] = {}
+    for cloth_name in present:
+        allowed = _allowed_targets(cloth_name, targets)
+        if not allowed:
+            continue  # 덮을 부위가 이 사진에 없다 — 옷으로 남긴다
+        merged, part = _spread_one(merged, value_of, cloth_name, allowed, max_steps)
+        for k, v in part.items():
+            total[k] = total.get(k, 0) + v
+    return merged, total
+
+
+def _spread_one(
+    labels: np.ndarray,
+    value_of: dict[str, int],
+    cloth_name: str,
+    targets: set[str],
+    max_steps: int,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """옷 클래스 하나를 허용된 부위로 번지게 한다. (원래 merge_clothing 본체)"""
+    cloth_values = [value_of[cloth_name]]
     target_values = {value_of[t] for t in targets if t in value_of}
-    if not cloth_values or not target_values:
+    if not target_values:
         return labels.copy(), {}
 
     cloth_mask = np.isin(labels, cloth_values)

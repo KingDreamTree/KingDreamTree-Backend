@@ -45,7 +45,7 @@ from app.worker.handlers.vlm import _inbody_for, _load_side  # noqa: E402
 #: 문장 수 상한 — 초과하면 위반. §길이 (프롬프트) 와 같은 표.
 #: 4단계 구성(①전체 →②세부 →③인바디 →④우선순위)을 넣으면서 상한을 올렸다.
 #: MODERATE 가 ①+③+④ 로 3문장이 되는 건 정상이다.
-_MAX_SENTENCES = {"NONE": 1, "SLIGHT": 1, "MODERATE": 3, "SIGNIFICANT": 4}
+_MAX_SENTENCES = {"NONE": 1, "SLIGHT": 1, "MODERATE": 2, "SIGNIFICANT": 3}
 
 #: 처방으로 보는 신호. 운동 이름이 나오거나 권유형으로 끝나면 처방으로 센다.
 _EXERCISE_WORDS = ("스쿼트", "런지", "플랭크", "팔굽혀펴기", "덤벨", "컬", "운동")

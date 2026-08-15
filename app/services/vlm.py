@@ -314,6 +314,56 @@ def _coerce_part(
     }
 
 
+#: 한쪽만 가리키는 말. 이게 들어있으면 반대쪽 카드에 복사할 수 없다.
+_SIDE_WORDS = ("왼", "오른", "좌측", "우측")
+
+#: gap_level 심각도 — 통일할 때 나쁜 쪽으로 맞춘다.
+_GAP_SEVERITY = {"NONE": 0, "SLIGHT": 1, "MODERATE": 2, "SIGNIFICANT": 3}
+
+
+def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
+    """좌우 쌍의 판정·문장을 하나로 맞춘다 (제자리 수정).
+
+    ⚠️ **좌우를 다르게 쓰게 하는 것을 포기한 결과다.** 반복 측정(eval_diagnosis.py,
+       5회)에서 좌우 상완 문장 중복이 4회 나왔다. 프롬프트로 4번 다르게 만들려
+       했지만 실측 좌우 차이가 3% 안쪽이면 **애초에 다르게 쓸 재료가 없다** —
+       없는 차이를 지어내라고 시키고 있었던 셈이다. 같게 쓰는 것이 정직하다.
+
+    ⚠️ **한쪽을 가리키는 문장은 복사하지 않는다.** "왼팔 상완이 가늡니다"를
+       오른팔 행에 넣으면 중복이 아니라 **틀린 문장**이 된다. 그건 중복보다 나쁘다.
+       그 경우 그대로 두고 로그만 남긴다 (프롬프트가 «양쪽» 주어를 요구한다).
+
+    ⚠️ gap_level 이 서로 다르면 손대지 않는다 — 좌우가 실제로 다른 경우이고,
+       그때는 문장도 달라야 한다.
+    """
+    for left, part in list(results.items()):
+        if not left.startswith("Left_"):
+            continue
+        right = "Right_" + left[len("Left_") :]
+        other = results.get(right)
+        if other is None:
+            continue
+
+        if part.get("gap_level") != other.get("gap_level"):
+            continue  # 좌우가 실제로 다르게 판정됐다. 그대로 둔다.
+
+        a, b = part.get("assessment"), other.get("assessment")
+        if not a or not b or a == b:
+            continue
+
+        # 더 심한 쪽 → 같으면 왼쪽 문장을 기준으로 (재현성)
+        source = part if len(a) >= len(b) else other
+        text = source["assessment"]
+        if any(w in text for w in _SIDE_WORDS):
+            log.info("%s/%s 좌우 통일 보류 — 문장이 한쪽을 가리킴", left, right)
+            continue
+
+        log.info("%s/%s 좌우 문장 통일", left, right)
+        for target in (part, other):
+            target["assessment"] = text
+            target["priority"] = source.get("priority")
+
+
 def parse_part_response(
     parsed: dict[str, Any], class_names: list[str], inbody_available: bool = True
 ) -> dict[str, Any]:
@@ -341,6 +391,8 @@ def parse_part_response(
             continue
         # 같은 부위를 두 번 보내오면 처음 것만 쓴다 (UNIQUE(session_id, class_name)).
         results.setdefault(part["class_name"], part)
+
+    _unify_pairs(results)
 
     return {
         "results": [results[n] for n in class_names if n in results],

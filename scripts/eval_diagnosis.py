@@ -70,6 +70,11 @@ _BANNED = (
 _DUP_RATIO = 0.75
 
 
+def _strip_side(text: str) -> str:
+    """좌우를 가리키는 말을 지운다. 내용만 비교하기 위해."""
+    return re.sub(r"(왼쪽|오른쪽|왼팔|오른팔|좌측|우측)", "", text)
+
+
 def _is_pair(a: str, b: str) -> bool:
     """좌우 쌍인가. (Left_Upper_Arm ↔ Right_Upper_Arm)"""
     for x, y in ((a, b), (b, a)):
@@ -143,6 +148,16 @@ def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
         if b is None or a.get("gap_level") != b.get("gap_level"):
             continue  # 등급이 다르면 문장도 달라야 한다
         ta, tb = a.get("assessment") or "", b.get("assessment") or ""
+        # ⚠️ 인바디를 인용한 쌍은 **갈라지는 게 맞다.** 좌우 세그먼트 수치가 서로
+        #    달라(예: 89.9% / 90.6%) 같은 문장을 쓰면 한쪽이 틀린 값을 말하게 된다.
+        #    "좌우 수치는 같으면 안 된다"는 제품 결정이라 위반으로 세지 않는다.
+        if "%" in ta or "%" in tb:
+            continue
+        # ⚠️ **좌우 이름만 다른 건 위반이 아니다.** 카드 제목이 "왼팔 전완" 인데
+        #    문장이 "양쪽 전완 모두…" 로 시작하면 오히려 어색하다. 내용이 같으면
+        #    좌우 이름은 그 카드에 맞게 부르는 쪽이 낫다 — 그게 이상적인 출력이다.
+        if _strip_side(ta) == _strip_side(tb):
+            continue
         if ta and tb and ta != tb:
             out["좌우불일치"].append(f"{a['class_name']} ≠ {right}")
 

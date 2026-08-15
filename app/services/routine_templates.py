@@ -60,10 +60,17 @@ SEVEN_DAY_NOTICE = (
     "6일은 근력 운동, 하루는 가볍게 걷기·스트레칭으로 구성했어요."
 )
 
-#: CUT 모드 안내 — 왜 전신+유산소인지 사용자에게 설명.
+#: CUT 모드 안내 — 왜 "무게를 낮추지 않고 휴식을 줄였는지" 를 설명한다.
+#:
+#: ⚠️ 사용자가 가장 오해하는 지점이다. 감량 모드라고 하면 근력을 빼고 맨몸운동을
+#:    할 거라 기대하는데, 우리는 정반대로 근력을 그대로 두고 휴식만 줄인다.
+#:    이유를 안 적어두면 "감량 모드인데 왜 무겁게 드냐"는 문의가 온다.
 CUT_NOTICE = (
     "체지방률 기준으로 감량을 함께 하면 효과가 좋아요. "
-    "근육을 지키기 위해 근력 운동은 유지하고, 매 운동 끝에 유산소를 더했어요. "
+    "다만 감량 중에 무게를 낮추면 근육이 같이 빠져요. 그래서 근력 운동은 그대로 두고, "
+    "세트 사이 휴식을 짧게(60초·45초) 줄여 쉬지 않고 도는 서킷처럼 구성했어요. "
+    "숨이 더 차고 칼로리 소모가 늘어나는 대신 근육은 지킬 수 있어요. "
+    "관절 부담을 줄이려고 유산소는 자전거·일립티컬처럼 충격이 적은 종목으로 골랐고, "
     "쉬는 날에도 30분 정도 걷기를 추천해요."
 )
 
@@ -81,10 +88,51 @@ def _s(muscle_group: str, sets: int, reps: int, rest_sec: int = 90) -> Slot:
 def _cardio(duration_min: int = 15) -> Slot:
     """CUT 모드 유산소 마무리 슬롯 (D3 확정 — 문구가 아니라 운동 항목).
 
-    근력 후 15~20분 중강도. ⚠️ 이것만으로 주 150분이 되지 않는다
-    (주 3일이면 45분). 나머지는 CUT_NOTICE 의 일상 걷기 안내가 담당한다.
+    근력 후 중강도. ⚠️ 이것만으로 주 150분이 되지 않는다.
+    나머지는 CUT_NOTICE 의 일상 걷기 안내가 담당한다.
     """
     return {"muscle_group": "유산소", "kind": "CARDIO", "duration_min": duration_min, "sets": 1}
+
+
+#: 복합 다관절이 주로 배치되는 근육군. 서킷 휴식·슬롯 상한 양쪽에서 쓴다.
+_COMPOUND_GROUPS = frozenset({"가슴", "등", "대퇴사두", "햄스트링·둔근", "어깨"})
+
+
+# ── CUT 서킷화 (2026-08-15) ──────────────────────────────────────────────────
+#
+# ⚠️ **강도를 낮추지 않는다. 밀도를 올린다.**
+#
+#    "감량 모드니까 맨몸운동으로 바꾸자"는 직관은 방향이 반대다. 감량기에
+#    근손실을 막는 것은 저항운동 자체이고(노인 비만에서 근손실의 93.5% 방지,
+#    PMC5946208), 강도를 빼면 그 보호 효과가 같이 빠진다.
+#
+#    대신 근거가 있는 건 **서킷화**다 — 휴식을 줄여 세션 밀도를 올리면
+#    근력·제지방 효과는 전통 방식과 동등하면서 심폐·대사 반응이 커지고
+#    지방 감소에 더 유리하다 (Resistance Circuit-Based Training 메타분석
+#    PMC8145598 · 고강도 서킷 vs 전통 PMID 40323711).
+#
+#    또 감량기에는 **중강도가 고강도보다 제지방 보존에 낫다**는 결과가 있어
+#    (네트워크 메타분석 PMC12158682), 반복수를 12~15 로 올려 중강도 구간에
+#    맞춘다. 무게는 RIR 자가조절이 알아서 낮춘다.
+
+#: CUT 모드 휴식 시간 (초). 복합 90→60, 고립 60→45.
+#: 완전 회복을 포기하는 대신 세션 밀도를 얻는다.
+CUT_REST_SEC_COMPOUND = 60
+CUT_REST_SEC_ISOLATION = 45
+
+#: CUT 모드 최소 반복수 — 중강도 구간(12~15)으로 올린다.
+CUT_MIN_REPS = 12
+
+
+def _to_circuit(slot: Slot) -> Slot:
+    """근력 슬롯을 CUT 서킷형으로 바꾼다 (휴식 단축 + 반복 상향)."""
+    if slot.get("kind") != "STRENGTH":
+        return slot
+    out = dict(slot)
+    compound = slot["muscle_group"] in _COMPOUND_GROUPS
+    out["rest_sec"] = CUT_REST_SEC_COMPOUND if compound else CUT_REST_SEC_ISOLATION
+    out["reps"] = max(int(slot["reps"]), CUT_MIN_REPS)
+    return out  # type: ignore[return-value]
 
 
 # ── 세션 구성 ────────────────────────────────────────────────────────────────
@@ -164,6 +212,22 @@ _BALANCE: dict[int, list[tuple[str, list[Slot]]]] = {
 }
 
 
+def _cut_cardio_min(days_per_week: int) -> int:
+    """CUT 근력일 1회당 유산소 분(分).
+
+    ACSM Donnelly 2009 는 감량에 주 150분+ 를 권고한다. 루틴이 그 전부를
+    보장하지는 않지만(나머지는 CUT_NOTICE 의 일상 걷기), **일수가 적을수록
+    한 세션에 더 담아** 주간 총량이 크게 어긋나지 않게 한다.
+
+        1~2일 → 25분   3~4일 → 20분   5일+ → 15분
+    """
+    if days_per_week <= 2:
+        return 25
+    if days_per_week <= 4:
+        return 20
+    return 15
+
+
 def get_template(days_per_week: int, mode: str = "BALANCE") -> list[DayPlan]:
     """N일 템플릿. mode="CUT" 이면 근력일마다 유산소 마무리 슬롯을 더한다.
 
@@ -178,23 +242,41 @@ def get_template(days_per_week: int, mode: str = "BALANCE") -> list[DayPlan]:
         day = _day(i, title, slots)
         is_strength_day = any(s.get("kind") == "STRENGTH" for s in day["slots"]) or not day["slots"]
         if mode == "CUT" and is_strength_day:
-            # 1~2일은 세션이 그날의 전부라 유산소를 20분으로 (주간 총량 보전)
-            day["slots"].append(_cardio(20 if days_per_week <= 2 else 15))
+            # 근력은 그대로 두고 **밀도만** 올린다 (§CUT 서킷화 주석).
+            day["slots"] = [_to_circuit(s) for s in day["slots"]]
+            # 유산소는 주간 총량이 비슷하게 유지되도록 일수에 반비례해 배분한다.
+            day["slots"].append(_cardio(_cut_cardio_min(days_per_week)))
         days.append(day)
     return days
 
 
 # ── L2 — 약점 부위 볼륨 가중 (D10 확정: 진단은 가중치, 포함/제외 아님) ─────────
 
-#: **근육군 하나**가 주간에 받을 수 있는 추가 세트 상한.
+#: 근육군 하나가 주간에 받는 추가 세트 상한 — **우선 부위 1개 기준**.
 #:
-#: ⚠️ 2026-08-14 정정: 이전에는 *부위(part)* 별로 4세트씩 독립 예산이었다.
-#:    여러 부위가 같은 근육군에 매핑되면 중복 가산된다 — 실측으로 확인했다:
-#:      Left_Upper_Arm + Right_Upper_Arm 이 둘 다 우선 부위 → 둘 다 ("이두","삼두")
-#:      → 이두 3 → 5, 삼두 3 → 5 로 각각 +2 씩 이중 가산
-#:    진단 feature 는 좌우로 갈리지만 **운동은 좌우를 함께 한다.** 그래서
-#:    예산은 진단 단위가 아니라 **실제 볼륨이 쌓이는 단위(근육군)** 로 잡아야 한다.
+#: ⚠️ 2026-08-15 재정정: 좌우가 **둘 다** 약하면 예산을 2배로 준다.
+#:
+#:    08-14 에는 "운동은 좌우를 함께 하니 근육군 예산 하나로 묶어야 한다"고
+#:    보고 이중 가산을 막았다. 그런데 그건 **두 개의 다른 문제를 하나로 뭉갠**
+#:    것이었다:
+#:
+#:      양쪽 다 약함  = 그 근육군의 **절대 볼륨 부족** → 볼륨을 더 올려야 한다
+#:      한쪽만 약함   = **좌우 불균형**  → 볼륨이 아니라 단측 운동으로 교정한다
+#:
+#:    처방이 다르므로 예산도 달라야 한다. 양팔이 다 약한 사람과 왼팔만 약한
+#:    사람에게 같은 볼륨을 주면 전자는 부족하고 후자는 불균형이 안 고쳐진다.
+#:
+#:    근거 — 단측 훈련이 비대칭 교정에 효과적이고 양측 훈련은 그렇지 않다
+#:    (Front Physiol 2023 메타분석). 비대칭 10~15% 초과 시 부상 위험 상승.
+#:    → 한쪽만 약하면 `asymmetric_parts` 경로가 단측 운동을 우선 배치한다.
+#:
+#:    상한은 WEEKLY_GROUP_SET_CAP 이 최종적으로 막는다.
 WEEKLY_BOOST_CAP_PER_GROUP = 4
+
+#: 같은 근육군에 매핑된 우선 부위가 여럿일 때 예산 배수의 상한.
+#: 좌우 2개까지만 인정한다 — 상완·전완이 같은 근육군을 공유하는 경우까지
+#: 배수로 세면 한 근육군에 볼륨이 과하게 몰린다.
+BOOST_MULTIPLIER_CAP = 2
 
 #: 근육군 주간 총 세트 운영 상한.
 #: ⚠️ 생리학적 절대 상한이 아니다. Schoenfeld 2017 (PMID 27433992) 은 ~10세트/주
@@ -210,10 +292,6 @@ WEEKLY_GROUP_SET_CAP = 20
 #: 근육군은 코드가 이미 확정했으므로 여기서 결정할 수 있다.
 SLOT_SETS_CAP_COMPOUND = 4
 SLOT_SETS_CAP_ISOLATION = 5
-
-#: 복합 다관절이 주로 배치되는 근육군.
-_COMPOUND_GROUPS = frozenset({"가슴", "등", "대퇴사두", "햄스트링·둔근", "어깨"})
-
 
 def slot_sets_cap(muscle_group: str) -> int:
     """그 근육군 슬롯이 가질 수 있는 최대 세트 수."""
@@ -240,12 +318,23 @@ def apply_weakness_boost(
        볼륨을 그대로 받는다 (D10 — 기본 볼륨의 근거는 가이드라인이다).
     """
     added: dict[str, int] = {}
+    targets = priority_parts[:max_parts]
 
-    # 근육군별로 공유하는 가산 예산. 부위가 몇 개든 근육군 하나당 이 값이 상한이다.
-    group_budget: dict[str, int] = {}
+    # 근육군별 예산 = 기본값 × (그 근육군을 가리키는 우선 부위 수, 최대 2배).
+    # 좌우가 둘 다 약하면 절대 볼륨이 부족한 것이므로 예산을 2배로 준다
+    # (상수 주석의 "양쪽 다 약함 vs 한쪽만 약함" 참고).
+    demand: dict[str, int] = {}
+    for part in targets:
+        for group in part_to_slots.get(part, ()):
+            demand[group] = demand.get(group, 0) + 1
+
+    group_budget: dict[str, int] = {
+        g: WEEKLY_BOOST_CAP_PER_GROUP * min(n, BOOST_MULTIPLIER_CAP)
+        for g, n in demand.items()
+    }
     weekly = weekly_sets_by_group(days)
 
-    for part in priority_parts[:max_parts]:
+    for part in targets:
         groups = set(part_to_slots.get(part, ()))
         if not groups:
             continue
@@ -258,7 +347,7 @@ def apply_weakness_boost(
                 if group not in groups:
                     continue
 
-                budget = group_budget.setdefault(group, WEEKLY_BOOST_CAP_PER_GROUP)
+                budget = group_budget.get(group, 0)
                 if budget <= 0:
                     continue
                 if weekly.get(group, 0) >= WEEKLY_GROUP_SET_CAP:

@@ -11,10 +11,16 @@
    Storage 에 올릴 필요가 없다. 사람 몸 사진이라, 안 쓸 사진은 서버에 아예
    안 남기는 편이 낫다.
 
-⚠️ **판정에 실패하면 통과시킨다 (fail-open).** OpenAI 가 느리거나 죽었을 때
-   업로드가 통째로 막히면 시연이 멈춘다. 나쁜 사진 하나가 들어오는 것보다
-   서비스 전체가 서는 게 더 큰 손해라는 판단이다.
-   ⚠️ 실사용으로 가면 이 판단을 다시 해야 한다 — 그때는 막는 쪽이 맞을 수 있다.
+⚠️ **판정에 실패하면 막는다 (fail-closed, 2026-08-16).** 저장하지 않고
+   "일시적 오류, 잠시 후 다시 시도" (503) — 반려(422)가 아니다. 사진이 나쁜 게
+   아니라 검사기가 아픈 것이므로, 재촬영이 아니라 재시도를 안내해야 정직하다.
+   ⚠️ 원래는 fail-open(통과 처리)이었다. 시연이 멈추는 것보다 낫다는 판단이었는데
+      뒤집었다 — 2차가 거르는 것 중 **헐렁한 옷은 사후 검증(픽셀 수)이 못 잡는다**
+      (옷 픽셀이 부위로 병합돼 픽셀 수는 멀쩡하다). 검사 없이 들여보내면 잘못된
+      굵기 진단이 정상 결과처럼 나간다 — 그건 시연에서도 더 나쁘다. 몸 사진을
+      검사 없이 저장하지 않는다는 원칙과도 일치한다.
+   ⚠️ 설정으로 껐거나(mock·API 키 없음) 레퍼런스를 못 읽은 경우는 지금도
+      건너뛰고 통과다 — 그건 장애가 아니라 환경의 의도된 상태다.
 
 ⚠️ 왜 동기인가 — 목적이 **재촬영 유도**다. 비동기로 돌리면 사용자가 다음 화면으로
    넘어간 뒤에 "다시 찍으세요"가 뜬다. 그러면 이 판정을 넣은 이유가 없어진다.
@@ -36,12 +42,21 @@ from app.services import images
 log = logging.getLogger("services.photo_screening")
 
 
+class ScreeningUnavailable(Exception):
+    """VLM 장애·타임아웃·응답 해석 불가로 **판정 자체를 못 한** 경우.
+
+    ⚠️ "부적합"(suitable=False)과 다르다 — 사진에 대해 아무것도 알아내지
+       못했다는 뜻이다. 라우터는 이걸 받아 503으로 바꾼다 (사진 저장 안 함).
+    """
+
+
 @dataclass
 class ScreenResult:
     """판정 결과.
 
-    skipped=True 는 "판정을 못 했다"는 뜻이다 (설정으로 껐거나 VLM 실패).
-    이때 suitable 은 항상 True — fail-open 이다.
+    skipped=True 는 "판정을 건너뛰었다"는 뜻이다 (설정으로 껐거나 mock,
+    레퍼런스 없음). 이때 suitable 은 항상 True. VLM 장애는 여기 안 온다 —
+    ScreeningUnavailable 예외로 나간다.
     """
 
     suitable: bool
@@ -82,7 +97,7 @@ def _jpeg_for_vlm(image: bytes | Image.Image) -> bytes:
 
 
 def _to_result(data: dict) -> ScreenResult | None:
-    """검증된 JSON → ScreenResult. 모양이 아니면 None (→ 통과 처리).
+    """검증된 JSON → ScreenResult. 모양이 아니면 None (→ 검사 불가 처리).
 
     ⚠️ 코드펜스·앞뒤 설명을 벗겨내던 코드가 있었는데 지웠다. vlm.call_json() 이
        JSON 모드(response_format=json_object)로 부르므로 항상 dict 로 온다.
@@ -105,7 +120,8 @@ def _to_result(data: dict) -> ScreenResult | None:
 async def screen(user_image: bytes | Image.Image, reference_image: bytes | None) -> ScreenResult:
     """두 사진이 비교 가능한지 판정한다.
 
-    **예외를 던지지 않는다** — 어떤 실패든 통과로 처리한다.
+    VLM 장애·타임아웃·응답 해석 불가면 **ScreeningUnavailable 을 던진다** —
+    판정 없이 통과시키지 않는다 (모듈 주석의 fail-closed 참조).
 
     ⚠️ reference_image 가 없으면 판정을 건너뛴다. 한 장만 보면 원근 불일치를
        못 잡는데, 그 상태로 "검사했다"고 하면 통과 의미가 달라진다.
@@ -141,16 +157,16 @@ async def screen(user_image: bytes | Image.Image, reference_image: bytes | None)
             timeout=settings.photo_screening_timeout_sec,
         )
     except asyncio.TimeoutError:
-        log.warning("2차 검사 타임아웃 (%.0fs) — 통과 처리", settings.photo_screening_timeout_sec)
-        return _PASS
-    except Exception:  # noqa: BLE001 — 어떤 실패든 업로드를 막지 않는다
-        log.exception("2차 검사 실패 — 통과 처리")
-        return _PASS
+        log.warning("2차 검사 타임아웃 (%.0fs) — 검사 불가", settings.photo_screening_timeout_sec)
+        raise ScreeningUnavailable("timeout") from None
+    except Exception as e:  # noqa: BLE001
+        log.exception("2차 검사 실패 — 검사 불가")
+        raise ScreeningUnavailable("vlm_error") from e
 
     result = _to_result(parsed)
     if result is None:
-        log.warning("2차 검사 응답을 해석하지 못함 — 통과 처리: %.200s", parsed)
-        return _PASS
+        log.warning("2차 검사 응답을 해석하지 못함 — 검사 불가: %.200s", parsed)
+        raise ScreeningUnavailable("unparseable_response")
 
     if not result.suitable and not result.message:
         # 모델이 message 를 빠뜨린 경우. 사용자에게 빈 문구를 보여줄 수는 없다.

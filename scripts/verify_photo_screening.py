@@ -109,11 +109,16 @@ async def main() -> int:
         verdicts: list[bool] = []
 
         for i in range(args.repeat):
-            result, elapsed = await _run_one(reference, path)
+            try:
+                result, elapsed = await _run_one(reference, path)
+            except photo_screening.ScreeningUnavailable as e:
+                skipped += 1
+                print(f"\n{path.name}\n  ⚠️ 판정 불가({e}) — 실서비스라면 503 재시도 안내")
+                continue
 
             if result.skipped:
                 skipped += 1
-                print(f"\n{path.name}\n  ⚠️ 판정 실패 → 통과 처리(fail-open). {elapsed:.1f}초")
+                print(f"\n{path.name}\n  ⚠️ 판정 건너뜀 (설정·레퍼런스 문제). {elapsed:.1f}초")
                 continue
 
             verdicts.append(result.suitable)

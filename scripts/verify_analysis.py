@@ -376,6 +376,21 @@ def test_citation_routing() -> None:
     )
     check("인바디가 없으면 인용 없음", _citation_targets(part_to_segment, metrics, None) == {})
 
+    # ⚠️ lean_percentage 는 DB 컬럼이 아니라 raw_ocr 에서 읽는 선택값이다
+    #    (inbody_repo.to_prompt_payload). 없다고 인용을 통째로 없애면 인바디를
+    #    제출했는데 수치가 한 번도 안 나온다 — 면적 격차 순으로 폴백하되 상한은 유지.
+    no_pct = {
+        "body": {},
+        "segments": {"LEFT_ARM": {"lean_mass": 2.4}, "TRUNK": {"lean_mass": 24.0}},
+    }
+    fallback = _citation_targets(part_to_segment, metrics, no_pct)
+    check("표준 대비 %가 없어도 인용은 남음", len(fallback) == 2, str(fallback))
+    check(
+        "폴백도 전완은 제외",
+        "Left_Lower_Arm" not in fallback.values(),
+        str(fallback),
+    )
+
     # 프롬프트에 [인용] 이 대표 부위 줄에만 붙는지
     parts = [
         {"class_name": n, "name_ko": n, "color_hex": "#111111", "inbody_segment": s}

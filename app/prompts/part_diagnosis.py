@@ -134,7 +134,8 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 
 - class_name    : 범례에 있는 이름 그대로. 임의로 바꾸지 마세요.
 - differences   : **이미지에서 눈으로 본 것만** 적습니다. 0~2개의 짧은 배열.
-- assessment    : 한국어 1~2문장. 사용자에게 그대로 보여집니다. (아래 §문체 참고)
+- assessment    : 한국어. 사용자에게 그대로 보여집니다.
+                  **길이는 격차에 비례합니다** — 아래 §길이. (문체는 §문체)
 - gap_level     : NONE | SLIGHT | MODERATE | SIGNIFICANT (판단 불가면 null)
                   레퍼런스와의 격차입니다. NONE 은 이미 근접했다는 뜻입니다.
 - priority      : 1~5 정수. 1이 가장 시급.
@@ -164,6 +165,40 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 
 이미 목표에 도달한 부위입니다. "조금 더 늘리면 좋습니다" 같은 말을 붙이면
 사용자는 모든 부위가 부족하다고 읽습니다. **유지하라고만** 하세요.
+
+### 길이 — 아홉 문장이 같은 길이면 그게 판정표입니다
+
+문장 수를 격차에 맞추세요. 중요한 것은 자세히, 사소한 것은 짧게. 이 차이가
+"부위별 판정표"와 "코칭"을 가릅니다.
+
+| gap_level | 길이 | 담을 것 |
+|---|---|---|
+| SIGNIFICANT | 2~3문장 | 무엇이 어떻게 다른지 **구체적으로** + 개선 방향 |
+| MODERATE | 1~2문장 | 현재 상태와 목표의 차이 중심 |
+| SLIGHT | **1문장** | 짧게. 사소한 차이를 부풀리지 마세요 |
+| NONE | **1문장** | 차이가 없다고 명확히. 문제를 만들지 마세요 |
+
+⚠️ SLIGHT·NONE 에 두 문장을 쓰면 사소한 차이가 중요한 문제로 읽힙니다.
+   "약간 가는 편이지만 큰 차이는 아닙니다" 로 끝내면 충분합니다.
+
+### 운동 효과를 단정하지 마세요
+
+이 진단은 사진 비교입니다. 특정 운동이 결과를 보장한다고 말할 근거가 없습니다.
+
+    X "덤벨 컬을 하면 팔 근육량이 증가합니다"
+    O "상완 발달에는 컬 계열 운동을 우선 두는 방향이 적합합니다"
+
+마찬가지로 이미지에서 확인할 수 없는 것(실제 근육량·체지방·골격·건강 상태)을
+단정하지 마세요. "~로 보입니다 / ~한 편입니다 / ~방향이 적합합니다" 로 씁니다.
+
+### 반복 표현 — 아래는 두 번 이상 쓰지 마세요
+
+실제 출력에서 아홉 카드가 이 표현들로 도배됐습니다. 같은 뜻이라도 문맥에 맞게
+달리 쓰세요.
+
+    "목표 체형보다 부족합니다"      "목표 체형보다 가늘어 보입니다"
+    "~운동을 해보세요"              "~강화해보세요"
+    "현재 운동량을 유지하세요"
 
 ### 어떤 두 부위도 같은 문장이면 안 됩니다
 
@@ -250,9 +285,10 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 {
   "class_name": "(범례의 부위명)",
   "differences": ["(이 이미지에서 직접 본 것. 없으면 빈 배열)"],
-  "assessment": "목표 체형에 비해 왼팔이 눈에 띄게 가늡니다. 인바디로도 왼팔 전체 근육량이 평균의 82% 수준이라 실측이 같은 방향을 가리킵니다. 덤벨 컬처럼 팔을 굽히는 운동부터 시작해보세요.",
+  "assessment": "어깨에서 팔꿈치로 이어지는 선이 목표 체형보다 완만하고, 팔을 내렸을 때 윤곽이 거의 드러나지 않습니다. 왼팔 전체 근육량도 평균의 82% 수준이라 실측이 같은 방향을 가리킵니다. 팔을 굽혀 드는 운동(덤벨 컬)을 우선 두는 방향이 적합합니다.",
   "gap_level": "SIGNIFICANT", "priority": 1, "confidence": "HIGH", "blocked_reason": null
 }
+↑ SIGNIFICANT 는 이렇게 **무엇이 어떻게 다른지**까지 씁니다. "가늡니다" 한 마디로 끝내지 마세요.
 
 인바디는 평균 수준인데 목표와는 먼 부위 — **표준 대비 %로 격차를 낮추지 마세요**:
 {
@@ -267,15 +303,17 @@ SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
   "gap_level": "SLIGHT", "priority": 4, ...
 }
 
-목표 도달 부위 — 좌우 방향으로 쌍과 구분, 유지만:
+목표 도달 부위 — **각각 한 문장.** 좌우 방향으로만 구분하고, 없는 문제를 만들지 않습니다:
 {
-  "assessment": "오른쪽 허벅지는 이미 목표 수준을 넘었고, 왼쪽보다도 살짝 앞서 있습니다. 지금 하던 운동량을 그대로 유지하면 됩니다.",
+  "assessment": "오른쪽 허벅지는 목표 수준을 이미 넘어섰습니다.",
   "gap_level": "NONE", "priority": 5, ...
 }
 {
-  "assessment": "왼쪽 허벅지도 목표 수준입니다. 오른쪽과의 차이는 눈에 띌 정도는 아닙니다.",
+  "assessment": "왼쪽 허벅지도 목표에 도달해 있고, 오른쪽과의 차이는 눈에 띌 정도가 아닙니다.",
   "gap_level": "NONE", "priority": 5, ...
 }
+↑ 두 문장으로 늘리거나 "현재 운동량을 유지하세요"를 붙이지 마세요 — 차이가 없는
+   부위에 할 말을 만들면 아홉 카드가 다시 같은 길이가 됩니다.
 
 옷에 가린 부위 — **지금 이미지에서 실제로 가려진 경우에만** (인바디가 유일한 근거이므로 반드시 인용).
 서두를 «인바디를 보면»으로 고정하지 마세요 — 아래처럼 실측을 문장 뒤에 놓아도 됩니다:
@@ -505,6 +543,8 @@ def _citation_targets(
     """
     rows = metrics.get("parts") or {}
     segments = (inbody or {}).get("segments") or {}
+    if not segments:
+        return {}  # 인바디가 없으면 인용할 수치 자체가 없다
 
     # 세그먼트별 대표 부위 — 면적 격차가 가장 큰 부위. 전완은 후보에서 뺀다.
     best: dict[str, tuple[str, float]] = {}
@@ -516,15 +556,22 @@ def _citation_targets(
         if segment not in best or magnitude > best[segment][1]:
             best[segment] = (part, magnitude)
 
-    # 표준 대비 % 편차가 큰 세그먼트 순. 수치가 없으면 인용할 게 없으므로 제외한다.
-    ranked = []
-    for segment, (part, _) in best.items():
-        pct = (segments.get(segment) or {}).get("lean_percentage")
-        if pct is None:
-            continue
-        ranked.append((abs(pct - 100), segment, part))
+    # 표준 대비 % 편차가 큰 세그먼트 순.
+    ranked = [
+        (abs(pct - 100), segment, part)
+        for segment, (part, _) in best.items()
+        if (pct := (segments.get(segment) or {}).get("lean_percentage")) is not None
+    ]
 
-    ranked.sort(key=lambda r: (-r[0], r[1]))  # 편차 내림차순, 동률이면 이름순(재현성)
+    # ⚠️ 폴백 — lean_percentage 는 **DB 컬럼이 아니라 raw_ocr 에서 읽는 선택값**이다
+    #    (inbody_repo.to_prompt_payload). OCR 이 못 잡았거나 사용자가 PATCH 로 고친
+    #    인바디에는 없을 수 있다. 그때 인용을 통째로 없애면 인바디를 제출했는데도
+    #    진단문에 수치가 한 번도 안 나온다 — 편차를 못 재는 것이지 근거가 없는 게
+    #    아니다. 순위 기준만 면적 격차로 바꾸고 상한(2곳)은 그대로 간다.
+    if not ranked:
+        ranked = [(magnitude, segment, part) for segment, (part, magnitude) in best.items()]
+
+    ranked.sort(key=lambda r: (-r[0], r[1]))  # 큰 순, 동률이면 이름순(재현성)
     return {segment: part for _, segment, part in ranked[:_CITATION_MAX]}
 
 

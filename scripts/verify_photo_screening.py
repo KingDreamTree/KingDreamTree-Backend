@@ -103,6 +103,7 @@ async def main() -> int:
     mismatches: list[str] = []
     unstable: list[str] = []
     skipped = 0
+    judged = 0
 
     for path in targets:
         expected = _expected(path)
@@ -120,6 +121,8 @@ async def main() -> int:
                 skipped += 1
                 print(f"\n{path.name}\n  ⚠️ 판정 건너뜀 (설정·레퍼런스 문제). {elapsed:.1f}초")
                 continue
+
+            judged += 1
 
             verdicts.append(result.suitable)
             mark = "통과" if result.suitable else "반려"
@@ -148,8 +151,17 @@ async def main() -> int:
         print(f"⚠️ 같은 사진인데 판정이 갈린 것: {', '.join(unstable)}")
         print("   → 경계선에 있는 사진이거나 프롬프트가 모호하다는 뜻이다.")
 
+    # ⚠️ 판정을 못 했으면 **성공이 아니다.** 실측(2026-08-16) — 설정 문제로 8건이
+    #    전부 건너뛰었는데 마지막 줄이 "기대와 다른 판정 없음 ✅" 였다. 아무것도
+    #    검증하지 않고 초록불을 띄우면, 검사를 돌렸다는 사실이 오히려 해가 된다.
+    if skipped:
+        print(f"\n🔴 {skipped}건을 판정하지 못해 검증이 성립하지 않습니다.")
+        print("   PHOTO_SCREENING_ENABLED / OPENAI_API_KEY / USE_MOCK 을 확인하세요")
+        print("   (0.0초로 건너뛰었다면 API 를 부르지도 못한 것입니다).")
+        return 1
+
     if not mismatches:
-        print("기대와 다른 판정 없음 ✅")
+        print(f"기대와 다른 판정 없음 ✅ ({judged}건 판정)")
         return 0
 
     print(f"기대와 다른 판정 {len(mismatches)}건:")

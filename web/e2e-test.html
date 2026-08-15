@@ -1036,6 +1036,11 @@ function renderDiag(d) {
      <td class="${cls[p.gap_level] || "dim"}">${p.gap_level ?? "판단 불가"}</td>
      <td class="dim">${p.confidence ?? "—"}</td>
      <td>${p.assessment || `<span class="dim">${p.blocked_reason || ""}</span>`}
+         ${/* ⚠️ 진단문이 있어도 blocked 면 배지를 띄운다 — 눈으로 본 게 아니라
+               인바디로 판단한 부위라 근거의 종류가 다르다. assessment 가 없을
+               때만 보여주면 이 케이스가 화면에서 통째로 사라진다. */
+           p.assessment && p.blocked_reason
+            ? `<div class="warn" style="margin-top:3px">[${p.blocked_reason}]</div>` : ""}
          ${p.differences?.length
             ? `<div class="dim" style="margin-top:3px">${p.differences.join(" · ")}</div>` : ""}
      </td></tr>`).join("")

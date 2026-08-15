@@ -151,6 +151,74 @@ BEGINNER_UNSAFE_TERMS: tuple[str, ...] = (
 )
 
 
+#: 착지 충격이 큰(체중이 관절에 반복 낙하하는) 동작.
+#:
+#: ⚠️ BEGINNER_UNSAFE_TERMS 와 **겹치지만 목적이 다르다.** 저쪽은 "초보가
+#:    못 한다"이고 이쪽은 "체중이 무거우면 관절이 못 버틴다"다. CARDIO 는
+#:    is_beginner_safe 가 항상 통과시키므로(점핑잭·버피는 초보 유산소의 기본)
+#:    유산소 쪽 충격 판정은 이 목록이 단독으로 책임진다.
+#:
+#: 근거 — 무릎 관절 반력은 걷기 체중의 ~3배, 달리기 ~8배까지 오른다.
+#:    체지방(체중)이 높을수록 같은 동작의 절대 부하가 커지고, 비만은 무릎
+#:    골관절염의 독립 위험인자다. ACSM 도 비만 대상자에게 저충격·비체중부하
+#:    유산소(자전거·일립티컬·수중)를 권고한다.
+HIGH_IMPACT_TERMS: tuple[str, ...] = (
+    "run",  # "Run on Treadmill" — 워킹은 walk 라 안 걸린다
+    "running",
+    "sprint",
+    "jog",
+    "jump rope",
+    "jumping",
+    "jump",
+    "burpee",
+    "high knee",
+    "mountain climber",
+    "skater",
+    "plyo",
+    "hop",
+)
+
+
+#: 이름에 무슨 단어가 들어있든 **장비가 충격을 없애는** 종목.
+#:
+#: ⚠️ 실측에서 잡은 오탐 — "Assault Bike **Run**"·"Stationary Bike **Run**" 이
+#:    `run` 에 걸려 빠졌다. 둘 다 발이 페달에 붙어 있어 착지 충격이 0 인데,
+#:    하필 저충격 유산소의 대표 종목이라 빠지면 손해가 크다.
+#:    충격은 **동작 이름이 아니라 지지 방식**이 정하므로 장비를 먼저 본다.
+LOW_IMPACT_MODALITIES: tuple[str, ...] = (
+    "bike",
+    "cycle",
+    "cycling",
+    "elliptical",
+    "stepper",
+    "rowing",
+    "row machine",
+    "ski erg",
+)
+
+
+def _high_impact_pattern() -> re.Pattern[str]:
+    parts = []
+    for term in HIGH_IMPACT_TERMS:
+        words = term.replace("-", " ").split()
+        parts.append(r"\s+".join(re.escape(w) for w in words) + "s?")
+    return re.compile(r"\b(?:" + "|".join(parts) + r")\b")
+
+
+_HIGH_IMPACT_RE = _high_impact_pattern()
+
+
+def is_low_impact(name: str) -> bool:
+    """착지 충격이 낮은 동작인가. 체지방이 높은 사용자의 유산소 선정에 쓴다.
+
+    장비 판정이 먼저다 — 자전거·일립티컬은 이름에 "Run" 이 붙어도 저충격이다.
+    """
+    normalized = " ".join((name or "").lower().replace("-", " ").split())
+    if any(m in normalized for m in LOW_IMPACT_MODALITIES):
+        return True
+    return not _HIGH_IMPACT_RE.search(normalized)
+
+
 def _unsafe_pattern() -> re.Pattern[str]:
     """제외 용어를 단어 경계 + 복수형 허용으로 매칭하는 정규식.
 
@@ -240,16 +308,22 @@ def candidates_for_slot(
     *,
     beginner_only: bool = True,
     prefer_single_side: bool = False,
+    prefer_low_impact: bool = False,
     limit: int = 12,
 ) -> list[dict[str, Any]]:
     """슬롯 하나의 후보 운동 목록. LLM 은 이 안에서만 고른다.
 
     정렬 우선순위 (앞일수록 먼저):
-        ① 주동근 일치    targetMuscles ∩ SLOT_TARGET_MUSCLES — 이두/삼두처럼
+        ① 저충격        체지방이 높을 때만 (prefer_low_impact) — 관절 보호가
+                        종목 적합성보다 앞선다
+        ② 주동근 일치    targetMuscles ∩ SLOT_TARGET_MUSCLES — 이두/삼두처럼
                         bodyParts 가 같은 슬롯을 정밀하게 가른다
-        ② 장비 운동      헬스장 전제이므로 장비 운동을 앞세운다
-        ③ 복합 운동      ACSM: 초보자에게 다관절 강조
-        ④ 단측 운동      좌우 비대칭이 클 때만 (prefer_single_side)
+        ③ 장비 운동      헬스장 전제이므로 장비 운동을 앞세운다
+        ④ 복합 운동      ACSM: 초보자에게 다관절 강조
+        ⑤ 단측 운동      좌우 비대칭이 클 때만 (prefer_single_side)
+
+    ⚠️ 저충격은 근력에서 **필터가 아니라 우선순위**다. 유산소와 달리 근력
+       후보는 슬롯별로 수가 적어서, 걸러내면 슬롯이 비는 쪽이 더 위험하다.
 
     ⚠️ 장비 운동은 **우선순위이지 필터가 아니다.** 수집된 200개 중 79%가
        BODY WEIGHT 라, 장비로 걸러내면 이두·삼두 슬롯의 후보가 0개가 된다.
@@ -271,9 +345,11 @@ def candidates_for_slot(
     primary = SLOT_TARGET_MUSCLES.get(slot, set())
 
     def rank(e: dict[str, Any]) -> tuple:
-        single = any(h in (e.get("name_en") or "").lower() for h in SINGLE_SIDE_HINTS)
+        name = e.get("name_en") or ""
+        single = any(h in name.lower() for h in SINGLE_SIDE_HINTS)
         muscle_hit = bool(primary & set(e.get("target_muscles") or []))
         return (
+            not (prefer_low_impact and is_low_impact(name)),
             not muscle_hit,
             not _uses_equipment(e),
             not _is_compound(e),
@@ -287,6 +363,7 @@ def candidates_for_slot(
 def cardio_candidates(
     catalog: list[dict[str, Any]],
     *,
+    low_impact_only: bool = False,
     limit: int = 8,
 ) -> list[dict[str, Any]]:
     """CUT 모드 유산소 후보.
@@ -294,8 +371,18 @@ def cardio_candidates(
     ⚠️ bodyParts 에 CARDIO 가 없으므로 `exercise_type` 으로만 판별한다.
        실측 15개 중 트레드밀·일립티컬·어썰트바이크·스테퍼 등 헬스장 장비 운동이
        충분히 있어 D3(유산소 슬롯 배치)가 실현 가능하다.
+
+    Args:
+        low_impact_only: 체지방률이 높아 CUT 으로 판정된 사용자에게 True.
+            달리기·줄넘기·버피를 후보에서 **뺀다** (§HIGH_IMPACT_TERMS).
+            ⚠️ 걸러낸 결과가 비면 필터를 포기하고 원래 풀로 돌아간다 —
+               유산소 슬롯이 통째로 비는 것보다 고충격이라도 있는 게 낫다.
     """
     pool = [e for e in catalog if e.get("exercise_type") == "CARDIO"]
+    if low_impact_only:
+        safe = [e for e in pool if is_low_impact(e.get("name_en") or "")]
+        if safe:
+            pool = safe
     # 장비(머신) 유산소를 앞에 — 헬스장 전제이고 강도 조절이 쉽다
     ranked = sorted(pool, key=lambda e: (not _uses_equipment(e), e.get("name_en") or ""))
     return _dedupe_by_name(ranked)[:limit]

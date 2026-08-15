@@ -49,12 +49,16 @@ import { poseScore, framingScore, facingDelta, evaluate, oksScore, createHoldGat
          KEYPOINT_SIGMA, COCO_17, COCO_BODY_12, COCO_FROM_MEDIAPIPE, IDX }
   from "./pose-score.js";
 
-// 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md · 2026-08-14 재조정)
+// 서버가 내려주는 기준과 같은 값 (docs/pose-scoring.md · 2026-08-16 n_hold 30)
 const C = {
   tol_deg: 60, hard_tol_deg: 70, threshold: 70,
   f_min: 0.65, f_hard: 0.40, min_seg_ratio: 0.25,
-  min_visible_angles: 4, min_visibility: 0.5, n_hold: 10,
+  min_visible_angles: 4, min_visibility: 0.5, n_hold: 30,
 };
+
+// 홀드 테스트 전용 — 게이트 "논리"는 n_hold 값과 무관하므로 수열이 짧고
+// 읽기 쉬운 10(여유 3)으로 고정해서 검사한다. 실제 값은 위 C(30, 여유 9).
+const C_HOLD = { ...C, n_hold: 10 };
 
 // ── 시험용 골격 만들기 ────────────────────────────────────────────────────
 // 어깨·골반을 고정하고 "방향(도)"으로 팔다리를 뻗는다.
@@ -279,10 +283,10 @@ const tests = [
   },
   {
     name: "홀드 — 한 프레임 튀어도 리셋되지 않는다",
-    why: "★★ lite 모델은 수시로 튄다. 연속 조건이면 통과선 근처에서 영영 안 찍혔다. 최근 n_hold+3 창에서 n_hold 개면 발사",
+    why: "★★ lite 모델은 수시로 튄다. 연속 조건이면 통과선 근처에서 영영 안 찍혔다. 최근 n_hold+30% 창에서 n_hold 개면 발사",
     expect: true,
     run: () => {
-      const g = createHoldGate(C);
+      const g = createHoldGate(C_HOLD);
       let fired = false;
       for (const ok of [1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1]) if (g(Boolean(ok))) fired = true;
       return fired;
@@ -293,7 +297,7 @@ const tests = [
     why: "★ 완화의 반대쪽 경계. 손이 지나가다 우연히 몇 프레임 맞은 것으로는 셔터가 안 나가야 한다",
     expect: false,
     run: () => {
-      const g = createHoldGate(C);
+      const g = createHoldGate(C_HOLD);
       let fired = false;
       for (const ok of [0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0]) if (g(Boolean(ok))) fired = true;
       return fired;

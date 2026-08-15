@@ -123,7 +123,6 @@ def main() -> int:
     # ── 2. 정적 서버 ──────────────────────────────────────────────────────
     _serve_web()
     live = f"http://localhost:{WEB_PORT}/pose-live.html"
-    demo = f"http://localhost:{WEB_PORT}/pose-demo.html"
     tests = f"http://localhost:{WEB_PORT}/pose-score.test.html"
     e2e = f"http://localhost:{WEB_PORT}/e2e-test.html"
 
@@ -131,7 +130,6 @@ def main() -> int:
     print("=" * 62)
     print(f"  전 구간    {e2e}       ← 사진 2장 → 진단 → 루틴")
     print(f"  실서비스형 {live}      ← 사진 올리고 따라 서기")
-    print(f"  실험용     {demo}      ← 웹캠으로 기준까지 잡기")
     print(f"  자가진단   {tests}")
     print("=" * 62)
     print()

@@ -159,7 +159,11 @@ def parse_landmarks(raw: str | None) -> list[dict[str, Any]]:
                 "x": x,
                 "y": y,
                 "z": float(item.get("z", 0.0)),
-                "visibility": float(item.get("visibility", 0.0)),
+                # ⚠️ visibility 누락 기본값은 1.0(보임) — 프론트 규약(pose-score.js
+                #    vis(): 안 주면 1)과 같아야 한다. 0.0 으로 저장하면 이 랜드마크를
+                #    GET /photos/reference 로 되돌려받은 촬영 화면이 **모든 관절을
+                #    "안 보임"으로 걸러** 전신이 다 나와도 영구 판정불가가 된다.
+                "visibility": float(item.get("visibility", 1.0)),
             }
         )
     return out
@@ -216,6 +220,23 @@ def _ensure_range(name: str, value: float, low: float, high: float) -> None:
 def ensure_single_person(multi_person: bool) -> None:
     if multi_person:
         raise multi_person_error()
+
+
+def ensure_observation_ranges(
+    pose_oks: float | None = None,
+    person_area_ratio: float | None = None,
+) -> None:
+    """관찰용 필드의 범위 검사 — 판정에는 안 쓰지만 저장은 되므로 여기서 잡는다.
+
+    ⚠️ 이 검사가 없으면 단위 착오(oks 를 0~100 으로 보내는 등)가 판정을 통과한
+       **뒤** DB CHECK 에서 500 으로 터진다. 그 시점엔 이전 사진이 이미 교체돼
+       있어 사용자가 무사진 상태로 남는다 — 판정 전에 400 으로 돌려보내야
+       프론트가 자기 실수를 알 수 있다.
+    """
+    if pose_oks is not None:
+        _ensure_range("pose_oks", pose_oks, 0.0, 1.0)
+    if person_area_ratio is not None:
+        _ensure_range("pose_person_area_ratio", person_area_ratio, 0.0, 1.0)
 
 
 def ensure_same_scale_basis(reference_basis: str | None, user_basis: str | None) -> None:

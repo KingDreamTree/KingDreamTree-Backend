@@ -379,9 +379,11 @@ def segment(
         model_version=model_version(size),
         person_pixel_count=person_pixel_count,
         person_area_ratio=min(person_pixel_count / (w * h), 1.0),
-        # ⚠️ Background(0)는 빼고 센다. 넣으면 parts 개수와 늘 1 이 어긋나서
-        #    "검출 12개인데 목록은 11개"가 된다. 화면에 나가는 숫자다.
-        detected_class_count=int(np.count_nonzero(np.unique(labels))),
+        # ⚠️ Background(0)는 빼고, **병합 후(stat_labels) 기준**으로 센다.
+        #    parts 를 만든 배열과 같아야 한다 — 원본 labels 로 세면 옷 클래스가
+        #    전부 흡수됐을 때 "검출 12개인데 목록은 11개"가 되는데, 그게 바로
+        #    이 필드가 막겠다던 화면 상태다.
+        detected_class_count=int(np.count_nonzero(np.unique(stat_labels))),
         inference_ms=elapsed_ms,
         parts=parts,
         valid_comparable_raw=valid_raw,

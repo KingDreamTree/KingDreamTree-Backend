@@ -62,11 +62,13 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
         result.person_area_ratio * 100,
     )
 
-    # ⚠️ 기존 파일을 먼저 지운다. 행을 먼저 지우면 어느 파일을 지울지 알 수 없게 된다.
+    # ⚠️ **새 맵을 먼저 올리고, 옛 파일 정리는 행 교체가 끝난 뒤에 한다.**
+    #    옛 맵부터 지우면 그 직후 업로드·행 교체가 실패했을 때(워커 사망 포함)
+    #    살아 있는 segmentation 행이 지워진 파일을 가리킨다 — 조회 API 는 200,
+    #    signed URL 은 404 인 상태로 굳고 뷰어가 통째로 죽는다.
+    #    맵 경로는 결정적이라 같은 자리면 업로드가 곧 덮어쓰기고, 실패 시 남는 건
+    #    기껏해야 고아 파일이다(유저 삭제의 prefix 정리가 걷어간다).
     old = db.get_segmentation(UUID(str(photo_id)))
-    if old:
-        storage.delete_prefix(settings.bucket_body_parts, f"{user_id}/{session_id}/{kind.lower()}")
-        storage.remove(old["storage_bucket"], [old["map_path"]])
 
     map_path = storage.map_path(user_id, session_id, kind)
     storage.upload(settings.bucket_segmentations, map_path, result.map_png, "image/png")
@@ -110,6 +112,16 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
             for p in result.parts
         ],
     )
+
+    # 행 교체까지 끝난 뒤에야 옛 파생물 정리 — 이 시점엔 어느 단계가 실패해도
+    # 상태가 이미 일관적이다. 정리 실패로 잡을 실패시키지 않는다(추론을 다시
+    # 돌리게 되면 그게 더 비싸다).
+    try:
+        storage.delete_prefix(settings.bucket_body_parts, f"{user_id}/{session_id}/{kind.lower()}")
+        if old and old["map_path"] != map_path:
+            storage.remove(old["storage_bucket"], [old["map_path"]])
+    except Exception:  # noqa: BLE001
+        log.exception("옛 파생물 정리 실패 — 고아 파일이 남았을 수 있습니다")
 
     invalid_comparable = [
         {"class_name": p.class_name, "reason": p.invalid_reason}

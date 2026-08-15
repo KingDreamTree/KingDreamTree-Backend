@@ -16,12 +16,18 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    stop_grace_period: 120s
 
   worker:
     build: .
     command: python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
     restart: unless-stopped
     env_file: .env
+    # ⚠️ run.py 의 graceful stop(_handle_signal)은 **현재 잡이 끝나야** 루프를
+    #    빠져나간다. compose 기본 유예는 10초라 VLM 잡(30~90초)이 매 배포마다
+    #    SIGKILL 된다 → 그 잡은 PROCESSING 에 15분 갇혔다 회수되고, 회수되면
+    #    Vision 호출이 한 번 더 나간다. 코드는 이미 있고 유예만 없었다.
+    stop_grace_period: 120s
 
   caddy:
     image: caddy:2

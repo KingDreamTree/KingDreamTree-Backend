@@ -349,7 +349,15 @@ def candidates_for_slot(
         if e.get("exercise_type") == "STRENGTH"
         and _is_actually_strength(e)
         and body_parts & set(e.get("body_parts") or [])
-        and (not beginner_only or e.get("is_beginner_safe", True))
+        # ⚠️ 저장된 is_beginner_safe 를 **읽지 않고 여기서 다시 판정한다.** 수집본
+        #    JSON 의 플래그는 fetch_exercisedb.ADVANCED_KEYWORDS 로 찍혔는데 그
+        #    목록엔 dip·pull up 이 없다. seed 는 BEGINNER_UNSAFE_TERMS 로 재평가하지만
+        #    그건 DB 테이블만 고치고, 런타임은 load_catalog() 로 JSON 을 읽는다.
+        #    → 저장값을 믿으면 초보 루틴에 풀업·체스트딥·점프스쿼트 12종이 들어온다.
+        and (
+            not beginner_only
+            or is_beginner_safe(e.get("name_en") or "", e.get("exercise_type") or "STRENGTH")
+        )
     ]
 
     primary = SLOT_TARGET_MUSCLES.get(slot, set())
@@ -361,9 +369,13 @@ def candidates_for_slot(
         return (
             not (prefer_low_impact and is_low_impact(name)),
             not muscle_hit,
+            # ⚠️ 단측 선호는 **주동근 바로 다음**이어야 한다. 원래 5순위였는데,
+            #    앞의 장비·복합 두 키가 순서를 이미 확정해 버려서 실측 발동률이
+            #    0 이었다 (34c7349 의 좌우 순서 교정이 배선만 되고 안 돌았다).
+            #    prefer_single_side=False 면 항상 True 라 기존 정렬은 안 변한다.
+            not (prefer_single_side and single),
             not _uses_equipment(e),
             not _is_compound(e),
-            not (prefer_single_side and single),
             e.get("name_en") or "",
         )
 

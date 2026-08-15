@@ -92,3 +92,4 @@ tolerance/
 /*.jpeg
 /*.png
 !tests/fixtures/*
+photos*/

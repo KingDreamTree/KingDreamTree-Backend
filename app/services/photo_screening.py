@@ -106,6 +106,16 @@ def _to_result(data: dict) -> ScreenResult | None:
         return None
 
     observed = data.get("observed")
+    # ⚠️ 레퍼런스 관찰은 **별도 최상위 키**로 온다 (프롬프트 §출력의
+    #    observed_reference). 2026-08-16 실측 — 이 키를 안 읽어서 ref_* 가
+    #    통째로 버려졌고, 규칙 7(PART_MISMATCH)은 비교할 레퍼런스 쪽 근거 없이
+    #    판정되고 있었다. 프롬프트에 관찰 단계를 추가(#69)하면서 파서가 따라가지
+    #    않은 것이다. 같은 observed 에 합쳐 뒤 단계가 한 곳만 보면 되게 한다.
+    ref_observed = data.get("observed_reference")
+    if isinstance(observed, dict) and isinstance(ref_observed, dict):
+        observed = {**ref_observed, **observed}
+    elif isinstance(ref_observed, dict):
+        observed = dict(ref_observed)
     rule = data.get("rule")
     return ScreenResult(
         suitable=bool(data.get("suitable")),
@@ -115,6 +125,56 @@ def _to_result(data: dict) -> ScreenResult | None:
         observed=observed if isinstance(observed, dict) else None,
         rule=rule if isinstance(rule, int) else None,
     )
+
+
+#: PART_MISMATCH 판정에 쓰이는 부위 세 개.
+_MISMATCH_PARTS = ("torso", "arms", "legs")
+
+
+def _guard_part_mismatch(result: ScreenResult) -> None:
+    """PART_MISMATCH 를 **코드가 다시 검산한다.** 근거가 없으면 반려를 해제한다.
+
+    ⚠️ 실측(2026-08-16) — 실사진 정상 쌍이 PART_MISMATCH 로 막혔다. 2회 모두,
+       confidence=HIGH. 같은 사진으로 세그멘테이션·진단은 5부위가 정상으로 나온다.
+       fail-closed 와 겹쳐 사용자는 다시 찍어도 진행할 수 없었다.
+
+       모델이 보낸 관찰은 사용자 쪽뿐이었다 (torso True · arms True · legs False).
+       `ref_*_shape_visible` 이 **하나도 오지 않았다.** 규칙 7 은 ref 와 user 를
+       짝지어 "겹치는 부위가 하나도 없을 때"만 반려하라는 것인데, 비교할 ref 쪽이
+       없으니 규칙을 적용할 수가 없다. 그런데도 반려가 나왔다.
+
+    ⚠️ 프롬프트를 고치는 것으로는 부족하다 — 필드를 요구하는 문장은 이미 있고
+       (§관찰 항목) 모델이 안 지켰다. 지시로 안 되는 것은 코드가 막는다.
+
+    두 경우에 반려를 해제한다:
+      1. ref_* 관찰이 없다        → 규칙 7 을 판정할 근거 자체가 없다
+      2. 겹치는 부위가 실제로 있다 → 규칙 7 의 조건("하나도 없다")이 거짓이다
+
+    ⚠️ 해제 방향으로만 동작한다. 통과를 반려로 바꾸지 않는다 — 이 모듈의 원칙은
+       "놓치는 것보다 잘못 막는 게 나쁘다"이고, 놓친 것은 뒤 단계가 잡는다.
+    """
+    if result.suitable or result.reason != "PART_MISMATCH":
+        return
+
+    observed = result.observed or {}
+    ref_seen = {p: observed.get(f"ref_{p}_shape_visible") for p in _MISMATCH_PARTS}
+    user_seen = {p: observed.get(f"{p}_shape_visible") for p in _MISMATCH_PARTS}
+
+    if all(v is None for v in ref_seen.values()):
+        log.warning(
+            "PART_MISMATCH 해제 — 레퍼런스 관찰(ref_*)이 응답에 없어 규칙 7 을 "
+            "판정할 수 없습니다. observed=%s",
+            observed,
+        )
+    elif any(ref_seen.get(p) and user_seen.get(p) for p in _MISMATCH_PARTS):
+        overlap = [p for p in _MISMATCH_PARTS if ref_seen.get(p) and user_seen.get(p)]
+        log.warning("PART_MISMATCH 해제 — 겹치는 부위가 있습니다: %s", ", ".join(overlap))
+    else:
+        return  # 근거가 있고 실제로 겹치는 부위가 없다. 반려 유지.
+
+    result.suitable = True
+    result.reason = None
+    result.message = ""
 
 
 async def screen(user_image: bytes | Image.Image, reference_image: bytes | None) -> ScreenResult:
@@ -167,6 +227,8 @@ async def screen(user_image: bytes | Image.Image, reference_image: bytes | None)
     if result is None:
         log.warning("2차 검사 응답을 해석하지 못함 — 검사 불가: %.200s", parsed)
         raise ScreeningUnavailable("unparseable_response")
+
+    _guard_part_mismatch(result)
 
     if not result.suitable and not result.message:
         # 모델이 message 를 빠뜨린 경우. 사용자에게 빈 문구를 보여줄 수는 없다.

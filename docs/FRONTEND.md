@@ -206,7 +206,7 @@ const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 
 showGuide(r.message);        // "포즈를 맞춰주세요" 등, 그대로 노출 가능
                              // 문구를 바꾸려면 MESSAGES 를 수정하세요 (export 돼 있습니다)
-if (hold(r.pass)) shutter(); // 최근 13프레임 중 10개 통과면 자동 촬영
+if (hold(r.pass)) shutter(); // 최근 39프레임 중 30개 통과면 자동 촬영 (약 1초)
 
 // 업로드할 때 이 세 값을 보냅니다
 //   r.pose_similarity / r.framing_score / r.facing_delta
@@ -235,14 +235,15 @@ if (hold(r.pass)) shutter(); // 최근 13프레임 중 10개 통과면 자동 �
 ```json
 { "tol_deg": 60, "hard_tol_deg": 70, "threshold": 70,
   "f_min": 0.65, "f_hard": 0.40, "min_seg_ratio": 0.25,
-  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 10 }
+  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 30 }
 ```
 
 하드코딩하면 서버에서 값을 조정한 순간 어긋나서, **화면에서는 통과인데 업로드가
 거부되는 상황**이 생깁니다.
 
-`n_hold` 는 자동 촬영용입니다. `createHoldGate` 가 **최근 `n_hold`+3 프레임 중
-`n_hold` 개 통과**일 때 셔터를 누릅니다. 손이 지나가다 우연히 맞는 순간에 찍히면
+`n_hold` 는 자동 촬영용입니다. `createHoldGate` 가 **최근 `n_hold`+30% 프레임 중
+`n_hold` 개 통과**일 때 셔터를 누릅니다 (기본 30 → 39프레임 중 30개, 30fps 기준
+통과 상태 약 1초 유지). 손이 지나가다 우연히 맞는 순간에 찍히면
 안 되고, 반대로 검출이 한 프레임 튄 것 때문에 0부터 다시 세도 안 됩니다.
 
 ⚠️ **`framing_score` 는 bbox 겹침(IoU)이 아닙니다.** 몸통 길이 비율로

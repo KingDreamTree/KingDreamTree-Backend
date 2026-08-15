@@ -77,7 +77,7 @@ const setStatus = (m, k = "warn") => { $("status").textContent = m; $("status").
 //    판정을 하는 게 아니다. 그래서 기준값을 여기 적어도 규약 위반이 아니다.
 //    (docs/pose-scoring.md 와 같은 값 · 2026-08-14 재조정 반영)
 const C = { tol_deg:60, hard_tol_deg:70, threshold:70, f_min:.65, f_hard:.40,
-            min_seg_ratio:.25, min_visible_angles:4, min_visibility:.5, n_hold:10 };
+            min_seg_ratio:.25, min_visible_angles:4, min_visibility:.5, n_hold:30 };
 
 let landmarker = null, results = [];
 

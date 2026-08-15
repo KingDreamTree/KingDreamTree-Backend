@@ -208,6 +208,16 @@ def _high_impact_pattern() -> re.Pattern[str]:
 _HIGH_IMPACT_RE = _high_impact_pattern()
 
 
+def is_single_side(name: str) -> bool:
+    """한쪽씩 수행하는 운동인가.
+
+    좌우 불균형 교정의 **전제 조건**이다. 양측 운동에서는 강한 쪽이 약한 쪽을
+    끌고 가버려서(bilateral compensation) 세트를 아무리 늘려도 격차가 안 좁혀진다.
+    단측 운동이어야 약한 쪽이 자기 몫을 온전히 하게 된다.
+    """
+    return any(h in (name or "").lower() for h in SINGLE_SIDE_HINTS)
+
+
 def is_low_impact(name: str) -> bool:
     """착지 충격이 낮은 동작인가. 체지방이 높은 사용자의 유산소 선정에 쓴다.
 
@@ -346,7 +356,7 @@ def candidates_for_slot(
 
     def rank(e: dict[str, Any]) -> tuple:
         name = e.get("name_en") or ""
-        single = any(h in name.lower() for h in SINGLE_SIDE_HINTS)
+        single = is_single_side(name)
         muscle_hit = bool(primary & set(e.get("target_muscles") or []))
         return (
             not (prefer_low_impact and is_low_impact(name)),

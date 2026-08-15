@@ -192,7 +192,7 @@ POST /sessions                  → 201, 새 session_id
 ```
 web/pose-score.js          의존성 없는 ES 모듈
 web/pose-score.test.html   브라우저로 열면 스스로 검사 (설치 불필요)
-web/pose-demo.html         웹캠으로 직접 확인
+web/pose-live.html         레퍼런스 사진 + 웹캠으로 직접 확인 (실서비스 흐름)
 ```
 
 ```js

@@ -290,7 +290,7 @@ const step = (id, state) => $(id).classList.add(state);
 // ⚠️ score-photos.html 과 같은 모델·같은 CDN 을 쓴다. 다른 걸 쓰면 여기서
 //    통과한 점수가 실제 촬영 화면에서 재현되지 않는다.
 const C = { tol_deg:60, hard_tol_deg:70, threshold:70, f_min:.65, f_hard:.40,
-            min_seg_ratio:.25, min_visible_angles:4, min_visibility:.5, n_hold:10 };
+            min_seg_ratio:.25, min_visible_angles:4, min_visibility:.5, n_hold:30 };
 
 try {
   const { FilesetResolver, PoseLandmarker } = await import(

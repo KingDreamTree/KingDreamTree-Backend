@@ -262,7 +262,7 @@ OpenAI가 죽었을 때 아무것도 안 걸러지는 상태는 피합니다.
 | `F_MIN` | **0.65** | **문구 안내용.** 거리 1.54배. 셔터·업로드 어느 쪽도 막지 않는다 | — |
 | `F_HARD` | **0.40** | **거부용.** 거리 2.5배. 이쯤이면 다리가 화면 밖이라 어차피 못 쓴다 | 높이면 이탈이 늘어난다 |
 | `R_MAX` | ~~0.25~~ | **제거됨 (2026-08-14).** R은 관찰용 — 위 R 절 참고 | — |
-| `N_HOLD` | **10** | 셔터에 필요한 통과 프레임 수. 연속이 아니라 **최근 13프레임(=N+3) 중 10개** — lite 모델은 한 프레임씩 수시로 튀는데, 연속 조건은 그때마다 0부터 다시 셌다 | — |
+| `N_HOLD` | **30** | 셔터에 필요한 통과 프레임 수. 30fps 기준 **약 1초 유지** (2026-08-16, 10=0.3초는 너무 짧다는 판단). 연속이 아니라 **최근 39프레임(=N+30%) 중 30개** — lite 모델은 한 프레임씩 수시로 튀는데, 연속 조건은 그때마다 0부터 다시 셌다. 여유를 고정 3이 아니라 N의 30%로 두는 이유: 튐은 프레임당 확률이라 창이 길수록 절대 횟수가 는다 | — |
 
 > ⚠️ **이 값들은 시작점입니다.** "논리적 타당성"은 숫자 자체가 아니라
 > **(1) 산식이 거리·위치에 불변이고 (2) 각 임계값이 무엇을 막는지 말할 수 있고
@@ -421,7 +421,7 @@ BlazePose는 어깨·골반을 자체 기준으로 찍습니다. 그래서 이 �
 GET /api/v1/pose-criteria
 { "tol_deg": 60, "hard_tol_deg": 70, "threshold": 70,
   "f_min": 0.65, "f_hard": 0.4, "min_seg_ratio": 0.25,
-  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 10 }
+  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 30 }
 ```
 
 ⚠️ **한 번 흔들리는 걸 방지하려면** `createHoldGate` 를 쓰세요 — 최근
@@ -450,7 +450,7 @@ const hold = createHoldGate(criteria);
 // 매 프레임
 const r = evaluate(refLandmarks, userLandmarks, criteria, { multiPerson });
 showGuide(r.message);                        // 사용자에게 보여줄 문구
-if (hold(r.pass)) shutter();                 // 최근 13프레임 중 10개 통과면 촬영
+if (hold(r.pass)) shutter();                 // 최근 39프레임 중 30개 통과면 촬영 (약 1초)
 
 // 업로드할 때 이 세 값을 보냅니다
 //   r.pose_similarity / r.framing_score / r.facing_delta

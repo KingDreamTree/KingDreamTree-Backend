@@ -58,6 +58,26 @@ def _rir_note(reps: int) -> str:
     return f"{reps}회를 마쳤을 때 {DEFAULT_RIR}회 정도 여유가 남는 무게로 하세요."
 
 
+def _side_order_note(weak_side: str) -> str:
+    """좌우 불균형 교정 지침 — **볼륨이 아니라 순서**로 좁힌다.
+
+    두 가지를 같이 지시해야 실제로 격차가 줄어든다:
+
+        ① 약한 쪽 먼저   — 피로가 없는 상태에서 질 좋은 세트를 먼저 가져간다.
+                          강한 쪽을 먼저 하면 약한 쪽은 항상 지친 상태로 한다.
+        ② 강한 쪽은 맞춘다 — 약한 쪽이 실제로 해낸 횟수까지만. 이걸 안 하면
+                          강한 쪽이 더 해버려서 격차가 그대로거나 벌어진다.
+
+    ⚠️ 세트 수는 좌우가 **같다**. 우리가 조절하는 건 순서와 상한이지 볼륨이
+       아니다 — 볼륨 차등은 진단(왼팔이 약하다)의 신뢰도보다 과한 처방이다.
+    """
+    weak, strong = ("왼쪽", "오른쪽") if weak_side == "LEFT" else ("오른쪽", "왼쪽")
+    return (
+        f"{weak}부터 시작하세요. {strong}은 {weak}이 해낸 횟수까지만 맞추면 됩니다 "
+        "— 좌우 차이를 좁히는 게 목적이라 더 하지 않는 편이 낫습니다."
+    )
+
+
 #: 통증 신호. mock 이 "피드백을 읽은 척"이라도 하려면 최소한 이건 반응해야 한다.
 #:
 #: ⚠️ **한국어 활용형을 다 적어야 한다.** "아파"만 넣었다가 "무릎이 아팠어요"를
@@ -160,18 +180,34 @@ def _collect_candidates(
     Args:
         low_impact: CUT(=체지방률 컷오프 초과) 일 때 True. 착지 충격이 큰
             동작을 뒤로 민다 — 체중이 무거울수록 관절 반력이 커진다.
+
+    ⚠️ **좌우에 다른 볼륨을 주지 않는다.** 슬롯은 근육군 단위이고 단측 운동도
+       양쪽 같은 세트 수로 수행한다. 불균형에 대한 처방은 볼륨이 아니라
+       ① 단측 운동 ② **약한 쪽부터 시작** 두 가지다 (§_side_order_note).
     """
-    groups_of_asym = {
-        g for p in single_side_parts for g in exercise_catalog.PART_TO_SLOTS.get(p, ())
-    }
+    #: 근육군 → 약한 쪽("LEFT"/"RIGHT"). 부위 이름의 접두사가 곧 방향이다.
+    #: ⚠️ 같은 근육군에 좌우가 **둘 다** 들어오면 불균형이 아니라 절대 볼륨
+    #:    부족이므로 방향을 지운다 — 그 경우 "약한 쪽"이라는 게 없다.
+    weak_side_by_group: dict[str, str | None] = {}
+    for part in single_side_parts:
+        side = "LEFT" if part.startswith("Left_") else "RIGHT" if part.startswith("Right_") else None
+        for group in exercise_catalog.PART_TO_SLOTS.get(part, ()):
+            if group in weak_side_by_group and weak_side_by_group[group] != side:
+                weak_side_by_group[group] = None
+            else:
+                weak_side_by_group.setdefault(group, side)
+
     out: dict[str, list[dict[str, Any]]] = {}
     for day in days:
         for idx, slot in enumerate(day["slots"]):
             if slot.get("kind") == "CARDIO":
                 continue
-            prefer_single = slot["muscle_group"] in groups_of_asym
+            prefer_single = slot["muscle_group"] in weak_side_by_group
             if prefer_single:
                 slot["single_side"] = True  # 프롬프트 태그용
+                weak = weak_side_by_group[slot["muscle_group"]]
+                if weak:
+                    slot["weak_side"] = weak  # type: ignore[typeddict-unknown-key]
             out[_slot_id(day, idx)] = exercise_catalog.candidates_for_slot(
                 slot["muscle_group"],
                 catalog,
@@ -396,6 +432,15 @@ async def build_routine(
             picked = by_ref.get(ref) if ref else None
             if picked is None:
                 continue
+
+            note = _rir_note(slot["reps"])
+            # ⚠️ 실제로 **단측 운동이 뽑혔을 때만** 순서를 안내한다. 후보에
+            #    단측이 없어 양측 운동이 선택될 수 있는데, 그때 "왼쪽부터"는
+            #    수행할 수 없는 지시라 사용자를 혼란시킨다.
+            weak_side = slot.get("weak_side")
+            if weak_side and exercise_catalog.is_single_side(picked.get("name_en") or ""):
+                note = f"{_side_order_note(str(weak_side))} {note}"
+
             exercises.append(
                 {
                     "order_index": order,
@@ -408,7 +453,7 @@ async def build_routine(
                     "reps": slot["reps"],
                     "rest_sec": slot["rest_sec"],
                     "rir": DEFAULT_RIR,
-                    "note": _rir_note(slot["reps"]),
+                    "note": note,
                     "boosted_by": slot.get("boosted_by"),
                 }
             )

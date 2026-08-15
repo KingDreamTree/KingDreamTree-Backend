@@ -41,6 +41,12 @@ from app.worker.registry import HANDLERS, PREFLIGHTS, register  # noqa: F401
 log = logging.getLogger("worker")
 
 
+#: 잡 조회가 계속 실패할 때 재시도 간격 상한(초).
+#: ⚠️ 상한이 없으면 장애가 길어질수록 복구를 못 알아챈다 — DB 가 돌아와도
+#:    다음 시도까지 몇 분을 기다리게 된다.
+_CLAIM_BACKOFF_MAX_SEC = 30.0
+
+
 def _preflight() -> bool:
     """기동 전 점검. 하나라도 실패하면 워커를 띄우지 않는다.
 
@@ -141,12 +147,29 @@ def run(kinds: list[JobKind], poll_interval: float) -> int:
     last_reclaim = time.monotonic()
 
     idle_logged = False
+    claim_failures = 0
     while not _stop:
         if time.monotonic() - last_reclaim >= settings.job_reclaim_interval_sec:
             _reclaim(kinds)
             last_reclaim = time.monotonic()
 
-        job = queue.claim(kinds)
+        # ⚠️ **claim 은 네트워크 호출이다.** 여기서 예외가 새면 워커가 프로세스째
+        #    죽는다 — 실측(2026-08-15): Supabase 연결이 한 번 끊기며
+        #    httpx.RemoteProtocolError 로 워커가 조용히 사라졌고, 이후 잡이 전부
+        #    PENDING 에 쌓였다. 화면은 로딩에서 멈추고 원인은 안 보인다.
+        #    ⚠️ 좀비 회수(job_stale_after_sec)도 **워커가 살아 있어야** 도는 것이라
+        #    이 경우엔 구제해주지 못한다. 죽지 않는 것 말고 방법이 없다.
+        #    잡 실행부(아래 try)는 이미 보호돼 있었는데 폴링만 맨몸이었다.
+        try:
+            job = queue.claim(kinds)
+        except Exception:  # noqa: BLE001 — 일시 장애로 워커가 내려가면 안 된다
+            claim_failures += 1
+            log.exception("잡 조회 실패 (%d회 연속) — 잠시 후 재시도합니다", claim_failures)
+            # 장애가 길어지면 간격을 늘린다. 로그 홍수와 죽은 DB 재호출을 둘 다 줄인다.
+            time.sleep(min(poll_interval * claim_failures, _CLAIM_BACKOFF_MAX_SEC))
+            continue
+        claim_failures = 0
+
         if job is None:
             if not idle_logged:
                 log.debug("대기 중")

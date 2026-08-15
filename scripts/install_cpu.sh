@@ -13,7 +13,8 @@ pip install -r requirements.txt
 
 echo
 echo "== torch (CPU 빌드) =="
-pip install "torch==2.11.0+cpu" --index-url https://download.pytorch.org/whl/cpu
+# ⚠️ torchvision 을 빼면 AutoImageProcessor 가 ImportError 로 죽는다 (워커가 안 뜬다).
+pip install "torch==2.11.0+cpu" "torchvision==0.26.0+cpu" --index-url https://download.pytorch.org/whl/cpu
 
 echo
 echo "== transformers 계열 =="

@@ -351,7 +351,9 @@ async def chat_turn(
 
     from app.services.vlm import call_json  # noqa: F401 — provider 준비 확인용 import 경로 공유
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    # ⚠️ 여기는 잡이 아니라 **동기 요청**이다 (POST /coach/chat). asyncio.wait_for 로
+    #    감싸는 곳도 없어서, timeout 이 없으면 사용자가 최대 30분 스피너를 본다.
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
 
     context = build_context(day, contraindications, candidates, turn, MAX_TURNS)
     llm_messages: list[dict[str, Any]] = [

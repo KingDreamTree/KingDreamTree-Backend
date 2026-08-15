@@ -83,6 +83,19 @@ Dumbbell Jumping Squat · Commando Pull-up · L-Pull-up · Chin-Up
 
 **커밋 `34c7349`(좌우 불균형 = 순서 교정)가 배선은 맞는데 실측 발동률이 0이다.** 앞의 4키(저충격·주동근·장비·복합)가 순서를 이미 확정해서 단측 여부까지 도달하지 않는다. `prefer_single_side=False`일 땐 항상 `True`라 기존 정렬에 영향 없다.
 
+**⚠️ 적용 후 실측 — 반만 고쳐진다.** 단측 선호는 **주동근 일치보다 뒤**에 둬야 한다(단측이라는 이유로 가슴 운동이 이두 슬롯 1순위가 되면 안 된다). 그 제약 하에서:
+
+| 슬롯 | 수정 전 1순위 | 수정 후 1순위 |
+|---|---|---|
+| 대퇴사두 | Goblet Squat (양측) | **Bodyweight Rear Lunge (단측)** ✅ |
+| 햄스트링·둔근 | Goblet Squat (양측) | **Bodyweight Rear Lunge (단측)** ✅ |
+| 등 | Dumbbell One Arm Bent-over Row (단측) | 변화 없음 (이미 단측) |
+| 어깨·이두·삼두·가슴 | 양측 | **변화 없음** ❌ |
+
+**팔은 랭킹으로 고칠 수 없다.** 카탈로그의 팔 단측 후보 2건(`Dumbbell Decline/Incline One Arm Hammer Press`)이 실제로는 **가슴·복근 운동**이라 `muscle_hit=False`다. 즉 **주동근이 맞는 팔 단측 운동이 카탈로그에 0개**다.
+
+> **팔 좌우 불균형 진단이 나와도 순서 안내는 안 붙는다.** 카탈로그에 단측 팔 운동을 추가해야 풀리는 문제이고, 랭킹 수정 범위 밖이다. 발표에서 좌우 교정을 시연하려면 **다리 비대칭 케이스를 써라.**
+
 ### 5번 — 검증 두 줄 (10분, 3·4번의 증명)
 
 `verify_routine_rules.py`가 **PASS인데 기능은 안 돈다.** `:136`이 `routine._side_order_note("LEFT")`를 직접 호출해서 헬퍼의 문자열 포맷만 증명하고, 프로덕션 배선(`routine.py:442`)을 안 탄다.

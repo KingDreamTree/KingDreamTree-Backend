@@ -48,8 +48,13 @@ echo "== torch (팟 이미지의 CUDA에 맞춰) =="
 if python -c "import torch" 2>/dev/null; then
   python -c "import torch; print(f'  기존 torch {torch.__version__} 사용')"
 else
-  pip install "torch==2.11.0+cu128" --index-url https://download.pytorch.org/whl/cu128
+  pip install "torch==2.11.0+cu128" torchvision --index-url https://download.pytorch.org/whl/cu128
 fi
+
+# ⚠️ torchvision 이 없으면 AutoImageProcessor 가 ImportError 로 죽는다 — 워커가 아예 안 뜬다.
+#    팟 이미지에 torch 만 있고 torchvision 은 없는 경우가 있어 따로 확인한다.
+python -c "import torchvision" 2>/dev/null || \
+  pip install torchvision --index-url https://download.pytorch.org/whl/cu128
 
 echo
 echo "== transformers 계열 =="

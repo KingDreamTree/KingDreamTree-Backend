@@ -132,6 +132,7 @@ def _mock_patch(
             if has_pain
             else "피드백을 반영해 강도를 조정했습니다. (mock)"
         ),
+        "llm_message": None,  # 핸들러가 적용 결과로 다시 요약하게 한다
         "changes": changes,
         "contraindications_added": added,
         "raw_response": {"mock": True},
@@ -509,10 +510,14 @@ async def patch_routine(
                 )
 
     # message.content: 변경 없을 때 LLM이 텍스트로 이유를 설명하기도 함
+    # ⚠️ 산문이 없으면 여기서 제안 목록으로 요약해 두지만, 그 요약은 **검증 전**이라
+    #    거부된 제안까지 포함한다. 호출부(핸들러)는 llm_message 가 None 이면
+    #    적용 결과로 다시 요약해야 한다 (summarize_applied 주석 참고).
     interpretation = message.content or _summarize_changes(changes)
 
     return {
         "interpretation": interpretation,
+        "llm_message": message.content,
         "changes": changes,
         "contraindications_added": contraindications_added,
         "raw_response": raw,
@@ -527,7 +532,33 @@ _CHANGE_LABELS = {
     "reschedule_day": "일정 변경",
     "remove_exercise": "운동 제거",
     "flag_contraindication": "금기 등록",
+    "enforce_contraindication": "주의 부위 볼륨 조정",
 }
+
+
+def summarize_applied(applied: list[dict], contraindications_added: list[dict]) -> str:
+    """**실제로 적용된** 변경으로 해석문을 만든다.
+
+    ⚠️ 이 함수가 따로 있는 이유: `_summarize_changes` 는 LLM 이 **제안한** 목록을
+       요약한다. 그런데 제안 중 일부는 검증에서 거부된다 (후보 밖 운동·없는 Day
+       등). 거부된 것까지 요약에 들어가면 **하지도 않은 일을 했다고 말하게 된다.**
+       실측(2026-08-15): LLM 이 대퇴사두 슬롯을 다른 근육군 운동으로 바꾸려다
+       거부됐는데, 해석문에는 "금기 등록, 운동 교체 (2건)" 이 그대로 남았다.
+       화면에는 교체가 없는데 문구만 교체를 주장한 셈이다.
+
+    금기는 changes 에 안 들어가므로(세션에 누적) 여기서 따로 세어 준다.
+    """
+    labels = [_CHANGE_LABELS.get(c["function"], c["function"]) for c in applied]
+    if contraindications_added:
+        labels = ["금기 등록"] + labels
+    if not labels:
+        return "변경 사항 없음"
+    # 같은 종류가 여러 건이면 묶어서 — "볼륨 조정, 볼륨 조정, …" 은 읽히지 않는다
+    counts: dict[str, int] = {}
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+    parts = [(f"{k} {v}건" if v > 1 else k) for k, v in counts.items()]
+    return ", ".join(parts)
 
 
 def _summarize_changes(changes: list[dict]) -> str:

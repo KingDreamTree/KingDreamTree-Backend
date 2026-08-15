@@ -21,6 +21,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.config import settings
@@ -201,6 +203,48 @@ def _enum_or_none(value: Any, allowed: type[GapLevel] | type[Confidence]) -> str
     return candidate if candidate in {str(m) for m in allowed} else None
 
 
+#: differences 가 assessment 의 격차 문장을 되풀이했다고 볼 유사도 하한.
+#: 실측(2026-08-15 진단 출력) — 재진술 0.63~0.68 / 진짜 관찰 0.15~0.22 로 갈렸다.
+#: 사이가 넓어 중간값이면 충분하다.
+_RESTATE_RATIO = 0.45
+
+
+def _drop_restatements(differences: list[str], assessment: str | None) -> list[str]:
+    """assessment 를 되풀이하는 differences 항목을 버린다.
+
+    ⚠️ **프롬프트가 이미 금지하고 있는데도 계속 나온다.** ("assessment 의 격차 문장을
+       되풀이하지 마세요" — part_diagnosis.py §differences) 화면에는 부위 카드마다
+       같은 말이 두 줄로 붙어 "왼팔 상완이 목표 체형보다 가늘어 보입니다"가
+       진단문 아래 그대로 반복됐다.
+
+       항목을 하나씩 생성하는 모델에게 "앞 문장과 겹치지 말라"는 자기참조 제약은
+       잘 안 붙는다. _citation_targets 가 인용 부위를 코드로 정한 것과 같은 이유로,
+       여기서도 코드가 지운다 — 지시는 어길 수 있지만 필터는 어길 수 없다.
+
+    ⚠️ 문장 단위로 비교한다. assessment 전체와 재면 긴 쪽에 묻혀 비율이 낮아진다.
+    """
+    if not assessment or not differences:
+        return differences
+
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", assessment) if s.strip()]
+    kept = []
+    for d in differences:
+        ratio = max(
+            (SequenceMatcher(None, _norm_ko(d), _norm_ko(s)).ratio() for s in sentences),
+            default=0.0,
+        )
+        if ratio >= _RESTATE_RATIO:
+            log.info("differences 재진술 제거 (유사도 %.2f): %.60s", ratio, d)
+            continue
+        kept.append(d)
+    return kept
+
+
+def _norm_ko(text: str) -> str:
+    """공백·문장부호를 털어 비교용으로 만든다 (조사 차이까지는 굳이 안 건드린다)."""
+    return re.sub(r"[\s.,!?·…\"'()]", "", text)
+
+
 def _coerce_part(
     item: Any, allowed: set[str], inbody_available: bool = True
 ) -> dict[str, Any] | None:
@@ -215,7 +259,10 @@ def _coerce_part(
     blocked = item.get("blocked_reason")
     blocked = blocked.strip() if isinstance(blocked, str) and blocked.strip() else None
 
-    differences = _as_str_list(item.get("differences"))
+    assessment = item.get("assessment")
+    assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
+
+    differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
 
     # ⚠️ 자기모순 게이트 (2026-08-15 실측): differences 에 시각 관찰("두께가
     #    두드러집니다")을 적어놓고 blocked_reason("시각 확인 불가")을 함께 보낸
@@ -256,9 +303,6 @@ def _coerce_part(
     if not isinstance(priority, int) or isinstance(priority, bool) or not 1 <= priority <= 5:
         priority = None
 
-    assessment = item.get("assessment")
-    assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
-
     return {
         "class_name": class_name,
         "differences": differences,
@@ -268,6 +312,56 @@ def _coerce_part(
         "confidence": confidence,
         "blocked_reason": blocked,
     }
+
+
+#: 한쪽만 가리키는 말. 이게 들어있으면 반대쪽 카드에 복사할 수 없다.
+_SIDE_WORDS = ("왼", "오른", "좌측", "우측")
+
+#: gap_level 심각도 — 통일할 때 나쁜 쪽으로 맞춘다.
+_GAP_SEVERITY = {"NONE": 0, "SLIGHT": 1, "MODERATE": 2, "SIGNIFICANT": 3}
+
+
+def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
+    """좌우 쌍의 판정·문장을 하나로 맞춘다 (제자리 수정).
+
+    ⚠️ **좌우를 다르게 쓰게 하는 것을 포기한 결과다.** 반복 측정(eval_diagnosis.py,
+       5회)에서 좌우 상완 문장 중복이 4회 나왔다. 프롬프트로 4번 다르게 만들려
+       했지만 실측 좌우 차이가 3% 안쪽이면 **애초에 다르게 쓸 재료가 없다** —
+       없는 차이를 지어내라고 시키고 있었던 셈이다. 같게 쓰는 것이 정직하다.
+
+    ⚠️ **한쪽을 가리키는 문장은 복사하지 않는다.** "왼팔 상완이 가늡니다"를
+       오른팔 행에 넣으면 중복이 아니라 **틀린 문장**이 된다. 그건 중복보다 나쁘다.
+       그 경우 그대로 두고 로그만 남긴다 (프롬프트가 «양쪽» 주어를 요구한다).
+
+    ⚠️ gap_level 이 서로 다르면 손대지 않는다 — 좌우가 실제로 다른 경우이고,
+       그때는 문장도 달라야 한다.
+    """
+    for left, part in list(results.items()):
+        if not left.startswith("Left_"):
+            continue
+        right = "Right_" + left[len("Left_") :]
+        other = results.get(right)
+        if other is None:
+            continue
+
+        if part.get("gap_level") != other.get("gap_level"):
+            continue  # 좌우가 실제로 다르게 판정됐다. 그대로 둔다.
+
+        a, b = part.get("assessment"), other.get("assessment")
+        if not a or not b or a == b:
+            continue
+
+        # 더 심한 쪽 → 같으면 왼쪽 문장을 기준으로 (재현성)
+        source = part if len(a) >= len(b) else other
+        text = source["assessment"]
+        if any(w in text for w in _SIDE_WORDS):
+            log.info("%s/%s 좌우 통일 보류 — 문장이 한쪽을 가리킴", left, right)
+            continue
+
+        log.info("%s/%s 좌우 문장 통일", left, right)
+        for target in (part, other):
+            target["assessment"] = text
+            target["priority"] = source.get("priority")
 
 
 def parse_part_response(
@@ -297,6 +391,8 @@ def parse_part_response(
             continue
         # 같은 부위를 두 번 보내오면 처음 것만 쓴다 (UNIQUE(session_id, class_name)).
         results.setdefault(part["class_name"], part)
+
+    _unify_pairs(results)
 
     return {
         "results": [results[n] for n in class_names if n in results],

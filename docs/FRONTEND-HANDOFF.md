@@ -78,7 +78,7 @@ POST → { job_id }   →   GET /jobs/{job_id}  →  status: PENDING | PROCESSIN
 | 파일 | 내용 |
 |---|---|
 | `web/pose-score.js` | `poseScore()` · `framingScore()` · `facingDelta()` — **산식 원본** |
-| `web/pose-demo.html` | 웹캠 실시간 판정 + 자동 셔터 |
+| `web/e2e-test.html` | 사진 두 장 → 진단 → 루틴 → 코치 대화까지 전 구간 |
 | `web/pose-live.html` | 실시간 점수 표시 |
 | `web/score-photos.html` | 찍어둔 사진에 점수 매기기 |
 
@@ -200,11 +200,29 @@ GET  /sessions/{id}/analysis            결과
 |---|---|
 | `similarity_score` + `score_rationale` | 점수 옆에 근거를 **같이** 노출하면 신뢰도가 올라갑니다 |
 | `gap_level: null` + `blocked_reason` | "이 부위는 확인이 어려웠어요" — **숨기지 말고 정직하게** |
+| `gap_level` 있음 + `blocked_reason` | **배지 필요** — 아래 참조 |
 | `confidence: "LOW"` | 흐리게 표시하거나 배지 |
 | `strengths: []` | 빈 배열이 정상입니다. 억지로 채우지 않습니다 |
 
 > ⚠️ `gap_level` 값은 `NONE | SLIGHT | MODERATE | SIGNIFICANT` 입니다.
 > `confidence` 는 `LOW | MEDIUM | HIGH`. 헷갈리기 쉬우니 주의.
+
+### ⚠️ `blocked_reason` 이 있는데 `gap_level` 도 있는 경우 — 배지를 붙여주세요
+
+옷에 가려 **눈으로는 못 봤지만 인바디 수치로 판단한** 부위입니다. 등급도 진단문도
+정상적으로 들어 있어서, 그냥 두면 **눈으로 본 진단과 화면에서 구별되지 않습니다.**
+
+```
+■ 몸통   MODERATE   [옷에 가림 · 인바디 기준]   ← 이 배지
+```
+
+`blocked_reason` 을 "assessment 가 없을 때만" 보여주면 이 케이스가 통째로 사라집니다
+(실제로 `web/e2e-test.html` 이 그렇게 돼 있어 화면에서 확인이 안 됐습니다).
+`assessment` 유무와 무관하게 `blocked_reason` 이 있으면 배지를 띄우세요.
+
+근거의 종류가 다르면 사용자가 알아야 합니다 — 사진으로 본 것과 체성분 수치로
+추정한 것은 신뢰도가 다르고, "왜 이 부위만 다르게 나왔지?"의 답이기도 합니다.
+`confidence: MEDIUM` 만으로는 *왜* 중간인지 전달되지 않습니다.
 
 ### 실패 처리
 

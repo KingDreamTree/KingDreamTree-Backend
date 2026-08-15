@@ -5,12 +5,19 @@
 #      scripts/install_local_gpu.sh   로컬 GPU (CUDA 12.8)
 #      scripts/install_cpu.sh         EC2 / CPU 전용
 #      scripts/install_runpod.sh      RunPod GPU 워커
+#      macOS(Apple Silicon)           README 참조 — PyPI 기본 인덱스 + SAPIENS_DEVICE=mps
 #
 # torch 버전 (인덱스는 스크립트가 지정)
 #   CUDA 12.8 : 2.11.0+cu128   ← RTX 50 시리즈(Blackwell, sm_120)는 cu128 이상 필수
 #   CPU       : 2.11.0+cpu     ← 같은 마이너 버전으로 맞춰 동작 차이를 줄인다
+#   macOS     : 2.11.0         ← PyPI 기본 빌드에 MPS 가 들어있다
 TORCH_VERSION_CUDA=2.11.0+cu128
 TORCH_VERSION_CPU=2.11.0+cpu
+
+# ⚠️ torchvision 은 선택이 아니다. 없으면 transformers 의 AutoImageProcessor 가
+#    ImportError 로 죽어 세그멘테이션 워커가 아예 기동하지 않는다.
+#    torch 와 짝이 맞는 버전이어야 한다 (torch 2.11 ↔ torchvision 0.26).
+TORCHVISION_VERSION=0.26.0
 
 # 인덱스와 무관하게 동일한 것들
 #

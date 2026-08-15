@@ -53,7 +53,7 @@ uvicorn app.main:app --reload --port 8000
 브라우저에서 열어 값을 얻는다:
 
 ```
-web/pose-demo.html      웹캠으로 실시간 판정 + 셔터
+web/pose-live.html      웹캠으로 실시간 판정 + 셔터
 web/score-photos.html   찍어둔 사진에 점수 매기기
 ```
 

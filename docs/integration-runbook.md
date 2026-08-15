@@ -32,12 +32,13 @@ USE_MOCK=false
 
 **터미널 A — API 서버** (Swagger가 여기서 뜬다)
 ```bash
-cd ~/Desktop/body-analysis-backend && git pull && uvicorn app.main:app --reload --port 8000
+cd ~/Desktop/KingDreamTree-Backend && git pull && uvicorn app.main:app --reload --port 8000
 ```
 
 **터미널 B — 워커** (실제 일하는 곳. 화면공유는 이걸)
 ```bash
-cd ~/Desktop/body-analysis-backend && python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
+cd ~/Desktop/KingDreamTree-Backend && python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
+# 맥(Apple Silicon)이면 세그까지 로컬에서 된다: python -m app.worker.run --all
 ```
 
 > 세그 워커(`SEG_*`)는 안 켠다 — A가 RunPod에서 돌린다.

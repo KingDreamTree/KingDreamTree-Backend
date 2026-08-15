@@ -100,7 +100,14 @@ def resolve_device() -> str:
 
     if settings.sapiens_device != "auto":
         return settings.sapiens_device
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda"
+    # ⚠️ Apple Silicon 개발용. 이게 없으면 맥에서 auto 가 CPU 로 떨어져 한 장에 수십 분이
+    #    걸린다 (mps 는 0.4b·1024px 기준 약 4.5초). 운영 환경에는 mps 가 없으므로
+    #    EC2/RunPod 동작은 그대로다.
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
 def resolve_dtype(device: str):

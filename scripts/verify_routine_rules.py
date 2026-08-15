@@ -19,7 +19,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
-from app.services import exercise_catalog  # noqa: E402
+from app.services import exercise_catalog, routine  # noqa: E402
 from app.services.exercise_catalog import PART_TO_SLOTS  # noqa: E402
 from app.services.routine_mode import decide_mode  # noqa: E402
 from app.services.routine_templates import (  # noqa: E402
@@ -103,6 +103,39 @@ def rule_boost_per_group() -> None:
         gain1 = sum(a1[g] - b1.get(g, 0) for g in a1)
         gain2 = sum(a2[g] - b1.get(g, 0) for g in a2)
         check(f"{n}일 양쪽({gain2}) > 한쪽({gain1})", gain2 > gain1)
+
+
+def rule_asymmetry_is_order_not_volume() -> None:
+    """좌우 불균형은 **볼륨이 아니라 순서**로 교정한다.
+
+    좌우에 다른 세트 수를 주는 경로가 있으면 안 된다. 슬롯은 근육군 단위라
+    구조적으로 불가능하지만, 그게 유지되는지 검사한다. 대신 약한 쪽 정보가
+    슬롯까지 살아 내려와 수행 순서 안내가 붙어야 한다.
+    """
+    print("\n[좌우 불균형 = 순서 교정]")
+    catalog = exercise_catalog.load_catalog()
+
+    days = get_template(4)
+    routine._collect_candidates(days, catalog, {"Left_Upper_Arm"})
+    tagged = [s for d in days for s in d["slots"] if s.get("single_side")]
+    check("약한 쪽 슬롯이 잡힘", len(tagged) > 0, f"{len(tagged)}개")
+    check("weak_side=LEFT 전달", all(s.get("weak_side") == "LEFT" for s in tagged))
+
+    # 좌우가 둘 다면 "약한 쪽"이 없다 → 순서 안내를 붙이면 안 된다
+    days2 = get_template(4)
+    routine._collect_candidates(days2, catalog, {"Left_Upper_Arm", "Right_Upper_Arm"})
+    both = [s for d in days2 for s in d["slots"] if s.get("single_side")]
+    check("좌우 둘 다면 weak_side 없음", all(s.get("weak_side") is None for s in both))
+
+    # 세트 수는 좌우 구분 없이 슬롯 하나로만 존재한다
+    has_side_sets = any(
+        k in s for d in days for s in d["slots"] for k in ("sets_left", "sets_right")
+    )
+    check("좌우별 세트 필드가 없음 (볼륨 차등 경로 부재)", not has_side_sets)
+
+    note = routine._side_order_note("LEFT")
+    check("안내가 약한 쪽 먼저", note.startswith("왼쪽부터"))
+    check("안내가 강한 쪽 상한을 명시", "까지만" in note)
 
 
 def rule_cut_is_circuit() -> None:
@@ -280,6 +313,7 @@ def rule_sanitize_holds_under_partial_llm() -> None:
 def main() -> int:
     rule_cardio_last()
     rule_boost_per_group()
+    rule_asymmetry_is_order_not_volume()
     rule_cut_is_circuit()
     rule_cut_cardio_is_low_impact()
     rule_caps()

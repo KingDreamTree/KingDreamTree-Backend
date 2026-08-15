@@ -173,6 +173,34 @@ def rule_does_not_mutate_input() -> None:
     check("입력 days 가 바뀌지 않음", original[0]["exercises"][0]["sets"] == before)
 
 
+def rule_interpretation_reflects_applied() -> None:
+    """해석문이 **거부된 제안**까지 말하지 않는가.
+
+    ⚠️ 실측(2026-08-15 라이브): LLM 이 대퇴사두 슬롯을 다른 근육군 운동으로
+       바꾸려다 검증에서 거부됐는데, 해석문에는 "금기 등록, 운동 교체 (2건)" 이
+       그대로 남았다. 화면에는 교체가 없는데 문구만 교체를 주장한 셈 —
+       "통증이 기록만 되고 반영 안 됨"과 같은 계열의 사고다.
+    """
+    print("\n[해석문 = 실제 적용된 것만]")
+    from app.worker.handlers.routine import _interpretation
+
+    rejected = {"llm_message": None, "interpretation": "금기 등록, 운동 교체 (2건)"}
+    applied = [{"function": "enforce_contraindication", "args": {}} for _ in range(4)]
+    added = [{"body_part": "무릎", "severity": "WARN"}]
+
+    got = _interpretation(rejected, applied, added)
+    check("거부된 '운동 교체'는 해석문에서 빠진다", "운동 교체" not in got, got)
+    check("실제 적용분은 들어간다", "볼륨 조정" in got and "금기 등록" in got, got)
+    check("같은 종류는 묶어서 표기", "4건" in got, got)
+    check("적용 0건이면 금기만", _interpretation(rejected, [], added) == "금기 등록")
+    check("전부 없으면 변경 없음", _interpretation(rejected, [], []) == "변경 사항 없음")
+    check(
+        "LLM 이 직접 쓴 산문은 존중",
+        _interpretation({"llm_message": "무릎 부담을 줄였어요"}, applied, added)
+        == "무릎 부담을 줄였어요",
+    )
+
+
 def main() -> int:
     print("금기 강제 검증")
     rule_mapping_names_are_real()
@@ -184,6 +212,7 @@ def main() -> int:
     rule_severity_precedence()
     rule_noop_when_no_contraindication()
     rule_does_not_mutate_input()
+    rule_interpretation_reflects_applied()
 
     print()
     if _failures:

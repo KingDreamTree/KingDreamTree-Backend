@@ -195,6 +195,23 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 
+def _interpretation(
+    result: dict[str, Any], applied: list[dict[str, Any]], added: list[dict[str, Any]]
+) -> str:
+    """사용자에게 보이는 해석문 — **실제로 적용된 것만** 말하게 한다.
+
+    ⚠️ patch_routine 의 interpretation 은 LLM 이 산문을 안 쓴 경우 **제안 목록**을
+       요약한 값이다. 제안 중 일부는 검증에서 거부되므로(후보 밖 운동 등) 그대로
+       쓰면 하지도 않은 일을 했다고 말하게 된다. 실측(2026-08-15): 교차 근육군
+       교체가 거부됐는데 해석문은 "금기 등록, 운동 교체 (2건)" 이었다.
+       LLM 이 직접 쓴 산문이 있으면 그건 존중하고, 없을 때만 적용 결과로 요약한다.
+    """
+    prose = result.get("llm_message")
+    if isinstance(prose, str) and prose.strip():
+        return prose.strip()
+    return routine.summarize_applied(applied, added)
+
+
 def _patch(job: dict[str, Any]) -> dict[str, Any]:
     """피드백 → 변경 해석 → **실제 적용** → FEEDBACK 새 버전 (2026-08-14).
 
@@ -290,7 +307,7 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
             month_routine_id,
             {
                 "source_log_id": str(log_id_raw),
-                "interpretation": result["interpretation"],
+                "interpretation": _interpretation(result, [], added),
                 "changes": [],
                 "contraindications_added": added,
                 "raw_response": result.get("raw_response"),
@@ -329,7 +346,7 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
         {
             "previous_month_routine_id": str(month_routine_id),
             "source_log_id": str(log_id_raw),
-            "interpretation": result["interpretation"],
+            "interpretation": _interpretation(result, applied, added),
             "changes": applied,
             "contraindications_added": added,
             "raw_response": result.get("raw_response"),

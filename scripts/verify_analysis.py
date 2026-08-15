@@ -574,6 +574,12 @@ def test_baseline_separation() -> None:
     from app.prompts.overall_diagnosis import SYSTEM_PROMPT as overall_system
 
     check("F09 우선순위 1~3개 지시", "1~3개만" in overall_system)
+    # ⚠️ 요약이 "팔부터 하고 몸통은 그다음" 같은 **순서**를 말하면 실제 루틴과
+    #    어긋난다. 루틴은 전신 기본 볼륨 + 약점 세트 가산이지 부위를 차례로
+    #    돌지 않는다 (routine_templates.apply_weakness_boost). 진단 화면에서
+    #    한 말과 다음 화면에서 받는 루틴이 다르면 신뢰가 바로 깨진다.
+    check("F09 전신 루틴 전제 명시", "전신 + 약점 보강" in overall_system)
+    check("F09 부위 순서 서술 금지", "순서대로 하지 않습니다" in overall_system)
 
     # 자기모순 게이트 — 관찰(differences)을 적어놓고 blocked 를 선언하면 코드가
     # blocked 를 해제한다. 실측(2026-08-15): few-shot 의 blocked 예시(몸통+평균

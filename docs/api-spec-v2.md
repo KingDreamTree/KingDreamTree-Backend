@@ -603,7 +603,7 @@ ctx.putImageData(out, 0, 0);
 {
   "overall": {
     "similarity_score": 68,
-    "score_source": "VLM",
+    "score_source": "RULE",
     "score_rationale": "상체 근육량 격차가 크고 하체는 근접",
     "summary": "상체 중심 개선 필요: 어깨, 팔 근육을 강화시키는 것이 가장 우선입니다.",
     "priority_parts": ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"],
@@ -879,7 +879,7 @@ workout_log(feedback_text) → ROUTINE_PATCH → 새 month_routine 버전
 | 1 | Sapiens2 실제 클래스명 | F06 `palette` 전체 | seed 9 + OTHER. 워커가 DB에서 읽음 |
 | 2 | OCR 기술 선택 | F07 | 응답 형태 동일, `services/ocr.py` 내부만 교체 |
 | 3 | 인바디 추출 컬럼 | F07 `fields` | 확정 전까지 `raw_ocr`도 함께 반환 |
-| 4 | 유사도 산출 방식 | F09 `score_source` | `VLM` 고정 |
+| 4 | 유사도 산출 방식 | F09 `score_source` | **`RULE` 고정** — 코드가 규칙으로 합산한다 |
 | 5 | 루틴 진행 기준 | F11 `day_source` | `COUNT` |
 | 6 | 루틴 생성 분할 | F10 `status` 전환 | 일괄. 분할하면 4주차까지 끝나야 `DONE` |
 | 7 | ~~VLM 입력 형식~~ | — | ✅ **확정 (2026-08-13): `HIGHLIGHT`** — 아래 참조 |

@@ -232,7 +232,12 @@ F08 결과 전체를 context로 주입. 분석과 진단을 한 번에 하면 �
 
 출력: `similarity_score`(0~100) · `summary` · `priority_parts` · `strengths` · `cautions`
 
-> 유사도 점수는 **VLM 직접 출력**만 쓴다 (규칙 합산은 스코프 아웃) → `score_source = 'VLM'`
+> ⚠️ **유사도 점수는 LLM 이 만들지 않는다.** LLM 은 부위별 격차 등급(`gap_level`)까지만
+> 판정하고, 점수는 `services/scoring.py` 가 등급을 결정론적으로 합산해 계산한다
+> → `score_source = 'RULE'`. `services/vlm.py` 는 LLM 이 점수를 보내와도 버린다.
+>
+> (2026-08-16 정정: 이 줄은 규칙 합산 전환 전의 서술이 남아 있던 것이다.
+> 코드는 전환 시점부터 줄곧 RULE 이었다.)
 
 ---
 

@@ -318,7 +318,10 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         # 여기서 억지로 요약을 만들면 근거 없는 문장이 화면에 뜬다.
         diagnosis_repo.upsert_overall(
             session_id,
-            {"status": str(DomainStatus.FAILED), "score_source": str(ScoreSource.VLM)},
+            # ⚠️ 실패해도 RULE 이다. 이 시스템에 VLM 이 점수를 내는 경로는 없다 —
+            #    성공은 RULE, 실패는 VLM 이면 "실패했을 때만 AI가 점수를 냈다"는
+            #    읽을 수 없는 기록이 남는다.
+            {"status": str(DomainStatus.FAILED), "score_source": str(ScoreSource.RULE)},
         )
         raise ValueError("모든 부위의 진단이 실패해 종합할 수 없습니다.")
 

@@ -78,7 +78,10 @@ class PartDiagnosisDto(BaseModel):
 
 class OverallDiagnosisDto(BaseModel):
     similarity_score: int | None = None
-    score_source: str = "VLM"
+    # ⚠️ 기본값은 RULE 이다. 점수는 scoring.compute_similarity() 가 규칙으로
+    #    계산하고(handlers/vlm.py:349), vlm.py 는 LLM 이 점수를 보내와도 버린다.
+    #    기본값이 "VLM" 이던 시절 화면이 "AI가 매긴 점수"라고 말하고 있었다.
+    score_source: str = "RULE"
     score_rationale: str | None = None
     summary: str | None = None
     priority_parts: list[str] = Field(default_factory=list)
@@ -110,7 +113,7 @@ class AnalysisResponse(BaseModel):
             "example": {
                 "overall": {
                     "similarity_score": 68,
-                    "score_source": "VLM",
+                    "score_source": "RULE",
                     "score_rationale": "상체 근육량 격차가 크고 하체는 근접",
                     "summary": "상체 중심 개선이 필요합니다.",
                     "priority_parts": ["Left_Upper_Arm", "Torso"],
@@ -141,9 +144,16 @@ class AnalysisResponse(BaseModel):
 
 
 #: 화면에 반드시 노출해야 하는 고지. 프론트 구현에 맡기면 빠진다.
+#: ⚠️ 상수 하나가 진단 화면과 루틴 화면 양쪽을 덮는다. 고지를 여기 넣으면
+#:    프론트 변경 없이 두 화면에 동시에 뜬다 — 별도 동의 체크박스를 두지 않는
+#:    이유이기도 하다. 기록이 안 남는 체크박스는 UI 장식이고, 기록하려면
+#:    users 컬럼이 필요해 해커톤 범위를 넘는다.
 DISCLAIMER = (
     "본 분석은 사진 기반 추정이며 의학적 조언이 아닙니다. "
-    "통증이 있거나 지속되면 운동을 중단하고 전문가와 상담하세요."
+    "통증이 있거나 지속되면 운동을 중단하고 전문가와 상담하세요. "
+    "업로드한 사진과 인바디 결과지는 분석을 위해 외부 AI(OpenAI)로 전송되며, "
+    "계정을 삭제하면 서버에서 모두 삭제됩니다. "
+    "본인 또는 사용 권한이 있는 사진만 올려주세요."
 )
 
 

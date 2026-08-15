@@ -72,8 +72,12 @@ def _side_order_note(weak_side: str) -> str:
        아니다 — 볼륨 차등은 진단(왼팔이 약하다)의 신뢰도보다 과한 처방이다.
     """
     weak, strong = ("왼쪽", "오른쪽") if weak_side == "LEFT" else ("오른쪽", "왼쪽")
+    # ⚠️ "좌우 각각"을 반드시 밝힌다. 단측 운동에서 sets 가 좌우 합인지 각각인지
+    #    화면 어디에도 없어서, 각각으로 읽으면 세션 총 작업량이 2배가 된다
+    #    (routine_templates 의 "세션 4~5종목 60분 이내" 전제가 깨진다).
     return (
-        f"{weak}부터 시작하세요. {strong}은 {weak}이 해낸 횟수까지만 맞추면 됩니다 "
+        f"{weak}부터 시작하세요. 표시된 세트 수는 **좌우 각각**입니다. "
+        f"{strong}은 {weak}이 해낸 횟수까지만 맞추면 됩니다 "
         "— 좌우 차이를 좁히는 게 목적이라 더 하지 않는 편이 낫습니다."
     )
 
@@ -527,7 +531,7 @@ async def patch_routine(
 
     from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
 
     existing = (
         f"\n기존 누적 금기: {json.dumps(contraindications, ensure_ascii=False)}"

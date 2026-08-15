@@ -124,7 +124,7 @@ async def extract_inbody(
 
     from openai import AsyncOpenAI  # 지연 import — 모듈 상단 주석 참고
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     image_blocks = [
         {
             "type": "image_url",

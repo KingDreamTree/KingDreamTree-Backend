@@ -348,7 +348,11 @@ CREATE TABLE overall_diagnosis (
     session_id            UUID         NOT NULL UNIQUE
                           REFERENCES analysis_session(session_id) ON DELETE CASCADE,
     similarity_score      SMALLINT     CHECK (similarity_score BETWEEN 0 AND 100),
-    score_source          VARCHAR(20)  NOT NULL DEFAULT 'VLM'
+    -- ⚠️ 기본값은 RULE 이다. 점수는 코드가 규칙으로 계산하고(services/scoring.py)
+    --    LLM 이 보낸 점수는 버린다. 'VLM' 은 옛 설계의 잔재로 CHECK 에만 남긴다.
+    --    ⚠️ 이미 만들어진 DB 는 DEFAULT 가 'VLM' 인 채로 남아 있다 — 코드가 항상
+    --       값을 명시해 쓰므로 무해하다. ALTER 는 해커톤 이후.
+    score_source          VARCHAR(20)  NOT NULL DEFAULT 'RULE'
                           CHECK (score_source IN ('VLM', 'RULE')),
     score_rationale       TEXT,
     summary               TEXT,

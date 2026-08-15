@@ -466,28 +466,66 @@ def _symmetry_block(
     return "\n".join(lines)
 
 
+#: 인바디를 인용하지 않을 부위. **전완(팔뚝)**.
+#: ⚠️ 인바디 팔 세그먼트는 상완+전완을 통째로 잰 값이라 전완만의 수치가 아니다.
+#:    전완 카드에 그 숫자를 붙이면 "팔뚝 근육량이 89.9%"로 읽혀 오독을 부른다.
+#:    상완이 같은 세그먼트를 대표하므로 정보 손실도 없다.
+_NO_CITATION_PARTS = ("Left_Lower_Arm", "Right_Lower_Arm")
+
+#: 인바디 수치를 인용할 세그먼트 최대 개수.
+#: ⚠️ 세그먼트마다 하나씩 뽑으면 9부위 중 5장에 숫자가 붙는다. 실사용(해커톤은
+#:    인바디를 항상 제출한다)에서 카드마다 "평균의 N% 수준입니다"가 반복돼
+#:    진단이 표처럼 읽혔다. 숫자는 근거가 될 때만 힘이 있고, 다섯 번 반복되면
+#:    배경음이 된다. 가장 할 말이 있는 두 곳에만 남긴다.
+_CITATION_MAX = 2
+
+
 def _citation_targets(
     part_to_segment: dict[str, str],
     metrics: dict[str, Any],
+    inbody: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """세그먼트마다 인바디를 인용할 대표 부위 하나를 고른다 — 면적 격차가 가장 큰 부위.
+    """인바디를 인용할 부위를 고른다 — **표준에서 가장 많이 벗어난 세그먼트 순으로 최대 2곳.**
 
-    ⚠️ **이 선택은 코드가 한다.** LLM에게 "세그먼트당 한 번만 인용하라"고 지시하면
+    ⚠️ **이 선택은 코드가 한다.** LLM에게 "필요한 데만 인용하라"고 지시하면
        9개 항목을 스스로 대조해야 하는 전역 제약이 되는데, 항목을 하나씩 생성하는
        모델은 그런 제약을 자주 어긴다. 라우팅을 결정론적으로 만들면 어길 방법이
        없고, 어느 부위가 인용했는지 테스트로 검증할 수 있다.
 
+    ⚠️ 기준은 **표준 대비 %가 100 에서 얼마나 벗어났나**다. 평균과 같은 수치는
+       인용해봐야 사용자가 얻는 게 없다("평균의 99% 수준입니다"). 편차가 큰 쪽이
+       할 말이 있는 쪽이다. 순위로 자르므로 임계값 경계에서 튀지 않는다
+       (89.9% 는 되고 90.1% 는 안 되는 식의 절벽이 없다).
+
+    ⚠️ 옷에 가려 시각 판단이 불가한 부위는 여기 없어도 인용한다 — 그 경우
+       인바디가 유일한 근거다. 그 예외는 프롬프트가 처리한다.
+
     Returns:
-        {segment: 대표 class_name}
+        {segment: 대표 class_name}  — 최대 _CITATION_MAX 개
     """
     rows = metrics.get("parts") or {}
+    segments = (inbody or {}).get("segments") or {}
+
+    # 세그먼트별 대표 부위 — 면적 격차가 가장 큰 부위. 전완은 후보에서 뺀다.
     best: dict[str, tuple[str, float]] = {}
     for part, segment in part_to_segment.items():
+        if part in _NO_CITATION_PARTS:
+            continue
         diff = ((rows.get(part) or {}).get("diff_pct") or {}).get("area_share")
         magnitude = abs(diff) if diff is not None else -1.0
         if segment not in best or magnitude > best[segment][1]:
             best[segment] = (part, magnitude)
-    return {segment: part for segment, (part, _) in best.items()}
+
+    # 표준 대비 % 편차가 큰 세그먼트 순. 수치가 없으면 인용할 게 없으므로 제외한다.
+    ranked = []
+    for segment, (part, _) in best.items():
+        pct = (segments.get(segment) or {}).get("lean_percentage")
+        if pct is None:
+            continue
+        ranked.append((abs(pct - 100), segment, part))
+
+    ranked.sort(key=lambda r: (-r[0], r[1]))  # 편차 내림차순, 동률이면 이름순(재현성)
+    return {segment: part for _, segment, part in ranked[:_CITATION_MAX]}
 
 
 def _inbody_block(
@@ -529,7 +567,14 @@ def _inbody_block(
         if parts_desc:
             # ⚠️ 한글 이름을 함께 준다. 이게 없으면 LEFT_ARM(팔 전체) 값을
             #    "전완 제지방량"처럼 세부 부위의 값인 양 인용한다 (실측 확인).
-            mark = " **[인용]**" if citation_targets.get(segment) == class_name else ""
+            # ⚠️ 자격을 **그 부위 줄에** 박는다 — _legend_block 의 가림 선언과 같은 이유로,
+            #    전역 규칙("인용 표시 있는 데만 쓰세요")은 항목별 생성에서 잘 안 지켜진다.
+            if citation_targets.get(segment) == class_name:
+                mark = " **[인용]** ← 이 부위에서만 수치를 문장에 씁니다"
+            elif class_name in _NO_CITATION_PARTS:
+                mark = " — 🔴 인용 금지: 팔 전체를 잰 값이라 팔뚝의 수치가 아닙니다"
+            else:
+                mark = " — 인용하지 마세요 (참고용). 이 부위는 이미지에서 본 것으로 씁니다"
             lines.append(
                 f"- {class_name} ← {_SEGMENT_KO.get(segment, segment)}"
                 f"({segment}): {' · '.join(parts_desc)}{mark}"
@@ -539,6 +584,9 @@ def _inbody_block(
     lines.append(
         "🔴 `[인용]` 이 붙은 부위만 assessment 에 수치를 인용합니다. 같은 세그먼트의\n"
         "   나머지 부위는 **같은 숫자를 반복하지 말고** 이미지에서 본 형태로 서술하세요.\n"
+        "🔴 **인용 부위는 많아야 두 곳입니다. 나머지 일고여덟 부위에는 인바디 수치가\n"
+        "   한 번도 나오지 않는 것이 정상입니다.** 표에 값이 보인다고 다 쓰지 마세요 —\n"
+        "   카드마다 '평균의 N% 수준입니다'가 반복되면 진단이 표처럼 읽힙니다.\n"
         "   인용할 때는 화살표 오른쪽의 한글 이름 그대로 부릅니다.\n"
         '   O "왼팔 전체 근육량이 평균의 82% 수준"\n'
         '   X "왼쪽 팔뚝 근육량이 평균의 82% 수준"  ← 팔뚝만 잰 값이 아닙니다\n'
@@ -572,7 +620,7 @@ def build_part_prompt(
     part_to_segment = {
         p["class_name"]: p["inbody_segment"] for p in parts if p.get("inbody_segment")
     }
-    citation_targets = _citation_targets(part_to_segment, metrics)
+    citation_targets = _citation_targets(part_to_segment, metrics, inbody)
 
     return f"""# 부위 범례 (색 → 부위)
 

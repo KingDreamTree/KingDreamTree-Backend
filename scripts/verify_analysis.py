@@ -303,7 +303,7 @@ def test_prompts() -> None:
 
 
 def test_citation_routing() -> None:
-    print("\n7. 인바디 인용 라우팅 (세그먼트당 대표 1부위)")
+    print("\n7. 인바디 인용 라우팅 (표준 편차 큰 순 최대 2곳 · 전완 제외)")
 
     from app.prompts.part_diagnosis import _citation_targets
 
@@ -329,15 +329,6 @@ def test_citation_routing() -> None:
             "Torso": m(-0.3),
         }
     }
-    targets = _citation_targets(part_to_segment, metrics)
-    check("격차 큰 부위가 대표", targets.get("LEFT_ARM") == "Left_Upper_Arm", str(targets))
-    check("세그먼트당 1개", len(targets) == 2)
-
-    # 프롬프트에 [인용] 이 대표 부위 줄에만 붙는지
-    parts = [
-        {"class_name": n, "name_ko": n, "color_hex": "#111111", "inbody_segment": s}
-        for n, s in part_to_segment.items()
-    ]
     inbody = {
         "body": {"weight": 63.5},
         "segments": {
@@ -345,6 +336,51 @@ def test_citation_routing() -> None:
             "TRUNK": {"lean_mass": 22.8, "lean_percentage": 94.5},
         },
     }
+
+    targets = _citation_targets(part_to_segment, metrics, inbody)
+    check("격차 큰 부위가 세그먼트 대표", targets.get("LEFT_ARM") == "Left_Upper_Arm", str(targets))
+    check("전완은 대표가 될 수 없음", "Left_Lower_Arm" not in targets.values())
+
+    # ⚠️ 인용은 최대 2곳이다. 세그먼트마다 하나씩 뽑으면 9부위 중 5장에 숫자가
+    #    붙어 진단이 표처럼 읽힌다 (2026-08-15 실사용 — 인바디를 항상 제출하는 운영).
+    five = {
+        **part_to_segment,
+        "Left_Upper_Leg": "LEFT_LEG",
+        "Right_Upper_Leg": "RIGHT_LEG",
+        "Right_Upper_Arm": "RIGHT_ARM",
+    }
+    many = {
+        "parts": {
+            **metrics["parts"],
+            "Left_Upper_Leg": m(-9),
+            "Right_Upper_Leg": m(-9),
+            "Right_Upper_Arm": m(-20),
+        }
+    }
+    inbody_five = {
+        "body": {},
+        "segments": {
+            "LEFT_ARM": {"lean_percentage": 89.9},
+            "RIGHT_ARM": {"lean_percentage": 90.6},
+            "TRUNK": {"lean_percentage": 94.5},
+            "LEFT_LEG": {"lean_percentage": 98.2},
+            "RIGHT_LEG": {"lean_percentage": 99.1},
+        },
+    }
+    wide = _citation_targets(five, many, inbody_five)
+    check("5세그먼트여도 인용은 2곳", len(wide) == 2, str(wide))
+    check(
+        "표준에서 가장 벗어난 쪽이 뽑힘 (평균에 가까운 다리는 탈락)",
+        set(wide) == {"LEFT_ARM", "RIGHT_ARM"},
+        str(wide),
+    )
+    check("인바디가 없으면 인용 없음", _citation_targets(part_to_segment, metrics, None) == {})
+
+    # 프롬프트에 [인용] 이 대표 부위 줄에만 붙는지
+    parts = [
+        {"class_name": n, "name_ko": n, "color_hex": "#111111", "inbody_segment": s}
+        for n, s in part_to_segment.items()
+    ]
     prompt = build_part_prompt(
         parts=parts, metrics=metrics, ref_symmetry={}, user_symmetry={}, inbody=inbody
     )

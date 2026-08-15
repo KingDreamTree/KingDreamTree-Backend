@@ -21,6 +21,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.config import settings
@@ -201,6 +203,48 @@ def _enum_or_none(value: Any, allowed: type[GapLevel] | type[Confidence]) -> str
     return candidate if candidate in {str(m) for m in allowed} else None
 
 
+#: differences 가 assessment 의 격차 문장을 되풀이했다고 볼 유사도 하한.
+#: 실측(2026-08-15 진단 출력) — 재진술 0.63~0.68 / 진짜 관찰 0.15~0.22 로 갈렸다.
+#: 사이가 넓어 중간값이면 충분하다.
+_RESTATE_RATIO = 0.45
+
+
+def _drop_restatements(differences: list[str], assessment: str | None) -> list[str]:
+    """assessment 를 되풀이하는 differences 항목을 버린다.
+
+    ⚠️ **프롬프트가 이미 금지하고 있는데도 계속 나온다.** ("assessment 의 격차 문장을
+       되풀이하지 마세요" — part_diagnosis.py §differences) 화면에는 부위 카드마다
+       같은 말이 두 줄로 붙어 "왼팔 상완이 목표 체형보다 가늘어 보입니다"가
+       진단문 아래 그대로 반복됐다.
+
+       항목을 하나씩 생성하는 모델에게 "앞 문장과 겹치지 말라"는 자기참조 제약은
+       잘 안 붙는다. _citation_targets 가 인용 부위를 코드로 정한 것과 같은 이유로,
+       여기서도 코드가 지운다 — 지시는 어길 수 있지만 필터는 어길 수 없다.
+
+    ⚠️ 문장 단위로 비교한다. assessment 전체와 재면 긴 쪽에 묻혀 비율이 낮아진다.
+    """
+    if not assessment or not differences:
+        return differences
+
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", assessment) if s.strip()]
+    kept = []
+    for d in differences:
+        ratio = max(
+            (SequenceMatcher(None, _norm_ko(d), _norm_ko(s)).ratio() for s in sentences),
+            default=0.0,
+        )
+        if ratio >= _RESTATE_RATIO:
+            log.info("differences 재진술 제거 (유사도 %.2f): %.60s", ratio, d)
+            continue
+        kept.append(d)
+    return kept
+
+
+def _norm_ko(text: str) -> str:
+    """공백·문장부호를 털어 비교용으로 만든다 (조사 차이까지는 굳이 안 건드린다)."""
+    return re.sub(r"[\s.,!?·…\"'()]", "", text)
+
+
 def _coerce_part(
     item: Any, allowed: set[str], inbody_available: bool = True
 ) -> dict[str, Any] | None:
@@ -215,7 +259,10 @@ def _coerce_part(
     blocked = item.get("blocked_reason")
     blocked = blocked.strip() if isinstance(blocked, str) and blocked.strip() else None
 
-    differences = _as_str_list(item.get("differences"))
+    assessment = item.get("assessment")
+    assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
+
+    differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
 
     # ⚠️ 자기모순 게이트 (2026-08-15 실측): differences 에 시각 관찰("두께가
     #    두드러집니다")을 적어놓고 blocked_reason("시각 확인 불가")을 함께 보낸
@@ -255,9 +302,6 @@ def _coerce_part(
     priority = item.get("priority")
     if not isinstance(priority, int) or isinstance(priority, bool) or not 1 <= priority <= 5:
         priority = None
-
-    assessment = item.get("assessment")
-    assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
 
     return {
         "class_name": class_name,

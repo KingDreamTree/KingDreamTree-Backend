@@ -116,6 +116,25 @@ def main() -> int:
     guarded = idx != -1 and "try:" in src[max(0, idx - 400) : idx]
     check("queue.fail() 호출이 try 로 감싸여 있다", guarded)
 
+    # ⚠️ claim() 도 네트워크 호출이다. 실측(2026-08-15): Supabase 연결이 끊기며
+    #    httpx.RemoteProtocolError 로 워커가 프로세스째 죽었고 잡이 전부 PENDING
+    #    에 쌓였다. 좀비 회수는 워커가 살아 있어야 도는 것이라 구제가 안 된다.
+    #    AST 로 본다 — 이 사고를 설명하는 주석이 문자열 검색에 걸리기 때문이다.
+    import ast as _ast
+
+    claim_guarded = False
+    for node in _ast.walk(_ast.parse(src)):
+        if not isinstance(node, _ast.Try):
+            continue
+        for sub in _ast.walk(node):
+            if (
+                isinstance(sub, _ast.Call)
+                and isinstance(sub.func, _ast.Attribute)
+                and sub.func.attr == "claim"
+            ):
+                claim_guarded = True
+    check("queue.claim() 호출이 try 로 감싸여 있다", claim_guarded)
+
     # ── 4. 다른 곳에 남은 무방비 .data[0] ───────────────────────────────────
     print("\n[queue.py — 무방비 .data[0] 이 남았는가]")
     # ⚠️ 문자열 검색으로 하면 **이 사고를 설명하는 주석·독스트링이 걸린다.**

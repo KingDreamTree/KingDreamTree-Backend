@@ -377,7 +377,7 @@ BlazePose는 어깨·골반을 자체 기준으로 찍습니다. 그래서 이 �
 ### 왜 아직 판정에 안 쓰는가
 
 **잡음을 재기 전에 관문을 갈아끼우면 나아졌는지 판단할 기준이 없습니다.**
-지금은 `P`와 나란히 계산해서 화면에 같이 띄웁니다(`web/pose-demo.html`).
+지금은 `P`와 나란히 계산해서 화면에 같이 띄웁니다(`web/pose-live.html`).
 
 순서:
 
@@ -468,10 +468,13 @@ if (hold(r.pass)) shutter();                 // 최근 13프레임 중 10개 통
 ## 웹캠으로 직접 체험하기
 
 ```
-터미널 1   uvicorn app.main:app --reload
-터미널 2   python -m http.server 5500 -d web
-브라우저   http://localhost:5500/pose-demo.html
+python scripts/run_pose_demo.py      ← API 서버까지 같이 띄우고 브라우저를 연다
+브라우저   http://localhost:8080/pose-live.html
 ```
+
+왼쪽에 레퍼런스 사진을 올리고 오른쪽 웹캠으로 따라 선다 — 실서비스 흐름 그대로.
+(레퍼런스도 웹캠으로 잡는 실험용 pose-demo.html 은 화면비가 다른 실서비스 경로를
+못 타서 정리했다 — 필요하면 git 이력에 있다)
 
 ⚠️ **파일을 더블클릭해서 여는 건 안 됩니다.** ES 모듈은 `file://` 에서 차단됩니다.
 반드시 위처럼 서버로 띄우세요.

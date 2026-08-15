@@ -595,6 +595,7 @@ const box = { x: p.bbox.x * sx, y: p.bbox.y * sy,
 | 400 | `INVALID_REQUEST` | 값 형식·범위 오류. `detail` 에 필드명이 있습니다 |
 | 405 | `METHOD_NOT_ALLOWED` | 요청 메서드 오류 (개발 중 실수) |
 | 500 | `INTERNAL_ERROR` | 서버 오류. `message` 를 보여주고 재시도 안내 |
+| 503 | `SCREENING_UNAVAILABLE` | 2차 검사기 장애 — **같은 사진으로 잠시 후 재시도** 안내. ⚠️ 422처럼 "재촬영"으로 보여주면 안 됩니다 (사진 문제가 아님) |
 
 ### `POSE_MISMATCH` 의 `detail.reason`
 

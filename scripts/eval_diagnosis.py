@@ -62,6 +62,14 @@ _BANNED = (
 _DUP_RATIO = 0.75
 
 
+def _is_pair(a: str, b: str) -> bool:
+    """좌우 쌍인가. (Left_Upper_Arm ↔ Right_Upper_Arm)"""
+    for x, y in ((a, b), (b, a)):
+        if x.startswith("Left_") and y == "Right_" + x[len("Left_") :]:
+            return True
+    return False
+
+
 def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip()]
 
@@ -76,7 +84,7 @@ def _has_advice(text: str) -> bool:
 def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     """규칙 위반을 모은다. {검사 이름: [위반 설명...]}"""
     out: dict[str, list[str]] = {
-        k: [] for k in ("길이", "처방", "인바디인용", "중복문장", "금지표현")
+        k: [] for k in ("길이", "처방", "인바디인용", "중복문장", "좌우불일치", "금지표현")
     }
 
     for p in parts:
@@ -106,13 +114,29 @@ def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     if len(cited) > 2:
         out["인바디인용"].append(f"{len(cited)}곳: {', '.join(cited)}")
 
+    # ⚠️ 좌우 쌍이 같은 것은 **의도한 동작**이다 (vlm._unify_pairs). 위반이 아니다.
+    #    쌍이 아닌 두 부위가 겹치는 것만 센다.
     for i, a in enumerate(parts):
         for b in parts[i + 1 :]:
+            if _is_pair(a["class_name"], b["class_name"]):
+                continue
             ta, tb = a.get("assessment") or "", b.get("assessment") or ""
             if not ta or not tb:
                 continue
             if SequenceMatcher(None, _norm_ko(ta), _norm_ko(tb)).ratio() >= _DUP_RATIO:
                 out["중복문장"].append(f"{a['class_name']} ≈ {b['class_name']}")
+
+    # 좌우 쌍인데 **문장이 갈라진** 경우 — 이제는 이쪽이 위반이다.
+    for a in parts:
+        if not a["class_name"].startswith("Left_"):
+            continue
+        right = "Right_" + a["class_name"][len("Left_") :]
+        b = next((p for p in parts if p["class_name"] == right), None)
+        if b is None or a.get("gap_level") != b.get("gap_level"):
+            continue  # 등급이 다르면 문장도 달라야 한다
+        ta, tb = a.get("assessment") or "", b.get("assessment") or ""
+        if ta and tb and ta != tb:
+            out["좌우불일치"].append(f"{a['class_name']} ≠ {right}")
 
     return out
 

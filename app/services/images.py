@@ -116,7 +116,10 @@ def encode_photo(img: Image.Image, mirrored: bool = False) -> tuple[bytes, int, 
     w, h = img.size
     if max(w, h) > max_side:
         scale = max_side / max(w, h)
-        w, h = int(w * scale), int(h * scale)
+        # ⚠️ max(1, …) — 1×100000 같은 극단 비율은 화소 수 검사를 통과하는데,
+        #    int() 절사로 치수가 0 이 되면 resize 가 ValueError 로 500 을 낸다.
+        #    (segmenter.resize 경로는 이미 같은 하한을 쓴다)
+        w, h = max(1, int(w * scale)), max(1, int(h * scale))
         img = img.resize((w, h), Image.LANCZOS)
 
     buf = io.BytesIO()

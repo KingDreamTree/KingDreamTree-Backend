@@ -18,7 +18,10 @@
  *      (app/services/segmap.py scales() 와 같은 규칙).
  */
 
-const OVERLAY_ALPHA = 165; // 0~255. 색은 보이되 몸의 윤곽도 남는 선
+// 0~255. 0.42×255 — 서버가 VLM 에 보내는 오버레이(segmap.OVERLAY_ALPHA=0.42)와
+// 같은 값이어야 "여기서 본 것 = VLM 이 본 것"이 성립한다. e2e 페이지의 B 렌더러도
+// 같은 이유로 0.42 를 쓴다 — 세 군데가 같은 그림을 그려야 한다.
+const OVERLAY_ALPHA = 107;
 
 //: 마스터에 색이 없는 부위용 (비교 대상이 아닌 클래스는 color_hex 가 null 이다).
 //  ⚠️ 이걸 안 받치면 rgb(null) 에서 통째로 죽는다 — 실측으로 잡은 버그.

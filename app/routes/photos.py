@@ -103,21 +103,34 @@ def _store(
     path = storage.photo_path(user_id, session_id, str(kind))
     storage.upload(settings.bucket_photos, path, jpeg, "image/jpeg")
 
-    photo = db.create_photo(
-        {
-            "session_id": str(session_id),
-            "kind": str(kind),
-            "storage_bucket": settings.bucket_photos,
-            "storage_path": path,
-            "width": width,
-            "height": height,
-            "was_mirrored": is_mirrored,
-            **extra,
-        }
-    )
-
-    job_kind = JobKind.SEG_REFERENCE if kind == PhotoKind.REFERENCE else JobKind.SEG_USER
-    job = queue.enqueue(session_id, job_kind, {"photo_id": photo["photo_id"]})
+    # ⚠️ 업로드 뒤의 행 생성·잡 등록이 실패하면 **올린 것을 도로 지운다.**
+    #    여기 오기 전에 _discard_existing 이 이전 사진을 이미 지웠으므로 실패는
+    #    어차피 "사진 없음" 상태다 — 거기에 고아 파일(영원히 안 쓰일 JPEG)이나
+    #    잡 없는 사진 행(화면에서 영원히 '처리 중')까지 남기면 재시도가 더 꼬인다.
+    photo = None
+    try:
+        photo = db.create_photo(
+            {
+                "session_id": str(session_id),
+                "kind": str(kind),
+                "storage_bucket": settings.bucket_photos,
+                "storage_path": path,
+                "width": width,
+                "height": height,
+                "was_mirrored": is_mirrored,
+                **extra,
+            }
+        )
+        job_kind = JobKind.SEG_REFERENCE if kind == PhotoKind.REFERENCE else JobKind.SEG_USER
+        job = queue.enqueue(session_id, job_kind, {"photo_id": photo["photo_id"]})
+    except Exception:
+        try:
+            if photo is not None:
+                db.delete_photo(UUID(str(photo["photo_id"])))
+            storage.remove(settings.bucket_photos, [path])
+        except Exception:  # noqa: BLE001 — 뒷정리 실패가 원인 예외를 가리면 안 된다
+            log.exception("업로드 실패 뒷정리 실패 — 고아 파일이 남았을 수 있습니다")
+        raise
     return photo, job
 
 
@@ -171,6 +184,7 @@ async def upload_reference(
 
     img = await _read_upload(file)
     pose.ensure_single_person(multi_person)
+    pose.ensure_observation_ranges(person_area_ratio=pose_person_area_ratio)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
     _discard_existing(user_id, session_id, PhotoKind.REFERENCE)
@@ -295,6 +309,18 @@ async def upload_user_photo(
 
     img = await _read_upload(file)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
+
+    # ⚠️ 관찰용 필드도 판정 **전에** 범위를 본다 — 통과 후 DB CHECK 500 이 나면
+    #    그 시점엔 이전 사진이 이미 교체돼 있다 (pose.ensure_observation_ranges 주석).
+    pose.ensure_observation_ranges(pose_oks=pose_oks, person_area_ratio=pose_person_area_ratio)
+
+    # ⚠️ facing_delta 는 관찰용(2026-08-14 부터 판정 미사용)이라 **막지 않고 눌러 담는다.**
+    #    산식 (u+r)/r 은 측면 레퍼런스(어깨폭비→0)에서 정당하게 10 을 넘을 수 있는데,
+    #    그때 범위 검사 400 을 주면 판정에도 안 쓰는 지표가 업로드를 막는 모순이 된다.
+    #    단위 착오까지 같이 눌리는 건 감수하고 로그로만 남긴다 — 어차피 관문이 아니다.
+    if facing_delta > 10.0:
+        log.warning("facing_delta %.2f > 10 — 10.0 으로 눌러 저장합니다", facing_delta)
+        facing_delta = 10.0
 
     # ── 1차 관문: 자세 ────────────────────────────────────────────────────
     # ⚠️ 판정을 통과하지 못하면 **저장하지 않는다.** 실패한 사진이 Storage에 쌓이면

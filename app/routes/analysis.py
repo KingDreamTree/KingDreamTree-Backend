@@ -200,7 +200,7 @@ async def get_analysis(session: OwnedSession) -> AnalysisResponse:
         overall=(
             OverallDiagnosisDto(
                 similarity_score=overall_row.get("similarity_score"),
-                score_source=overall_row.get("score_source") or "VLM",
+                score_source=overall_row.get("score_source") or "RULE",
                 score_rationale=overall_row.get("score_rationale"),
                 summary=overall_row.get("summary"),
                 priority_parts=overall_row.get("priority_parts") or [],

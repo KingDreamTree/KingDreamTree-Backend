@@ -134,7 +134,10 @@ async def _call_json(
 
     from openai import AsyncOpenAI  # 지연 import — services/ocr.py 상단 주석 참고
 
-    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    # timeout 을 주지 않으면 SDK 기본값(read 600s × 재시도)까지 매달린다 — 한 호출이
+    # 최대 30분이다. 그동안 워커 슬롯이 잡혀 뒤의 잡이 전부 서고, 900초를 넘기면
+    # is_stale 이 멀쩡한 잡을 좀비로 걸러 Vision 호출이 한 번 더 나간다(요금 2배).
+    client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     response = await client.chat.completions.create(
         model=VLM_MODEL,
         response_format={"type": "json_object"},

@@ -245,6 +245,12 @@ _LEAK_MARKERS: tuple[str, ...] = (
 
 GENERIC_ERROR = "처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요."
 
+#: 원문을 화면에 절대 내보내지 않는 예외 타입. 이름으로 잡는 이유는 이 모듈이
+#: vlm/ocr/routine 을 import 하지 않기 때문이다 (워커 kinds 에 따라 로드가 갈린다).
+_LLM_ERROR_TYPES = frozenset(
+    {"VlmResponseError", "OcrResponseError", "RoutineInputError", "InputNotUsableError"}
+)
+
 
 def _user_message(e: Exception) -> str:
     """사용자에게 보여줘도 되는 문구로 축약.
@@ -261,6 +267,18 @@ def _user_message(e: Exception) -> str:
         return "서버에 모델이 준비되지 않았습니다. 잠시 후 다시 시도해주세요."
     if isinstance(e, MemoryError):
         return "서버 자원이 부족합니다. 잠시 후 다시 시도해주세요."
+
+    # ⚠️ LLM 계열 예외는 원문을 절대 내보내지 않는다. _LEAK_MARKERS 는 URL·키·경로를
+    #    잡도록 만들어졌는데, LLM 오류 문구에는 그런 게 안 들어 있어 그대로 통과했다.
+    #    실측으로 통과한 것들 (2026-08-16):
+    #      "응답에 parts 배열이 없습니다. 프롬프트의 출력 구조 명세를 확인하세요."  ← 내부 프롬프트 지시문
+    #      "Error code: 429 - {... 'Rate limit reached for gpt-4o'}"              ← 모델명
+    #      "VLM_PROVIDER='claude' 는 ... USE_MOCK=true 로 우회하세요."             ← 내부 설정키
+    #    errors.internal_error() 가 세운 규칙("원인을 message 에 넣지 않는다")과
+    #    같은 규칙인데 이 경로만 밖에 있었다.
+    if type(e).__name__ in _LLM_ERROR_TYPES or "openai" in type(e).__module__:
+        log.warning("LLM 오류 원문을 감춥니다: %.200s", str(e))
+        return GENERIC_ERROR
 
     raw = str(e).strip()
     if not raw:

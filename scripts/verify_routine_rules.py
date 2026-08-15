@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -19,6 +20,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
+from app.config import settings  # noqa: E402
 from app.services import exercise_catalog, routine  # noqa: E402
 from app.services.exercise_catalog import PART_TO_SLOTS  # noqa: E402
 from app.services.routine_mode import decide_mode  # noqa: E402
@@ -34,6 +36,7 @@ from app.services.routine_templates import (  # noqa: E402
 )
 
 _failures: list[str] = []
+_ORIG_USE_MOCK = settings.use_mock
 
 
 def check(label: str, ok: bool, detail: str = "") -> None:
@@ -136,6 +139,58 @@ def rule_asymmetry_is_order_not_volume() -> None:
     note = routine._side_order_note("LEFT")
     check("안내가 약한 쪽 먼저", note.startswith("왼쪽부터"))
     check("안내가 강한 쪽 상한을 명시", "까지만" in note)
+
+    # ⚠️ 여기까지는 **헬퍼가 문자열을 만드나**만 증명한다. 실제 배선은
+    #    routine.py 의 조립 루프이고, 위 검사들은 그 경로를 한 번도 안 탄다.
+    #    그래서 34c7349 가 머지된 뒤에도 전부 PASS 인 채로 실측 발동률이 0 이었다.
+    #    → 사용자가 실제로 받는 필드(exercises[].note)에 어서션을 건다.
+    settings.use_mock = True  # LLM 없이 결정론 폴백으로 완주시킨다
+    try:
+        plan = asyncio.run(
+            routine.build_routine(4, None, ["Left_Upper_Leg", "Torso"], ["Left_Upper_Leg"])
+        )
+    finally:
+        settings.use_mock = _ORIG_USE_MOCK
+    noted = [
+        e
+        for d in plan["days"]
+        for e in d.get("exercises", [])
+        if "부터" in (e.get("note") or "")
+    ]
+    check("순서 안내가 실제 운동 note 에 붙는다", len(noted) > 0, f"{len(noted)}개")
+
+    # 단측 선호가 정렬에서 실제로 이긴다 (rank 튜플 순서 회귀).
+    # ⚠️ 주동근 일치(muscle_hit)보다는 뒤여야 한다 — 단측이라는 이유로 가슴 운동이
+    #    이두 슬롯 1순위가 되면 안 된다. 그래서 주동근이 맞는 단측 후보가 있는
+    #    슬롯으로만 검사한다.
+    top = exercise_catalog.candidates_for_slot(
+        "대퇴사두", catalog, prefer_single_side=True
+    )[0]
+    check(
+        "단측 선호 시 단측 운동이 1순위",
+        exercise_catalog.is_single_side(top.get("name_en") or ""),
+        top.get("name_en") or "",
+    )
+
+
+def rule_no_beginner_unsafe_in_candidates() -> None:
+    """초보 후보 목록에 초보 부적합 운동이 없다.
+
+    ⚠️ 이 검사가 없어서 다음이 조용히 통과했다 — 런타임 후보 필터가 수집본 JSON 의
+    is_beginner_safe 를 그대로 믿었는데, 그 값은 fetch_exercisedb 의 옛 목록으로
+    찍혀 있어 풀업·체스트딥·점프스쿼트 12종이 초보 루틴에 들어왔다.
+    저장된 플래그가 아니라 **현행 판정 함수**를 기준으로 검사한다.
+    """
+    print("\n[초보 후보에 부적합 운동 없음]")
+    catalog = exercise_catalog.load_catalog()
+
+    leaked: list[str] = []
+    for slot in exercise_catalog.SLOT_BODY_PARTS:
+        for e in exercise_catalog.candidates_for_slot(slot, catalog):
+            name = e.get("name_en") or ""
+            if not exercise_catalog.is_beginner_safe(name, e.get("exercise_type") or "STRENGTH"):
+                leaked.append(f"{slot}/{name}")
+    check("초보 후보 전 슬롯에 부적합 0건", not leaked, ", ".join(leaked[:5]) or "clean")
 
 
 def rule_cut_is_circuit() -> None:
@@ -314,6 +369,7 @@ def main() -> int:
     rule_cardio_last()
     rule_boost_per_group()
     rule_asymmetry_is_order_not_volume()
+    rule_no_beginner_unsafe_in_candidates()
     rule_cut_is_circuit()
     rule_cut_cardio_is_low_impact()
     rule_caps()

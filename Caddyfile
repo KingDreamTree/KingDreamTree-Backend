@@ -1,0 +1,12 @@
+# HTTPS 리버스 프록시 설정.
+#
+# 아래 도메인을 실제 것으로 바꾸면 Caddy 가 Let's Encrypt 인증서를 자동으로
+# 발급·갱신한다. certbot·cron 불필요. 조건: 도메인이 이 서버의 탄력적 IP 를
+# 가리키고, 보안그룹에서 80·443 이 열려 있을 것.
+#
+# ⚠️ 도메인 없이 IP 로는 정식 인증서를 못 받는다 — DuckDNS 무료 서브도메인이면 충분.
+# ⚠️ http(80) 요청은 Caddy 가 자동으로 https 로 리다이렉트한다.
+
+refit-backend.duckdns.org {
+    reverse_proxy api:8000
+}

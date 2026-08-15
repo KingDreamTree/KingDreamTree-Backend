@@ -1,33 +1,21 @@
-.git/
-.github/
-.venv/
-venv/
-env/
-
-# Model weights — mount as volume instead
-models/
-
-# Cache
-__pycache__/
-*.py[cod]
-*.pyc
-.pytest_cache/
-.mypy_cache/
-
-# Local scratch (never needed in image)
-uploads/
-overlays/
-tmp/
-
-# Dev / docs / tests
-docs/
-*.md
+# 빌드 컨텍스트에서 뺄 것들.
+#
+# ⚠️ .env 가 제일 중요하다 — 이미지에 시크릿이 구워지면 이미지를 받은 누구나
+#    키를 꺼낼 수 있다. 시크릿은 compose env_file 로 실행 시점에만 주입한다.
 .env
 .env.*
 !.env.example
+*.pem
 
-# IDE / OS
+# 무겁거나 런타임에 불필요한 것
+.git
+.venv
+models/
+tolerance/
+web/
+docs/
+tests/
+__pycache__/
+**/__pycache__/
+*.pyc
 .idea/
-.vscode/
-.DS_Store
-Thumbs.db

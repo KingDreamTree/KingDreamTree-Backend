@@ -24,6 +24,7 @@ from app.errors import (
     file_too_large,
     not_found,
     precondition_not_met,
+    screening_unavailable,
     unsuitable_photo,
     unsupported_media_type,
 )
@@ -338,11 +339,17 @@ async def upload_user_photo(
     # ⚠️ **레퍼런스와 함께** 판단한다. 사용자 사진만 보면 "괜찮은 사진"인데
     #    촬영 거리가 딴판이라 비율 비교가 무의미해지는 경우를 못 잡는다.
     # ⚠️ VLM 에 이미지를 직접(base64) 보내므로 **거부될 사진은 Storage 에 안 올라간다.**
-    # ⚠️ 판정 실패·타임아웃은 통과로 처리한다 (photo_screening 모듈 주석 참조).
+    # ⚠️ 판정 실패·타임아웃은 503 — 저장하지 않고 "잠시 후 다시 시도" (fail-closed).
+    #    반려(422)와 다르다: 사진이 아니라 검사기 문제라, 재촬영이 아니라 재시도.
+    #    (photo_screening 모듈 주석 참조 — 헐렁한 옷은 사후 검증이 못 잡아서
+    #    판정 없이 들여보내면 잘못된 진단이 정상처럼 나간다)
     # ⚠️ 여기서 JPEG 로 인코딩하지 않는다. 판정 쪽에서 어차피 768px 로 줄이므로
     #    원본 크기로 인코딩 → 디코딩을 한 번씩 더 하는 셈이 된다.
     #    거울 여부는 판정 기준(옷·거리·잘림) 어디에도 영향이 없어 그대로 넘긴다.
-    screening = await photo_screening.screen(img, _reference_bytes(reference))
+    try:
+        screening = await photo_screening.screen(img, _reference_bytes(reference))
+    except photo_screening.ScreeningUnavailable:
+        raise screening_unavailable() from None
     if not screening.suitable:
         raise unsuitable_photo(
             screening.message,

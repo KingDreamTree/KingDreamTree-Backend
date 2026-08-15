@@ -149,3 +149,18 @@ def unsuitable_photo(message: str, detail: dict[str, Any] | None = None) -> ApiE
        포즈는 자세를 바꾸는 것이고, 이건 옷을 갈아입거나 다시 찍는 것이다.
     """
     return ApiError(422, "UNSUITABLE_PHOTO", message, detail)
+
+
+def screening_unavailable() -> ApiError:
+    """2차 검사가 장애·타임아웃으로 **판정 자체를 못 한** 경우. 사진 저장 안 함.
+
+    ⚠️ UNSUITABLE_PHOTO(422)와 다른 코드·상태를 쓴다. 사용자가 할 일이 다르다 —
+       422는 다시 **찍는** 것이고, 이건 잠시 후 같은 사진으로 다시 **올리는** 것이다.
+       프론트가 이걸 422처럼 "사진이 부적합합니다"로 보여주면 멀쩡한 사진을
+       다시 찍게 만든다.
+    """
+    return ApiError(
+        503,
+        "SCREENING_UNAVAILABLE",
+        "사진 검사를 지금 진행할 수 없습니다. 잠시 후 다시 시도해주세요.",
+    )

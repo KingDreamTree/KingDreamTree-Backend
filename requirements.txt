@@ -8,7 +8,6 @@ pydantic==2.13.4
 pydantic-settings==2.15.0
 
 # ── AI / Cloud ──────────────────────────────────────────────────────────────
-anthropic==0.121.0
 openai==3.0.0
 supabase==2.31.0
 

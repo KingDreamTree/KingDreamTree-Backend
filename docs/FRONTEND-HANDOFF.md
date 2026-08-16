@@ -65,6 +65,32 @@ POST → { job_id }   →   GET /jobs/{job_id}  →  status: PENDING | PROCESSIN
 
 `GET /sessions/active` 로 **어디까지 왔는지** 한 번에 알 수 있습니다 — 앱 재진입 시 사용.
 
+### ⚠️ 위 ①~⑧ 은 **최초 1회 온보딩**입니다 — 그 뒤의 홈은 루틴입니다
+
+이 서비스에서 사용자가 반복하는 행동은 **운동하고 기록하는 것**이지 사진을 다시
+찍는 게 아닙니다. 루틴이 한 번 만들어지면 그 뒤 앱을 열 때마다 **오늘의 운동이
+첫 화면**이어야 합니다. 진단 결과는 "다시 보기"로 들어가는 곳이지 홈이 아닙니다.
+
+앱 진입 시 `GET /sessions/active` 한 번으로 분기하세요:
+
+| `steps` 상태 | 가야 할 화면 |
+|---|---|
+| 404 `NO_ACTIVE_SESSION` | 시작 화면 (온보딩 ①부터) |
+| `reference_photo.segmented` = false | 레퍼런스 촬영 (③) |
+| `user_photo.segmented` = false | 사용자 촬영 (④) |
+| `analysis.overall_status` ≠ DONE | 진단 로딩/폴링 (⑥) |
+| `routine.active_version` = null | 루틴 생성 (⑦) |
+| **`routine.status` = DONE** | ⭐ **홈 = 오늘의 운동** (`GET /routines/today`) |
+
+⚠️ **`routines/today` 는 항상 활성 최신 버전을 돌려줍니다.** 피드백이나 코치
+대화로 루틴이 바뀌면 새 버전(FEEDBACK)이 활성이 되고, 다음 `today` 호출부터
+바뀐 내용이 나옵니다. 프론트가 버전을 들고 있을 필요가 없습니다 —
+**적용 후에는 `today` 를 다시 부르기만** 하면 됩니다.
+
+⚠️ 진행도(`progress`)는 버전이 아니라 **세션 기준**입니다. 피드백으로 버전이
+갈려도 "2주기 3일차"가 그대로 이어집니다. 새 버전이 생겼다고 진행이 0 으로
+돌아가면 그건 버그이니 알려주세요.
+
 ---
 
 ## 2. 사진 촬영 — 여기가 가장 손이 많이 갑니다

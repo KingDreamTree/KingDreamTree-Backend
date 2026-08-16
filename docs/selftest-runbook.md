@@ -137,12 +137,23 @@ inbody: NONE | USED         ← 인바디 없이도 진행되는지
 ## 검증 스크립트 (코드 수정 후 매번)
 
 ```bash
-python scripts/verify_analysis.py        # F08·F09 파이프라인
-python scripts/verify_coach_chat.py      # 코치 대화 도구 검증
-python scripts/verify_routine_rules.py   # 루틴 불변식
-python scripts/verify_ab_contract.py     # A↔B 계약 (스키마 드리프트)
-python scripts/verify_segmap.py <샘플>   # 맵 → 하이라이트
+python scripts/verify_analysis.py            # F08·F09 파이프라인
+python scripts/verify_coach_chat.py          # 코치 대화 도구 검증
+python scripts/verify_routine_rules.py       # 루틴 불변식
+python scripts/verify_ab_contract.py         # A↔B 계약 (스키마 드리프트)
+python scripts/verify_segmap.py <샘플>       # 맵 → 하이라이트
+python scripts/verify_part_merge.py          # 옷 병합 번짐 방지 회귀
+python scripts/verify_restatement_filter.py  # differences 재진술 필터
+python scripts/verify_seg_scale.py           # 촬영 거리 ↔ 유효 판정 안정성
+python scripts/verify_worker_resilience.py   # 잡 1개 실패에 워커가 죽지 않는지
 ```
+
+> 위 목록에 없던 4개(part_merge·restatement·seg_scale·worker_resilience)는
+> 2026-08-17 정리 때 추가 — 스크립트는 있었는데 런북에 빠져 아무도 안 돌리고
+> 있었다. 전부 DB·GPU·키 없이 돈다.
+>
+> 업로드 **거부** 경로(자세 미달·프레이밍·비이미지)는
+> `python scripts/smoke_photo_pipeline.py` 가 유일하게 훑는다 (DB 필요).
 
 ---
 

@@ -352,7 +352,8 @@ function refreshGate() {
   $("g_fram").innerHTML = mark(f.toFixed(2), f >= C.f_min);
   $("g_face").innerHTML = mark(d.toFixed(2), d <= 0.25);
   $("gate").hidden = false;
-  if (p.score < C.threshold || f < C.f_min) $("bypass").checked = true;
+  // 관문 미달 시 자동으로 bypass를 켜지 않는다 — 미달을 눈으로 보고 직접 켜야
+  // 한다 (decisions-20260816 A3: 자동 우회는 관문이 있으나 마나가 된다).
 }
 
 // ── API ─────────────────────────────────────────────────────────────────

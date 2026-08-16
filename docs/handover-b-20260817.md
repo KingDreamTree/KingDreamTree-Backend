@@ -1,0 +1,47 @@
+# B 전달 — 죽은 코드·잔재 정리 목록 (2026-08-17)
+
+> A가 리포 전체 잔재 정리를 하면서 발견한 것 중 **B 영역이라 손대지 않은 것들**이다.
+> (합의대로 A는 B 파트를 직접 고치지 않는다. 판단과 수정은 B가.)
+> A 영역 정리 내역은 같은 날 커밋 로그 참고.
+
+## 1. 죽은 코드 (참조 0건 — 지워도 되는지 확인 요청)
+
+| 위치 | 대상 | 근거 |
+|---|---|---|
+| `app/services/vlm.py:406` | `_clamp_score()` | 호출 0건. "VLM이 점수를 직접 낸다" 설계의 잔재 — 바로 아래 `parse_overall_response` docstring이 "LLM이 점수를 보내와도 버린다"고 명시 |
+| `app/services/vlm.py:324` | `_GAP_SEVERITY` 상수 | 참조 0건. **더 중요한 것**: 주석("통일할 때 나쁜 쪽으로 맞춘다")이 실제 `_unify_pairs()` 동작(gap_level 다르면 건너뜀, 문장 길이로 기준 선택)과 **반대**다. 읽는 사람이 심각도 병합 로직이 있다고 오해한다 |
+| `app/services/routine_mode.py:35` | `BMI_CUTOFF = 25.0` | 참조 0건. 같은 파일 110~123행이 "BMI는 트리거가 아니다"라고 폐기 선언했는데 상수와 "폴백 컷오프" 주석만 남았다 |
+| `app/services/segmap.py:342` | `part_stats()` | **removed-code.md에 2026-08-14부터 확인 요청이 걸려 있던 그 건.** 여전히 호출 0건 |
+| `app/routes/routines.py:22` | `DomainStatus` import | 미사용 import (같은 줄의 다른 것들은 사용 중) |
+| `app/services/routine_templates.py:37` | `Any` import | 미사용 import |
+| `app/services/coach_chat.py:352` | `call_json` noqa import | "provider 준비 확인용"이라는데 실제로 아무 검증도 안 함 — 의도가 있으면 검증답게, 없으면 삭제 |
+
+## 2. 검증 공백 의심 (죽은 코드보다 우선 확인 권장)
+
+- `scripts/verify_routine_build.py:45` — `INBODY_FIT` 픽스처가 정의만 되고 안 쓰인다.
+  **BALANCE 분기가 실제로 검증되지 않고 CUT만 돌고 있을 가능성.** 확인 후
+  픽스처를 쓰든 지우든 결정 필요.
+
+## 3. 결정 필요 (A·B 걸침)
+
+- **`scripts/seed_test_data.py` 은퇴 여부** — "B가 A를 기다리지 않기 위한" 초기
+  발판이었는데, 지금은 B도 로컬 GPU로 실추론이 되고 `smoke_full_flow.py`가 같은
+  역할을 자기완결적으로 한다. B가 아직 쓰면 유지, 아니면 삭제.
+- **`body-parts` 버킷 배선** — 업로드하는 코드가 0건인데 배선 4곳이 남아 있다:
+  `seg.py:120`(매 잡 delete_prefix), `routes/storage.py:27`(signed URL 허용),
+  `db.py:231`(항상 False인 분기), `storage.py:195`(`crop_path()`).
+  `db-design-v4.md`는 "VLM 입력이 크롭으로 확정되면 채운다"(계획 보류)라 하고
+  `segmap.py:5`는 "안 쓴다"고 단정한다 — **두 문서부터 통일하고** 배선을
+  지울지 결정하자. (시연 전엔 안 건드리는 게 안전, 시연 후 정리 권장)
+- `requirements-ml.txt`의 `accelerate` — 유일한 소비처(오프로드 분기)가 8/14에
+  제거됐다. transformers 5.x가 내부적으로 요구하는지 확인 후 빼면 설치가 가벼워짐.
+
+## 4. 참고 (A가 이미 처리한 것 중 B에게 영향 있는 것)
+
+- config 기본값 `SAPIENS_SIZE` 5b→1b (`3ef054e`) — **`git pull` 필요.**
+- 스모크 E2E의 5b 하드코딩 제거 (`684e915`) — B 로컬에서 스모크 실패 2건 보이면 pull 안 한 것.
+- `smoke_segmentation_api.py` 삭제 — 실추론 스모크(`smoke_e2e_segmentation.py`)가 대체.
+- `verify_ab_contract.py`의 4번 검사(실샘플 대조)가 리포 밖 경로를 봐서 **한 번도
+  실행된 적이 없었다** — `out/e2e/segmentation.json`을 보도록 수정했다.
+- 런북에 빠져 있던 검증 4종(part_merge·restatement·seg_scale·worker_resilience)을
+  `selftest-runbook.md`에 추가했다 — 코드 수정 후 같이 돌려주면 된다.

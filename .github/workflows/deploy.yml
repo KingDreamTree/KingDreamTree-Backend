@@ -5,7 +5,7 @@
 #      필요 없다 (docs 및 Dockerfile 주석 참고). 서버가 늘면 그때 전환.
 #
 # 필요한 리포 Secrets (Settings → Secrets and variables → Actions):
-#   EC2_HOST     서버 탄력적 IP (예: 15.165.25.201)
+#   EC2_HOST     서버 탄력적 IP
 #   EC2_SSH_KEY  refit-ec2.pem 파일 내용 전체 (-----BEGIN ... END----- 포함)
 #
 # ⚠️ 이 워크플로를 수정할 수 있는 사람 = 사실상 서버에 명령을 넣을 수 있는

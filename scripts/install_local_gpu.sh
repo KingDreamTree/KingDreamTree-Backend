@@ -40,10 +40,13 @@ if torch.cuda.is_available():
     print(f"GPU: {name}")
     print(f"VRAM: {vram:.1f} GB   compute capability: sm_{cap[0]}{cap[1]}")
     print()
-    print("이 VRAM으로 가능한 백본 (fp16 기준):")
-    for size, need in (("0.4b", 0.8), ("0.8b", 1.5), ("1b", 2.7), ("5b", 9.5)):
+    print("이 VRAM으로 가능한 백본 (fp16 가중치 기준, docs/local-gpu-setup.md 실측):")
+    # ⚠️ 5b는 예전 문서의 9.5GB가 틀린 값이었다 — fp16 로드만 ~10.2GB (실측).
+    #    서비스는 1b로 통일됐다 (2026-08-17). 5b는 참고용으로만 표시한다.
+    for size, need in (("0.4b", 0.8), ("0.8b", 1.5), ("1b", 2.7), ("5b", 10.2)):
         mark = "가능" if vram > need + 3 else ("빠듯" if vram > need else "불가")
-        print(f"  {size:<5} 가중치 ~{need:>4.1f} GB → {mark}")
+        note = "  ← 서비스 표준" if size == "1b" else ("  (폐기됨)" if size == "5b" else "")
+        print(f"  {size:<5} 가중치 ~{need:>4.1f} GB → {mark}{note}")
 else:
     print("⚠️ GPU를 인식하지 못했습니다. 드라이버와 CUDA 빌드 버전을 확인하세요.")
 PY

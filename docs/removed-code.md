@@ -81,8 +81,15 @@ keypoints = {"shoulder_width": 42.5, "hip_width": 38.0,
 
 | 대상 | 왜 남기나 |
 |---|---|
-| `app/schemas/enums.py` 의 미사용 열거형 (`GapLevel`, `Confidence`, `ScoreSource`, `GenerationType`, `Gender`, `VlmInputType`) | 파일 자체가 **`db/schema.sql` 의 CHECK 제약을 그대로 옮긴 미러**다. DB에 있는 값이 여기 없으면 미러가 아니게 된다 |
-| `app/services/routine.py`, `routine_templates.py`, `app/schemas/routine.py`, `app/prompts/routine_*.py`, `vlm.compare_body()` | **담당 B의 미구현 기능(F08~F12) 뼈대**다. 아직 호출되지 않을 뿐 폐기된 게 아니다 |
+| `app/schemas/enums.py` 의 `Gender` (미사용) | 파일 자체가 **`db/schema.sql` 의 CHECK 제약을 그대로 옮긴 미러**다. DB에 있는 값이 여기 없으면 미러가 아니게 된다 |
+
+> (2026-08-17 정정) 이 표에 있던 항목 대부분이 시효 만료라 정리했다 —
+> `GapLevel`·`Confidence`·`ScoreSource`·`GenerationType`·`VlmInputType` 는 이후
+> 구현이 진행되며 **실제 사용 중**이 됐고(vlm.py·analysis.py·routes 등), 함께
+> "미구현 뼈대"로 적어뒀던 `routine.py`·`routine_templates.py`·`routine_*.py` 도
+> 지금은 워커·라우트에서 불리는 **살아 있는 호출 경로**다. `vlm.compare_body()` 는
+> 반대로 **이미 삭제됐다** (CHANGELOG "vlm.py 전면 재작성" 참고) — 여기 "남겨둔
+> 것"으로 적혀 있던 것이 오기였다.
 
 ---
 

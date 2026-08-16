@@ -101,8 +101,6 @@ HF_HOME=/workspace/.cache/huggingface       # ⚠️ 이걸 놓치면 컨테이�
 SAPIENS_SIZE=1b                   # 기본값도 1b지만 명시해 두는 편이 사고를 막는다
 SAPIENS_DEVICE=cuda
 SAPIENS_DTYPE=float16
-
-SEG_WORKER_CONCURRENCY=1
 ```
 
 ### 디스크 배분

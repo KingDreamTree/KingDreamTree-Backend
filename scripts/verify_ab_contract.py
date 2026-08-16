@@ -172,9 +172,16 @@ def main() -> int:
 
     # ── 4. 실제 샘플과 대조 ─────────────────────────────────────────────────
     print("\n4. A 가 준 실제 샘플과 대조")
-    sample = ROOT.parent / "map" / "segmentation.json"
+    # ⚠️ 예전 경로(ROOT.parent / "map")는 리포 **바깥**이라 만든 사람 컴퓨터에서만
+    #    존재했고, 이 검사가 어디서나 조용히 skip되고 있었다 (2026-08-17 발견).
+    #    샘플은 스모크 산출물로 만든다: smoke_e2e_segmentation.py --out out/e2e --keep
+    sample = ROOT / "out" / "e2e" / "segmentation.json"
     if not sample.exists():
-        warn("샘플 없음 — 이 검사는 건너뜀", str(sample))
+        warn(
+            "샘플 없음 — 이 검사는 건너뜀 "
+            "(scripts/smoke_e2e_segmentation.py --out out/e2e 로 생성)",
+            str(sample),
+        )
     else:
         data = json.loads(sample.read_text(encoding="utf-8"))
         palette = data.get("palette") or []

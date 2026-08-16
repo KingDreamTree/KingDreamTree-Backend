@@ -13,9 +13,9 @@
     https://huggingface.co/facebook/sapiens2
     Meta AI. body-part segmentation 29클래스 (Sapiens 28 + Eyeglass).
 
-⚠️ 기본값이 0.4b인 이유 — EC2 t3.large는 GPU가 없다. CPU 추론이라 백본이 커질수록
-   사용자가 로딩 화면에서 기다리는 시간이 그대로 늘어난다. 0.4b로 시작해 품질을 보고
-   올리는 편이 안전하다. (0.4b mIoU 79.5 / 5b 82.5)
+기본값은 1b — 서비스 표준 백본이다 (2026-08-17 팀 합의, app/config.py sapiens_size
+   와 일치). 예전 기본값 0.4b는 "EC2 CPU 추론" 시절 근거였는데, 지금 세그는 GPU
+   워커(RunPod/로컬)가 1b로 돌린다.
 
 ⚠️ 라이선스는 "Sapiens2 License"다. 논문의 CC BY 4.0과 다르므로 혼동하지 말 것.
    상업적 이용 조건은 직접 확인해야 한다:
@@ -59,9 +59,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Sapiens2 세그멘테이션 가중치 다운로드")
     parser.add_argument(
         "--size",
-        default="0.4b",
+        default="1b",
         choices=sorted(REPOS),
-        help="백본 크기 (기본 0.4b — t3.large CPU 추론 기준)",
+        help="백본 크기 (기본 1b — 서비스 표준, app/config.py와 일치)",
     )
     parser.add_argument("--list", action="store_true", help="받지 않고 파일 목록만 출력")
     args = parser.parse_args()

@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 : "${MODEL_DIR:=/workspace/models}"
-: "${SAPIENS_SIZE:=5b}"
+: "${SAPIENS_SIZE:=1b}"
 
 # ⚠️ HuggingFace 캐시를 볼륨으로 돌린다.
 #    기본값은 ~/.cache/huggingface 인데 홈은 컨테이너 디스크다.
@@ -110,11 +110,11 @@ except Exception as e:
     print("        --index-url https://download.pytorch.org/whl/cu128")
     sys.exit(1)
 
-if vram < 15:
-    print("⚠️ 5b fp16은 가중치만 ~9.5GB입니다. 활성값까지 하면 이 VRAM으로는 빠듯합니다.")
-elif vram < 22:  # 24GB 카드는 실제로 23.5GB 정도로 보고된다
-    print("⚠️ VRAM 여유가 크지 않습니다. OOM이 나면 SAPIENS_SIZE=1b 로 내리거나")
-    print("   SAPIENS_OFFLOAD=true 를 쓰세요.")
+# 서비스 표준은 1b (fp16 피크 ~5GB, 2000 Ada 16GB 실측). 8GB 미만에서만 경고한다.
+if vram < 6:
+    print("⚠️ 1b fp16 피크가 ~5GB입니다. 이 VRAM으로는 빠듯합니다 — 0.4b를 고려하세요.")
+elif vram < 8:
+    print("⚠️ VRAM 여유가 크지 않습니다 (1b 피크 ~5GB). 다른 프로세스와 같이 쓰지 마세요.")
 PY
 
 echo

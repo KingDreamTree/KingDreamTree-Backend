@@ -61,7 +61,7 @@ HF_HUB_DISABLE_XET=1 HF_HUB_DOWNLOAD_TIMEOUT=120 python scripts/download_sapiens
 SAPIENS_SIZE=1b
 ```
 
-> ⚠️ 기본값이 `5b` 다. 이 줄이 없으면 "모델 폴더 없음" 으로 죽는다.
+> 기본값도 `1b` 다 (2026-08-17 팀 합의로 5b→1b). 명시해 두면 사고를 막는다.
 
 ### 백본별 실측 (RTX 5070 12GB, 2026-08-15 · 같은 사진 1장)
 

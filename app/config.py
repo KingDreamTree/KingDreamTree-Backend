@@ -180,10 +180,11 @@ class Settings(BaseSettings):
 
     #: 백본 크기. 0.4b | 0.8b | 1b | 5b
     #  ⚠️ 코드는 크기와 무관하다. 바꿔도 재추론만 하면 되고 스키마는 그대로다.
-    #     5b는 fp16 가중치만 ~9.5GB라 VRAM 16GB 이상(24GB 권장)이 필요하다.
-    #  ⚠️ 기본값은 운영에서 쓰는 5b다. 아무 설정 없이 돌렸을 때 실제 배포와
-    #     같은 조합이 되도록.
-    sapiens_size: str = "5b"
+    #  ⚠️ 기본값은 운영에서 쓰는 1b다. 아무 설정 없이 돌렸을 때 실제 배포와
+    #     같은 조합이 되도록. (2026-08-17 팀 합의로 5b→1b — 5b는 특정 사진에서
+    #     부위가 통째로 사라지는 품질 붕괴가 재현돼 폐기, docs/runpod.md 참고.
+    #     VRAM 요구도 5b의 16GB+에서 8GB로 내려가 로컬·저가 팟에서 돈다.)
+    sapiens_size: str = "1b"
 
     #: auto | cuda | cpu.  auto면 CUDA가 있으면 CUDA, 없으면 CPU
     sapiens_device: str = "auto"

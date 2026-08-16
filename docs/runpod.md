@@ -98,7 +98,7 @@ SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 
 MODEL_DIR=/workspace/models                 # ⚠️ 볼륨 경로
 HF_HOME=/workspace/.cache/huggingface       # ⚠️ 이걸 놓치면 컨테이너 디스크가 터진다
-SAPIENS_SIZE=1b                   # ⚠️ config 기본값이 아직 5b라 이 줄이 없으면 죽는다
+SAPIENS_SIZE=1b                   # 기본값도 1b지만 명시해 두는 편이 사고를 막는다
 SAPIENS_DEVICE=cuda
 SAPIENS_DTYPE=float16
 

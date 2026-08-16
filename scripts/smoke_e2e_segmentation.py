@@ -152,9 +152,11 @@ def main() -> int:
             f"추론 {result.get('inference_ms')}ms / {result.get('model_version')}"
         )
         check("추론 결과 요약이 잡에 남음", "segmentation_id" in result)
+        from app.config import settings as _cfg
+
         check(
-            "모델 버전이 검증한 것과 일치",
-            result.get("model_version") == "sapiens2-seg-5b",
+            "모델 버전이 설정(SAPIENS_SIZE)과 일치",
+            result.get("model_version") == f"sapiens2-seg-{_cfg.sapiens_size}",
             str(result.get("model_version")),
         )
 
@@ -225,10 +227,18 @@ def main() -> int:
             f"{max(img.size)} / 상한 {_s.map_max_side}",
         )
 
+        # ⚠️ 맵은 옷 병합 **전 원본**이고 팔레트는 병합 **후** 통계다 (segmenter.segment).
+        #    옷 클래스가 이웃 부위에 전부 흡수되면 맵에만 남으므로, 옷 라벨 값은 허용한다.
+        from app.services import part_merge, sapiens_labels
+
+        label_of = {v: k for k, v in sapiens_labels.build_label_map(29).items()}
+        clothing_values = {
+            int(label_of[c]) for c in part_merge.CLOTHING_CLASSES if c in label_of
+        }
         values = {p["label_value"] for p in seg["palette"]}
         pixels = set(img.getdata())
-        unexpected = pixels - values - {0}
-        check("맵에 팔레트 밖의 값이 없음", not unexpected, f"예상 밖: {sorted(unexpected)[:10]}")
+        unexpected = pixels - values - clothing_values - {0}
+        check("맵에 팔레트·옷 밖의 값이 없음", not unexpected, f"예상 밖: {sorted(unexpected)[:10]}")
 
         if args.out:
             out_dir = Path(args.out)

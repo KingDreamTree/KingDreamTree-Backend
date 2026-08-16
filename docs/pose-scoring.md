@@ -421,7 +421,8 @@ BlazePose는 어깨·골반을 자체 기준으로 찍습니다. 그래서 이 �
 GET /api/v1/pose-criteria
 { "tol_deg": 60, "hard_tol_deg": 70, "threshold": 70,
   "f_min": 0.65, "f_hard": 0.4, "min_seg_ratio": 0.25,
-  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 30 }
+  "min_visible_angles": 4, "min_visibility": 0.5,
+  "min_ref_coverage": 0.7, "n_hold": 30 }
 ```
 
 ⚠️ **한 번 흔들리는 걸 방지하려면** `createHoldGate` 를 쓰세요 — 최근

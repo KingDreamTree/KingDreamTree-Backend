@@ -235,7 +235,8 @@ if (hold(r.pass)) shutter(); // 최근 39프레임 중 30개 통과면 자동 �
 ```json
 { "tol_deg": 60, "hard_tol_deg": 70, "threshold": 70,
   "f_min": 0.65, "f_hard": 0.40, "min_seg_ratio": 0.25,
-  "min_visible_angles": 4, "min_visibility": 0.5, "n_hold": 30 }
+  "min_visible_angles": 4, "min_visibility": 0.5,
+  "min_ref_coverage": 0.7, "n_hold": 30 }
 ```
 
 하드코딩하면 서버에서 값을 조정한 순간 어긋나서, **화면에서는 통과인데 업로드가

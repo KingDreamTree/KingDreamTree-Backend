@@ -2,15 +2,21 @@
 
 | | |
 |---|---|
-| **최종 수정일** | 2026-08-13 |
-| **목적** | Sapiens2 5b 세그멘테이션을 GPU에서 돌리기 |
+| **최종 수정일** | 2026-08-17 |
+| **목적** | Sapiens2 **1b** 세그멘테이션을 GPU에서 돌리기 |
 | **담당** | A |
+
+> ⚠️ **서비스 모델은 1b로 고정 (2026-08-17).** 5b는 특정 사진에서 결과가 완파되는
+> 품질 붕괴(fp16 수치 문제 의심)가 재현돼 폐기했다. 같은 사진이 1b에서는 전 부위
+> 정상 검출. 볼륨의 5b 가중치(19GB)도 삭제했다. 5b로 되돌리려면 품질 검증부터.
 
 ---
 
 ## 왜 RunPod인가
 
-Sapiens2 **5b는 fp16 가중치만 ~9.5GB**입니다. EC2 t3.large(메모리 8GB, GPU 없음)에서는 돌아가지 않고, CPU 추론이라 메모리를 늘려도 이미지 한 장에 분 단위입니다.
+1b도 **GPU가 필요합니다.** EC2 t3.large(2 vCPU, RAM 7.6GB, GPU 없음)에서는 CPU
+추론이 장당 분 단위인 데다(노트북급 CPU 실측 25초/장) fp32 로드에 RAM ~6GB가
+필요해 API와 같이 돌리면 OOM 위험이 있습니다.
 
 Phase 0에서 만든 잡 큐 덕에 **워커를 다른 machine에 둬도 코드 변경이 없습니다.** 워커는 Supabase(job 테이블 + Storage)하고만 대화합니다.
 
@@ -24,15 +30,21 @@ RunPod GPU 팟 (세그 워커)   ─┘
 
 ## 팟 사양
 
-| 모델 | fp16 가중치 | 활성값 여유 포함 | 권장 GPU |
+**1b 기준 VRAM 8GB면 충분합니다** (2000 Ada 16GB 실측 피크 ~5GB, 추론 0.5~1.1초/장).
+
+| 우선순위 | GPU | 시세(EU-RO-1) | 비고 |
 |---|---|---|---|
-| 0.4b | ~0.8 GB | 4 GB | 아무거나 |
-| 1b | ~2.7 GB | 8 GB | RTX 3090 등 |
-| **5b** | **~9.5 GB** | **16 GB 이상** | **RTX 4090 (24GB) 권장** |
+| 1 | **RTX 2000 Ada 16GB** | **$0.24/hr** | 표준. 실측 검증 완료 (2026-08-17) |
+| 2 | L4 24GB | $0.49/hr | 1이 품절일 때 |
+| 3 | RTX PRO 4000 | $0.57/hr | |
+| 4 | RTX PRO 4500 | $0.72/hr | 재고가 거의 항상 있는 안전판 |
 
-> ⚠️ 16GB(T4/A4000)면 5b가 **빠듯합니다.** 1024×768 입력에 56레이어라 활성값이 큽니다. 24GB를 권합니다.
+> 4090(24GB, $0.74/hr)은 5b 시절 사양이다. 1b에는 과사양이라 더 쓰지 않는다.
+> ⚠️ 볼륨이 **EU-RO-1**에 있으므로 팟도 EU-RO-1에서 골라야 한다. 아시아 DC는
+> 시세는 비슷하나 만성 품절(2026-08-17 확인)이라 볼륨 이전 금지.
 
-**디스크** — 5b 가중치가 19GB입니다. Network Volume 최소 40GB.
+**디스크** — 1b 가중치 5.5GB + 리포. 기존 Network Volume 60GB를 그대로 쓴다
+(사용량 ~7GB, 5b는 삭제됨).
 
 ---
 
@@ -40,7 +52,7 @@ RunPod GPU 팟 (세그 워커)   ─┘
 
 ### 1. 가중치는 반드시 볼륨에
 
-컨테이너 디스크는 **휘발성**입니다. 볼륨 없이 띄우면 팟을 다시 만들 때마다 **19GB를 재다운로드**합니다.
+컨테이너 디스크는 **휘발성**입니다. 볼륨 없이 띄우면 팟을 다시 만들 때마다 **가중치(1b 5.9GB)를 재다운로드**합니다.
 
 볼륨은 두 종류이고, **GPU 기종에 따라 선택지가 다릅니다.**
 
@@ -53,7 +65,7 @@ RunPod GPU 팟 (세그 워커)   ─┘
 
 - **Network Volume이 되면** 그쪽이 낫습니다. 팟을 종료해도 가중치가 남아 GPU 요금이 완전히 끊깁니다.
   ⚠️ 볼륨은 리전에 묶입니다. **볼륨을 먼저 만들고 그 리전의 GPU를 고르세요.** 순서가 반대면 붙일 수가 없습니다.
-- **Volume Disk만 되면** (예: A40) 작업 후 **Stop**만 하세요. **Terminate를 누르면 19GB가 사라집니다.**
+- **Volume Disk만 되면** (예: A40) 작업 후 **Stop**만 하세요. **Terminate를 누르면 가중치가 사라집니다.**
   두 버튼이 UI에서 나란히 있어 실수하기 쉽습니다.
 
 ```
@@ -72,7 +84,7 @@ HF_HOME=/workspace/.cache/huggingface
 
 ### 3. 세그 워커는 팟당 하나만
 
-모델을 프로세스마다 하나씩 들고 있으므로 두 개 띄우면 VRAM이 두 배입니다. 5b면 바로 OOM입니다.
+모델을 프로세스마다 하나씩 들고 있으므로 두 개 띄우면 VRAM이 두 배입니다.
 
 ---
 
@@ -86,9 +98,9 @@ SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
 
 MODEL_DIR=/workspace/models                 # ⚠️ 볼륨 경로
 HF_HOME=/workspace/.cache/huggingface       # ⚠️ 이걸 놓치면 컨테이너 디스크가 터진다
-SAPIENS_SIZE=5b
+SAPIENS_SIZE=1b                   # ⚠️ config 기본값이 아직 5b라 이 줄이 없으면 죽는다
 SAPIENS_DEVICE=cuda
-SAPIENS_DTYPE=float16             # 5b는 fp32면 19GB — 반드시 fp16
+SAPIENS_DTYPE=float16
 
 SEG_WORKER_CONCURRENCY=1
 ```
@@ -97,11 +109,11 @@ SEG_WORKER_CONCURRENCY=1
 
 | | 권장 | 들어가는 것 |
 |---|---|---|
-| **Volume Disk** (`/workspace`) | **60 GB** | 가중치 19GB + 비교용 다른 크기 + 캐시 |
+| **Network Volume** (`/workspace`) | 기존 60 GB 유지 | 1b 가중치 5.5GB + 리포 + 캐시 |
 | **Container Disk** | 30 GB (기본값) | 베이스 이미지 + pip 설치분 (~15–18GB) |
 
 ⚠️ **`MODEL_DIR`과 `HF_HOME`을 반드시 `/workspace` 아래로 두세요.**
-컨테이너 디스크는 팟을 종료하면 사라집니다. 여기에 19GB가 들어가면 매번 재다운로드해야 하고,
+컨테이너 디스크는 팟을 종료하면 사라집니다. 여기에 가중치가 들어가면 매번 재다운로드해야 하고,
 HuggingFace 캐시까지 겹치면 컨테이너 디스크 용량을 넘겨 설치가 실패합니다.
 
 ### 최초 1회
@@ -109,30 +121,42 @@ HuggingFace 캐시까지 겹치면 컨테이너 디스크 용량을 넘겨 설�
 ```bash
 git clone https://github.com/KingDreamTree/KingDreamTree-Backend.git
 cd KingDreamTree-Backend
-bash scripts/install_runpod.sh     # 의존성 + 가중치 다운로드 (5b는 19GB, 오래 걸림)
+bash scripts/install_runpod.sh     # 의존성 + 가중치 다운로드 (1b는 5.9GB)
 ```
 
-### 워커 기동
+> ⚠️ 팟을 **재시작**할 때도 컨테이너가 초기화되므로 `install_runpod.sh`는 다시
+> 돌려야 한다 (가중치는 볼륨에 있어 재다운로드는 안 한다, pip만 몇 분).
+
+### 워커 기동 — 무인 상주 (표준)
+
+터미널·Jupyter 탭을 닫아도 유지되고, 워커가 죽으면 5초 뒤 스스로 재기동한다:
 
 ```bash
-python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER
+cd /workspace/KingDreamTree-Backend
+nohup bash -c 'while true; do python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER >> /workspace/worker.log 2>&1; echo "[$(date)] worker died, restarting" >> /workspace/worker.log; sleep 5; done' > /dev/null 2>&1 &
 ```
-
-`tmux`로 띄워두면 SSH가 끊겨도 유지됩니다. 세션 이름은 EC2와 겹치지 않게 `seg`로 하세요.
 
 ```bash
-tmux new -s seg
-python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER
-# Ctrl+B, D 로 빠져나오기
+tail -f /workspace/worker.log      # 로그 확인
+ps aux | grep app.worker           # 생존 확인
+pkill -f app.worker.run            # 내릴 때 (루프까지 죽이려면 pkill -f "while true" 도)
 ```
+
+⚠️ 상주 운영은 **잔액이 생명선**이다. 잔액 0 = RunPod이 팟 강제 정지 = 서비스
+정지. $0.24/hr 기준 하루 $5.76씩 소진되니 운영 기간만큼 미리 충전할 것.
 
 ---
 
 ## 운영 메모
 
-**콜드 스타트** — 팟 부팅 + 19GB를 VRAM에 올리는 데 수 분 걸립니다. 시연 중에 팟이 꺼져 있으면 첫 요청이 몇 분 걸립니다. **시연 시간대에는 미리 켜두세요.**
+**콜드 스타트** — 워커 기동 후 **첫 잡**만 모델 로딩 때문에 ~35초 걸리고, 이후에는
+잡당 ~10초(추론 0.5~1초)다. 상주 운영이면 사용자는 항상 예열 상태를 만난다.
 
-**비용** — 시간당 과금입니다. 개발·시연 때만 켜고 끄면 실제 비용은 크지 않습니다.
+**비용** — 밀리초 단위 과금. 2000 Ada 상주 기준 하루 $5.76. 개발만 할 때는 끄고
+로컬 GPU 워커를 쓰는 게 싸다 (`docs/local-gpu-setup.md`).
+
+**동결 운영 (2026-08-20~)** — 8/20 이후 무개입 방침. 팟은 Stop 하지 않고 상주,
+잔액만 대시보드에서 하루 한 번 확인한다.
 
 ### 좀비 잡 회수 (구현됨)
 
@@ -157,14 +181,13 @@ python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER
 
 ## 로컬 개발과의 관계
 
-로컬(RTX 5060, VRAM 8GB)에서는 **1b까지** 돌아갑니다. 개발·디버깅은 로컬 0.4b로 빠르게 하고, RunPod은 5b 검증과 시연에만 쓰는 게 효율적입니다.
+로컬(RTX 5060, VRAM 8GB)에서도 **1b가 그대로** 돌아갑니다(추론 2.2초/장,
+`docs/local-gpu-setup.md`). 팟을 끄고 개발할 때는 로컬 워커로 대체하면 됩니다.
 
-```bash
-# 로컬
-SAPIENS_SIZE=0.4b SAPIENS_DEVICE=cuda python -m app.worker.run --kinds SEG_REFERENCE,SEG_USER
-```
-
-`segmenter.py` 코드는 크기·장비와 무관합니다.
+⚠️ **워커는 한 시점에 한 곳만.** 잡 큐가 공유라서 팟·A 로컬·B 로컬 워커가 동시에
+뜨면 잡을 나눠 먹고, 서로 다른 크기로 떠 있으면 한 세션의 두 사진을 다른 모델이
+처리하는 품질 사고가 난다 (2026-08-16/17 실제 발생: 5b/1b 혼재, 0.4b 가로채기).
+켜기 전에 팀에 선언하고, 서비스 모델은 **1b로 통일**한다.
 
 ---
 

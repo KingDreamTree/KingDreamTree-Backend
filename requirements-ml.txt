@@ -1,7 +1,11 @@
-# ML 의존성 — 버전 단일 출처
+# ML 의존성 — 버전 기준표
 #
 # ⚠️ 이 파일을 직접 `pip install -r` 하지 마세요.
 #    torch는 환경마다 다른 인덱스에서 받아야 합니다. scripts/install_*.sh 를 쓰세요.
+#
+# ⚠️ 설치 스크립트 3개(install_cpu / install_local_gpu / install_runpod)는 이 파일을
+#    읽지 않고 **버전을 각자 하드코딩**하고 있다. 버전을 올릴 때는 이 파일과
+#    스크립트 세 곳을 같이 고칠 것 — 한 곳만 고치면 환경별로 버전이 갈라진다.
 #      scripts/install_local_gpu.sh   로컬 GPU (CUDA 12.8)
 #      scripts/install_cpu.sh         EC2 / CPU 전용
 #      scripts/install_runpod.sh      RunPod GPU 워커

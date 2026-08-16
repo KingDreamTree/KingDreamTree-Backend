@@ -46,13 +46,13 @@ docker compose up --build
 가중치는 git 에 없다. `models/` 로 직접 받는다.
 
 ```bash
-python scripts/download_sapiens.py --size 0.4b
+python scripts/download_sapiens.py --size 1b     # 서비스 표준 백본 (5.9GB)
 ```
 
 받은 뒤 구조 (safetensors 다. `.pth` 가 아니다):
 ```
 models/
-└── sapiens2-seg-0.4b/
+└── sapiens2-seg-1b/
     ├── model.safetensors
     ├── config.json
     └── preprocessor_config.json
@@ -60,7 +60,7 @@ models/
 
 검증 — 라벨 29 클래스와 좌우 배치까지 확인한다:
 ```bash
-python scripts/verify_labels.py --image tests/fixtures/sample-photo.jpg --size 0.4b
+python scripts/verify_labels.py --image tests/fixtures/sample-photo.jpg --size 1b
 ```
 
 Docker 는 `docker-compose.yml` 이 `./models:/app/models` 로 자동 마운트한다.
@@ -149,13 +149,13 @@ POST /api/v1/sessions/{id}/coach-chat               → 루틴 수정 대화
 2. **Supabase 프로젝트 생성** → 버킷 생성: `photos`, `segmentations`, `body-parts`, `inbody-temp` (전부 private)
 3. **DB 스키마 적용** — Supabase SQL 에디터에서 `db/schema.sql` 실행 (이후 변경은 `db/migrations/`)
 4. **마스터 데이터 시드** — `python scripts/seed_body_parts.py`
-5. **모델 가중치 다운로드** — `python scripts/download_sapiens.py --size 0.4b`
+5. **모델 가중치 다운로드** — `python scripts/download_sapiens.py --size 1b`
 
 ---
 
 ## 개발 팁
 
-- 포매터: `black --check .` + `isort --check-only .`
+- 포매터: `black --check .` + `isort --check-only .` (설치는 `pip install -r requirements-dev.txt` — 런타임 의존성과 분리돼 있다)
 - `scripts/verify_*.py` 는 단위별 점검, `scripts/smoke_*.py` 는 API 를 실제로 때리는 흐름 점검이다.
 - 포즈 임계값은 `.env` 로만 만진다. 산식과 각 값의 근거는 [docs/pose-scoring.md](docs/pose-scoring.md).
 - 제거된 설정·코드가 왜 없어졌는지는 [docs/removed-code.md](docs/removed-code.md).

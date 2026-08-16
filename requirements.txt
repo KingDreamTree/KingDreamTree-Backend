@@ -16,9 +16,9 @@ pillow==12.3.0
 pillow-heif==1.5.0
 numpy==2.3.4
 
-# ── 개발 도구 ───────────────────────────────────────────────────────────────
-black==25.9.0
-isort==7.0.0
+# ⚠️ 개발 도구(black, isort)는 requirements-dev.txt 로 분리했습니다 —
+#    이 파일은 Dockerfile 이 그대로 설치하므로 프로덕션 이미지에 포매터가
+#    들어가면 안 됩니다.
 
 # ⚠️ ML 의존성(torch, transformers)은 여기 없습니다.
 #

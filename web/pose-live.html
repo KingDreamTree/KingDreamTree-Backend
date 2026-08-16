@@ -202,21 +202,22 @@
   </div>
 
   <p class="note">
-    ⚠️ <b>거울 모드는 보기에만 적용됩니다.</b> 판정에 쓰는 좌표는 카메라 원본 그대로입니다 —
-    좌표까지 뒤집으면 왼팔 진단이 오른팔에 붙습니다.<br>
+    ⚠️ <b>판정 방향은 프리뷰 방향을 따릅니다.</b> 레퍼런스는 항상 원본으로 표시하되,
+    거울 모드에서는 좌우반전한 레퍼런스를 기준으로 판정합니다 — 화면에 보이는 대로 따라 하면 통과합니다.
+    업로드에 쓰는 좌표·사진은 카메라 원본 그대로입니다 — 뒤집으면 왼팔 진단이 오른팔에 붙습니다.<br>
     ⚠️ 레퍼런스 사진과 웹캠의 <b>화면비가 다른 게 정상</b>입니다. OKS는 그 차이를 보정해서 계산합니다.
   </p>
 </div>
 
 <script type="module">
-import { evaluate, createHoldGate, fetchCriteria, shoulderRatio, IDX, SEGMENTS }
+import { evaluate, mirrorLandmarks, createHoldGate, fetchCriteria, shoulderRatio, IDX, SEGMENTS }
   from "./pose-score.js";
 
 const $ = (id) => document.getElementById(id);
 const setStatus = (t, k = "") => { $("status").textContent = t; $("status").className = k; };
 
 let criteria = null, imgLm = null, vidLm = null;
-let refLm = null, liveLm = null, refAspect = 1, personCount = 0;
+let refLm = null, refLmMirror = null, liveLm = null, refAspect = 1, personCount = 0;
 let hold = null, running = false, captured = false;
 
 const videoAspect = () => {
@@ -295,6 +296,7 @@ async function loadRef(file) {
       return;
     }
     refLm = res.landmarks[0];
+    refLmMirror = mirrorLandmarks(refLm); // 거울 모드 판정 기준 — 표시는 원본 그대로
     // ⚠️ **사진의 화면비**다. 웹캠과 다른 게 보통이고, 안 넘기면 OKS 가 조용히 틀린다.
     refAspect = img.naturalWidth / img.naturalHeight;
 
@@ -334,6 +336,11 @@ $("cam").onclick = async () => {
   }
 };
 
+// ⚠️ 레퍼런스는 **절대 뒤집어 보여주지 않는다** (2026-08-16 결정 — 사진 속
+//    글자가 뒤집히는 표시 품질 문제로 기각). 대신 **판정 방향 = 프리뷰 방향**:
+//    거울 모드에서는 좌우반전한 레퍼런스를 기준으로 판정한다. 그러면 화면에
+//    보이는 대로 따라 하는 것이 곧 정답이다. 실서비스는 프리뷰가 항상
+//    거울이므로 항상 거울 기준이다 — 여기서는 체크박스가 그 스위치다.
 $("mirror").onchange = (e) => $("liveview").classList.toggle("mirror", e.target.checked);
 $("reshoot").onclick = () => {
   captured = false;
@@ -428,7 +435,9 @@ function loop() {
     drawSkeleton($("livecv"), liveLm, $("liveview"));
 
     if (refLm && liveLm) {
-      const r = evaluate(refLm, liveLm, criteria, {
+      // 판정 방향 = 프리뷰 방향 — 거울 모드면 좌우반전 레퍼런스가 기준
+      const basis = $("mirror").checked ? refLmMirror : refLm;
+      const r = evaluate(basis, liveLm, criteria, {
         multiPerson: personCount > 1,
         refAspect,
         userAspect: videoAspect(),
@@ -474,6 +483,7 @@ function render(r) {
     .sort((a, b) => b[1] - a[1]).slice(0, 3)
     .map(([k, v]) => `${k} ${v.toFixed(0)}°`).join("  ");
   $("praw").textContent =
+    ($("mirror").checked ? "거울 기준 판정 · " : "") +
     (r.detail.poseReason ? `${r.detail.poseReason} · ` : "") +
     (worst || "잴 각도 없음") + ` · 유효각도 ${r.detail.usedAngles}개`;
 

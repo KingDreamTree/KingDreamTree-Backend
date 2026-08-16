@@ -75,9 +75,11 @@ const visibleIn = (frames, indexes, minVisibility) =>
   frames.every((lm) => indexes.every((i) => lm[i] && vis(lm[i]) >= minVisibility));
 
 function requireCriteria(c) {
-  // ⚠️ min_seg_ratio 까지 본다 — 2026-08-14 에 추가된 키라, 옛 서버가 내려준
-  //    criteria 를 그대로 쓰면 단축 컷이 조용히 꺼진다. 시끄럽게 죽는 게 낫다.
-  if (!c || typeof c.tol_deg !== "number" || typeof c.min_seg_ratio !== "number") {
+  // ⚠️ 새로 추가된 키까지 본다(min_seg_ratio 2026-08-14, min_ref_coverage 2026-08-16).
+  //    옛 서버가 내려준 criteria 를 그대로 쓰면 해당 컷이 조용히 꺼진다.
+  //    시끄럽게 죽는 게 낫다.
+  if (!c || typeof c.tol_deg !== "number" || typeof c.min_seg_ratio !== "number"
+      || typeof c.min_ref_coverage !== "number") {
     throw new Error(
       "criteria 가 필요합니다. GET /api/v1/pose-criteria 로 받아서 넘기세요. " +
         "(임계값을 프론트에 하드코딩하면 서버 조정 시 어긋납니다)"
@@ -95,6 +97,7 @@ function requireCriteria(c) {
  *
  * reason 이 null 이 아니면 score 는 0 이다.
  *   NOT_ENOUGH_JOINTS — 양쪽 모두에서 보이는 각도가 부족해 판정 자체가 불가
+ *   REF_PARTS_MISSING — 레퍼런스에 나온 부위가 사용자 사진에 충분히 없음
  *   JOINT_TOO_FAR     — 한 관절이라도 hard_tol_deg 를 넘음
  *
  * ⚠️ 평균만 쓰면 왼팔이 완전히 다른 방향인데 나머지가 맞아 통과한다 —
@@ -139,6 +142,25 @@ export function poseScore(ref, user, criteria) {
   if (usedAngles < c.min_visible_angles) {
     return { score: 0, reason: "NOT_ENOUGH_JOINTS", usedAngles, diffs };
   }
+
+  // ⚠️ 커버리지 — **레퍼런스에서 보이는 세그먼트는 사용자 사진에도 있어야 한다**
+  //    (2026-08-16, 실측 리포트: 전신 레퍼런스 대비 상반신만 잡힌 사진이 고득점
+  //    통과했다. 안 보이는 세그먼트는 "제외"만 되고, 남은 각도끼리 비슷하면
+  //    점수가 높게 나온다 — 비교 자체가 성립 안 하는 사진인데도).
+  //
+  //  ⚠️ 방향은 비대칭이다. 사용자가 레퍼런스를 덮어야 하고, 반대는 요구하지
+  //     않는다 — 상체 레퍼런스에 전신 사용자 사진은 정상이다.
+  //  ⚠️ visibility 만 본다. 단축(foreshortening) 세그먼트를 빠진 것으로 치면
+  //     카메라 쪽으로 팔을 뻗은 정상 사진이 반려된다 — 각도만 못 잴 뿐
+  //     부위는 사진에 있다. 단축 제외를 만든 이유를 그대로 되살리는 실수다.
+  const refVisible = SEGMENTS.filter(([, a, b]) => visibleIn([ref], [a, b], c.min_visibility));
+  if (refVisible.length > 0) {
+    const covered = refVisible.filter(([, a, b]) => visibleIn([user], [a, b], c.min_visibility));
+    if (covered.length / refVisible.length < c.min_ref_coverage) {
+      return { score: 0, reason: "REF_PARTS_MISSING", usedAngles, diffs };
+    }
+  }
+
   if (values.some((d) => d > c.hard_tol_deg)) {
     return { score: 0, reason: "JOINT_TOO_FAR", usedAngles, diffs };
   }
@@ -536,6 +558,7 @@ export function oksScore(
 export const MESSAGES = {
   MULTI_PERSON: "혼자 나오도록 촬영해주세요.",
   NOT_ENOUGH_JOINTS: "전신이 보이도록 서주세요.",
+  REF_PARTS_MISSING: "레퍼런스에 나온 부위가 모두 보이도록 서주세요.",
   FRAMING: "레퍼런스와 촬영 거리가 너무 다릅니다.",
   //: 유도용 — 셔터도 업로드도 막지 않는다. 문구만 띄운다.
   TOO_CLOSE: "조금 뒤로 물러나 주세요.",
@@ -597,6 +620,10 @@ export function evaluate(
   let blockReason = null;
   if (multiPerson) blockReason = "MULTI_PERSON";
   else if (pose.reason === "NOT_ENOUGH_JOINTS") blockReason = "NOT_ENOUGH_JOINTS";
+  // ⚠️ 커버리지 미달도 FRAMING 보다 먼저 — 부위가 화면 밖이면 거리 안내("물러나라")가
+  //    아니라 "그 부위가 나오게 서라"가 고칠 수 있는 안내다. 서버는 이 사유를
+  //    모른다(숫자만 받는다) — NOT_ENOUGH_JOINTS 처럼 이 상태로는 업로드하지 않는다.
+  else if (pose.reason === "REF_PARTS_MISSING") blockReason = "REF_PARTS_MISSING";
   else if (framing < c.f_hard) blockReason = "FRAMING";
   else if (pose.score < c.threshold) blockReason = "POSE";
 
@@ -629,6 +656,53 @@ export function evaluate(
       oksPer: oks.per,
     },
   };
+}
+
+// --------------------------------------------------------------------------
+// 거울 프리뷰 보정 — 실시간 촬영 화면 전용 (2026-08-16 결정)
+//
+// 셀피 미리보기는 거울(좌우반전)인데 레퍼런스는 원본으로 보여준다. 그래서
+// 사용자가 화면에 **보이는 대로** 따라 하면 해부학적으로는 좌우가 반전된
+// 자세가 된다 — 그게 자연스러운 행동이므로 그 방향이 정답이어야 한다.
+//
+// 규칙은 화면당 하나다. **판정 방향 = 프리뷰 방향.**
+//
+//   실시간 촬영(거울 프리뷰):  evaluate(mirrorLandmarks(ref), user, ...)
+//   갤러리 업로드(프리뷰 없음): evaluate(ref, user, ...)                — 기존 그대로
+//
+// ⚠️ "양방향 다 계산해서 좋은 쪽 채택"은 기각됐다 — 판정 기준이 사용자마다
+//    달라지고, 저장되는 사진의 좌우 방향이 뒤섞여 downstream(좌우 부위 진단)이
+//    어느 방향인지 알 수 없게 된다. 한 화면 한 규칙이면 방향이 균일하다.
+// ⚠️ **레퍼런스 이미지를 화면에서 뒤집는 방식도 기각됐다.** 사진 속 배경
+//    글자가 뒤집혀 보이는 표시 품질 문제. 표시는 원본, 판정만 거울 기준.
+// --------------------------------------------------------------------------
+
+/** MediaPipe 33개 중 좌/우 쌍. 0(코) 등 중앙점은 쌍이 없다. */
+export const LR_PAIRS = [
+  [1, 4], [2, 5], [3, 6], [7, 8], [9, 10],
+  [11, 12], [13, 14], [15, 16], [17, 18], [19, 20], [21, 22],
+  [23, 24], [25, 26], [27, 28], [29, 30], [31, 32],
+];
+
+/**
+ * 랜드마크를 좌우반전한다 — x 를 뒤집고 좌/우 이름표를 맞바꾼다.
+ * 실시간 촬영 화면에서 **레퍼런스에만** 적용해 판정 기준으로 쓴다.
+ *
+ * ⚠️ 이름표 스왑 없이 x 만 뒤집으면 안 된다. 왼팔 좌표에 "오른팔" 이름이
+ *    남아, 비교가 전부 반대 관절과 붙는다 (서버 unmirror_landmarks 와 같은 원리).
+ * ⚠️ z 는 그대로 둔다 — 깊이(카메라와의 거리)는 좌우반전과 무관하다.
+ * ⚠️ **사용자 랜드마크와 사진에는 절대 적용하지 않는다.** 업로드는 항상 카메라
+ *    원본이다 — 뒤집어 보내면 이름표가 실제 몸과 어긋나 왼팔 진단이 오른팔에
+ *    붙는다 (is_mirrored 경로는 "이미 반전 저장된 갤러리 사진" 전용이다).
+ */
+export function mirrorLandmarks(lm) {
+  const out = lm.map((p) => ({ ...p, x: 1 - p.x }));
+  for (const [a, b] of LR_PAIRS) {
+    const t = out[a];
+    out[a] = out[b];
+    out[b] = t;
+  }
+  return out;
 }
 
 // --------------------------------------------------------------------------

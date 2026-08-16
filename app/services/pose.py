@@ -278,6 +278,7 @@ def criteria() -> dict[str, float | int]:
         "min_seg_ratio": settings.pose_min_seg_ratio,
         "min_visible_angles": settings.pose_min_visible_angles,
         "min_visibility": settings.pose_min_visibility,
+        "min_ref_coverage": settings.pose_min_ref_coverage,
         "n_hold": settings.pose_n_hold,
     }
 

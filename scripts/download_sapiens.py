@@ -27,6 +27,10 @@
 import argparse
 import os
 import sys
+from pathlib import Path
+
+# app.config 의 settings 로 MODEL_DIR 을 읽기 위해 (셸 export 없이 .env 만 있어도 되게)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 #: 크기별 세그멘테이션 체크포인트 레포
 REPOS = {
@@ -77,7 +81,17 @@ def main() -> None:
             print(f"  {f}")
         return
 
-    model_dir = os.environ.get("MODEL_DIR", "models")
+    # ⚠️ 셸 환경변수만 읽으면 .env 에 MODEL_DIR 을 둔 환경(RunPod 규약)에서
+    #    리포 안 상대경로 models/ 에 받아 버리고, 워커는 .env 경로를 찾다 죽는다.
+    #    우선순위: 셸 환경변수 > .env(app.config) > 기본값 "models".
+    model_dir = os.environ.get("MODEL_DIR")
+    if not model_dir:
+        try:
+            from app.config import settings
+
+            model_dir = settings.model_dir
+        except Exception:  # noqa: BLE001 — 의존성 없는 환경이면 기본값으로
+            model_dir = "models"
     target = os.path.join(model_dir, f"sapiens2-seg-{args.size}")
     os.makedirs(target, exist_ok=True)
 

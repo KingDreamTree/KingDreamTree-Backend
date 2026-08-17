@@ -320,10 +320,6 @@ def _coerce_part(
 #: 한쪽만 가리키는 말. 이게 들어있으면 반대쪽 카드에 복사할 수 없다.
 _SIDE_WORDS = ("왼", "오른", "좌측", "우측")
 
-#: gap_level 심각도 — 통일할 때 나쁜 쪽으로 맞춘다.
-_GAP_SEVERITY = {"NONE": 0, "SLIGHT": 1, "MODERATE": 2, "SIGNIFICANT": 3}
-
-
 def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
     """좌우 쌍의 판정·문장을 하나로 맞춘다 (제자리 수정).
 
@@ -354,7 +350,11 @@ def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
         if not a or not b or a == b:
             continue
 
-        # 더 심한 쪽 → 같으면 왼쪽 문장을 기준으로 (재현성)
+        # 기준 문장은 **더 긴 쪽**이다 (짧은 쪽이 대개 정보가 적다).
+        # 길이가 같으면 왼쪽 — 같은 입력이면 같은 결과가 나오도록.
+        # ⚠️ 심각도(gap_level)로 고르지 않는다. 여기까지 온 시점에 좌우
+        #    gap_level 은 이미 같다(위에서 다르면 continue). 심각도 비교는
+        #    할 일이 없어서 _GAP_SEVERITY 상수를 지웠다 (2026-08-17).
         source = part if len(a) >= len(b) else other
         text = source["assessment"]
         if any(w in text for w in _SIDE_WORDS):
@@ -401,12 +401,6 @@ def parse_part_response(
         "results": [results[n] for n in class_names if n in results],
         "missing": [n for n in class_names if n not in results],
     }
-
-
-def _clamp_score(value: Any) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    return max(0, min(100, int(round(value))))
 
 
 def parse_overall_response(

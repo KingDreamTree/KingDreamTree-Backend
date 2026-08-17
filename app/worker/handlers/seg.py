@@ -73,6 +73,23 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
     map_path = storage.map_path(user_id, session_id, kind)
     storage.upload(settings.bucket_segmentations, map_path, result.map_png, "image/png")
 
+    # ⚠️ 오버레이용 병합 맵을 **나란히** 올린다. palette 통계는 병합 후 기준인데
+    #    원본 맵에는 옷이 옷으로 남아 있어서, 프론트가 원본을 라벨값으로 칠하면
+    #    실측(2026-08-17) 허벅지의 19~21% 가 빠진 채 듬성듬성 칠해진다.
+    #    VLM 오버레이(segmap.merge_map)는 이미 맞춰져 있었고 프론트만 어긋났다.
+    #    ⚠️ 실패해도 세그 잡을 죽이지 않는다 — 원본 맵은 이미 올라갔고, 프론트는
+    #       merged_map_url 이 없으면 map_url 로 폴백한다.
+    if result.merged_map_png:
+        try:
+            storage.upload(
+                settings.bucket_segmentations,
+                storage.merged_map_path(user_id, session_id, kind),
+                result.merged_map_png,
+                "image/png",
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("병합 맵 업로드 실패 — 프론트는 원본 맵으로 폴백합니다")
+
     created = db.replace_segmentation(
         UUID(str(photo_id)),
         segmentation={

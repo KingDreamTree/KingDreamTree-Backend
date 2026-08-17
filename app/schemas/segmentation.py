@@ -50,6 +50,14 @@ class SegmentationResponse(BaseModel):
     kind: PhotoKind
 
     map_url: str = Field(description="8-bit 그레이스케일 PNG. 픽셀 값 = label_value")
+    merged_map_url: str | None = Field(
+        default=None,
+        description=(
+            "오버레이용 **병합 맵**. 옷 픽셀이 인접 부위로 흡수된 상태라 palette 통계와"
+            " 일치한다. 하이라이트는 이걸 쓰세요 — map_url(원본)을 쓰면 옷 부분이"
+            " 빠져 듬성듬성 칠해진다. 옛 세션은 null 이므로 map_url 로 폴백할 것."
+        ),
+    )
     map_width: int
     map_height: int
 

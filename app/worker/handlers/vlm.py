@@ -31,7 +31,16 @@ from PIL import Image
 
 from app.config import settings
 from app.schemas.enums import DomainStatus, JobKind, PhotoKind, ScoreSource, VlmInputType
-from app.services import db, diagnosis_repo, inbody_repo, scoring, segmap, storage, vlm
+from app.services import (
+    db,
+    diagnosis_repo,
+    inbody_repo,
+    part_pairing,
+    scoring,
+    segmap,
+    storage,
+    vlm,
+)
 from app.worker import queue
 from app.worker.registry import register
 
@@ -55,10 +64,23 @@ class InputNotUsableError(RuntimeError):
 
 
 def _load_side(context: dict[str, Any], kind: PhotoKind) -> tuple[bytes, bytes, list[str]]:
-    """한쪽(레퍼런스 또는 사용자)의 원본 JPEG·오버레이 JPEG·칠해진 부위를 만든다."""
+    """한쪽(레퍼런스 또는 사용자)의 원본 JPEG·오버레이 JPEG·칠해진 부위를 만든다.
+
+    ⚠️ 반환하는 '칠해진 부위' 이름은 **사용자 기준**으로 통일한다. 교차 세션에서
+       레퍼런스는 미러 부위를 칠하지만, 호출부가 두 목록을 교집합으로 쓰기 때문에
+       좌표계가 섞이면 멀쩡한 부위가 통째로 빠진다.
+    """
     photo = context["photos"][str(kind)]
     seg = context["segmentations"][str(kind)]
     parts = context["parts"]
+    cross = context.get("cross_paired", False)
+
+    # 레퍼런스만 짝을 바꿔 칠한다. 사용자 쪽은 자기 이름 그대로.
+    if kind == PhotoKind.REFERENCE and cross:
+        parts = [
+            {**p, "class_name": part_pairing.reference_class_for(p["class_name"], True)}
+            for p in parts
+        ]
 
     photo_bytes = storage.download(photo["storage_bucket"], photo["storage_path"])
     map_bytes = storage.download(seg["storage_bucket"], seg["map_path"])
@@ -80,6 +102,9 @@ def _load_side(context: dict[str, Any], kind: PhotoKind) -> tuple[bytes, bytes, 
         parts=[(p["class_name"], p["color_hex"] or "#888888") for p in parts],
         label_map=seg["label_map"],
     )
+    # 레퍼런스가 미러명으로 칠해졌으면 사용자 기준으로 되돌려 돌려준다 (위 주석 참고)
+    if kind == PhotoKind.REFERENCE and cross:
+        painted = [part_pairing.mirror_class(n) for n in painted]
     return segmap.encode_jpeg(image), segmap.encode_jpeg(overlay), painted
 
 
@@ -137,10 +162,23 @@ def _diagnose_parts(job: dict[str, Any]) -> dict[str, Any]:
     if len(parts) < settings.min_comparable_parts:
         raise InputNotUsableError("맵에서 비교 대상 부위를 충분히 찾지 못했습니다.")
 
-    ref_segments = context["segments"][str(PhotoKind.REFERENCE)]
+    ref_segments_raw = context["segments"][str(PhotoKind.REFERENCE)]
     user_segments = context["segments"][str(PhotoKind.USER)]
     person_classes = context["person_classes"]
     names = [p["class_name"] for p in parts]
+    cross = context.get("cross_paired", False)
+
+    # ⚠️ 아래 계산들은 names(사용자 기준) 하나를 양쪽 공용 키로 쓴다. 그래서 레퍼런스
+    #    세그먼트를 **사용자 기준 키로 재색인**해서 넘긴다 — 이렇게 해야 "사용자 왼팔"
+    #    자리에 레퍼런스 오른팔 행이 들어가 공정한 비교가 된다.
+    #    (좌우 대칭 지표는 자기 사진 안의 Left_/Right_ 접두사로 쌍을 찾는데, 재색인은
+    #     그 쌍을 통째로 맞바꾸는 것이라 대칭값 자체는 바뀌지 않는다 — 부호만 뒤집힌다.)
+    ref_segments = {
+        name: ref_segments_raw[part_pairing.reference_class_for(name, cross)]
+        for name in names
+        if part_pairing.reference_class_for(name, cross) in ref_segments_raw
+    }
+    log.info("좌우 교차 짝짓기: %s", "예 (거울 매칭 촬영)" if cross else "아니오")
 
     metrics = segmap.compare_parts(ref_segments, user_segments, names, person_classes)
     inbody, inbody_source = _inbody_for(session_id)
@@ -159,6 +197,7 @@ def _diagnose_parts(job: dict[str, Any]) -> dict[str, Any]:
         )
     )
 
+    # ref_segments 는 위에서 사용자 기준 키로 재색인됐다 — 교차 쌍이 그대로 저장된다
     rows = _to_diagnosis_rows(result, parts, ref_segments, user_segments)
     diagnosis_repo.replace_part_diagnoses(session_id, rows)
 

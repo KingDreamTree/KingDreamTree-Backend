@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID
 
 from app.schemas.enums import DomainStatus, PhotoKind
+from app.services import part_pairing
 from app.services.db import get_client, get_photo, get_segmentation, list_part_segments
 
 #: 인물로 치는 부위 그룹. 정규화 분모(인물 전체 픽셀)를 낼 때 쓴다.
@@ -41,6 +42,7 @@ def build_comparison_context(session_id: UUID) -> dict[str, Any]:
           "parts":    [body_part 행],  # 교집합 통과한 비교 대상만, display_order 순
           "excluded": [{class_name, name_ko, reason, side}],
           "person_classes": set[str],
+          "cross_paired": bool,       # 거울 매칭 촬영이라 좌우 교차로 짝지었는가
         }
 
     ⚠️ 교집합 조건 = 레퍼런스·사용자 **양쪽 모두** is_valid 인 is_comparable 부위
@@ -79,10 +81,16 @@ def build_comparison_context(session_id: UUID) -> dict[str, Any]:
             "parts": [],
             "excluded": [],
             "person_classes": person_classes,
+            "cross_paired": False,
         }
 
     ref_segments = segments[str(PhotoKind.REFERENCE)]
     user_segments = segments[str(PhotoKind.USER)]
+
+    # 거울 매칭 촬영(CAPTURE)이면 좌우 교차로 짝짓는다 — 규칙은 part_pairing 이 단일 관문.
+    # ⚠️ 교집합부터 교차를 반영해야 한다. 여기서 같은 이름끼리 맞춰버리면 아래의
+    #    수치·오버레이·진단문이 전부 어긋난 짝 위에서 계산된다.
+    cross_paired = part_pairing.is_cross_paired(photos.get(str(PhotoKind.USER)))
 
     parts: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
@@ -90,8 +98,10 @@ def build_comparison_context(session_id: UUID) -> dict[str, Any]:
     for bp in master:
         if not bp.get("is_comparable"):
             continue
+        # name 은 **사용자 기준** 부위명이다. 레퍼런스 쪽만 짝을 바꿔서 본다.
         name = bp["class_name"]
-        ref, user = ref_segments.get(name), user_segments.get(name)
+        ref_name = part_pairing.reference_class_for(name, cross_paired)
+        ref, user = ref_segments.get(ref_name), user_segments.get(name)
 
         # 사용자 쪽 사유를 우선 노출한다 — 사용자가 취할 행동(재촬영)에 직결된다.
         if user is None or not user.get("is_valid"):
@@ -107,7 +117,8 @@ def build_comparison_context(session_id: UUID) -> dict[str, Any]:
         if ref is None or not ref.get("is_valid"):
             excluded.append(
                 {
-                    "class_name": name,
+                    # 레퍼런스 사진에서 빠진 것이므로 레퍼런스 자기 부위명으로 알린다
+                    "class_name": ref_name,
                     "name_ko": bp.get("name_ko"),
                     "reason": (ref or {}).get("invalid_reason") or "NOT_DETECTED",
                     "side": str(PhotoKind.REFERENCE),
@@ -125,6 +136,7 @@ def build_comparison_context(session_id: UUID) -> dict[str, Any]:
         "parts": parts,
         "excluded": excluded,
         "person_classes": person_classes,
+        "cross_paired": cross_paired,
     }
 
 

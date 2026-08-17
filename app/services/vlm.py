@@ -259,21 +259,25 @@ def _norm_ko(text: str) -> str:
     return re.sub(r"[\s.,!?·…\"'()]", "", text)
 
 
-#: 판단 불가 부위의 서술에서 잘라낼 "처방" 신호. 못 봤다면서 방향을 제시하는 문장이
-#: 실물로 나왔다 — "눈으로 확인하지 못했습니다. 근육량을 늘리는 방향이 적합합니다."
-#: ⚠️ 관찰 문장("…확인하지 못했습니다")에는 이 말들이 없어서 관찰만 남는다.
-_PRESCRIPTION_MARKERS = (
-    "늘리",
-    "키우",
-    "강화",
-    "집중",
-    "권장",
-    "적합",
-    "보완",
-    "발달",
-    "운동을",
-    "방향",
-    "것이 좋",
+#: 부위 카드에서 잘라낼 **권유 어미**. 부위 카드는 본 것만 말하고, 방향은 종합
+#: 진단(silhouette)이 전체를 보고 한 번만 말한다 — 부위마다 방향을 달면 그
+#: 방향들이 서로 맞는지 아무도 보증하지 않는다.
+#:
+#: ⚠️ 낱말이 아니라 **어미**로 가른다. "발달"·"방향" 같은 낱말로 자르면
+#:    "상완 부위의 발달 차이가 주요한 차이로 확인됩니다" 같은 정상 관찰문까지
+#:    날아간다. 관찰은 «나타납니다 / 확인됩니다 / 드러납니다 / 보입니다 /
+#:    어렵습니다» 로 끝나고, 권유는 아래로 끝난다.
+_ADVICE_ENDINGS = (
+    "좋습니다",
+    "필요합니다",
+    "권장합니다",
+    "적합합니다",
+    "추천합니다",
+    "낫습니다",
+    "하세요",
+    "해보세요",
+    "바랍니다",
+    "important",  # 영문 응답 방어 (형식 붕괴 시)
 )
 
 
@@ -310,23 +314,25 @@ def _strip_exercise_names(assessment: str | None) -> str | None:
 
 
 def _strip_prescription(assessment: str | None) -> str | None:
-    """판단 불가 부위의 서술에서 처방 문장을 걷어낸다.
+    """부위 카드 서술에서 권유 문장을 걷어낸다. 관찰 문장만 남긴다.
 
-    ⚠️ 이 함수가 필요한 이유는 프롬프트가 이미 금지하고 있는데도 나오기 때문이다.
-       "못 봤다"와 "이렇게 하세요"가 한 서술에 같이 있으면 사용자는 뒤 문장을 믿고,
-       그 부위는 실제로 근거가 0 이다. 이 코드베이스의 규칙 — 모델이 반복해서
-       어기는 규칙은 산문이 아니라 코드로 막는다.
+    ⚠️ 이 함수가 필요한 이유는 프롬프트가 두 곳에서 금지하는데도 나오기 때문이다
+       (실측 2026-08-17: "팔을 굽혀 드는 운동에 집중하는 것이 좋습니다").
+       이 리포의 규칙 — 모델이 반복해서 어기는 규칙은 산문이 아니라 코드로 막는다.
+
+    ⚠️ 판단 불가 부위에서는 특히 중요하다. "못 봤다" 뒤에 방향이 붙으면 사용자는
+       뒤 문장을 믿는데 그 부위의 근거는 0 이다.
     """
     if not assessment:
         return assessment
     kept = [
         sentence
         for sentence in assessment.split(". ")
-        if not any(marker in sentence for marker in _PRESCRIPTION_MARKERS)
+        if not any(sentence.rstrip(". ").endswith(end) for end in _ADVICE_ENDINGS)
     ]
     if not kept:
-        # 처방만 있고 관찰이 없었다는 뜻 — 부위명은 호출부가 붙이므로 여기선 중립문.
-        return "사진에서 이 부위를 확인하지 못했습니다."
+        # 권유만 있고 관찰이 없었다 — 진단이라 부를 수 없으므로 버린다.
+        return None
     out = ". ".join(part.rstrip(". ") for part in kept)
     return out if out.endswith(".") else out + "."
 
@@ -348,10 +354,15 @@ def _coerce_part(
     assessment = item.get("assessment")
     assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
 
-    # ⚠️ 종목 이름은 등급과 무관하게 항상 막는다 (판단 불가 게이트보다 먼저).
+    # ⚠️ 종목 이름과 권유 문장은 **등급과 무관하게 항상** 막는다.
+    #    부위 카드는 본 것만 말한다 — 방향은 종합 진단이 전체를 보고 한 번만 말한다.
     stripped = _strip_exercise_names(assessment)
     if stripped != assessment:
         log.warning("%s: 진단문에 운동 종목 이름이 있어 해당 문장 제거", class_name)
+        assessment = stripped
+    stripped = _strip_prescription(assessment)
+    if stripped != assessment:
+        log.warning("%s: 진단문에 권유 문장이 있어 제거", class_name)
         assessment = stripped
 
     differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
@@ -390,13 +401,6 @@ def _coerce_part(
     #    적용해 blocked_reason 은 "인바디 기준 판단"인데 gap_level 은 null,
     #    confidence 는 MEDIUM 인 — 표에 없는 상태를 보내왔다. 그 상태로 저장되면
     #    "못 봤는데 꽤 믿을 만하다"가 되어 종합·루틴이 그 부위를 근거로 삼는다.
-    if gap_level is None:
-        forced = _strip_prescription(assessment)
-        if forced != assessment:
-            log.warning("%s: 판단 불가인데 처방 문장이 있어 제거", class_name)
-            assessment = forced
-            differences = _drop_restatements(differences, assessment)
-
     confidence = _enum_or_none(item.get("confidence"), Confidence)
     if gap_level is None:
         confidence = str(Confidence.LOW)

@@ -49,8 +49,8 @@ check(
     f"{len(part_pairing._MIRROR)}개",
 )
 
-print("\n2. 교차 여부 도출 (사용자 사진 기준)")
-check("CAPTURE → 교차", is_cross_paired({"capture_source": "CAPTURE"}))
+print("\n2. 교차 여부 도출 — 2026-08-18 부터 전부 비교차 (촬영본을 거울 방향으로 저장)")
+check("CAPTURE → 비교차 (저장 시점에 방향 확정됨)", not is_cross_paired({"capture_source": "CAPTURE"}))
 check("UPLOAD → 비교차", not is_cross_paired({"capture_source": "UPLOAD"}))
 check("capture_source 없음 → 비교차", not is_cross_paired({}))
 check("사진 행 없음 → 비교차", not is_cross_paired(None))

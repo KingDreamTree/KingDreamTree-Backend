@@ -36,6 +36,37 @@
 - `requirements-ml.txt`의 `accelerate` — 유일한 소비처(오프로드 분기)가 8/14에
   제거됐다. transformers 5.x가 내부적으로 요구하는지 확인 후 빼면 설치가 가벼워짐.
 
+## 3-1. 🔴 급함 — 거울 매칭 좌우 교차 짝짓기: B 쪽 반영 필요 (2026-08-17 팀 결정)
+
+**배경**: 실시간 촬영(CAPTURE)은 거울 미리보기 + 반전 채점으로 유도되므로,
+레퍼런스가 왼팔을 들면 사용자는 **오른팔**을 든다. 같은 이름끼리 비교하면 "든 팔
+vs 내린 팔"을 비교하게 된다. A(사용자 결정)가 "회피 불가, 반드시 해결"로 확정.
+
+**A가 이미 한 것**:
+- `app/services/part_pairing.py` — 짝짓기 단일 관문. `mirror_class()`,
+  `is_cross_paired(user_photo)`(= `capture_source == "CAPTURE"`, 새 필드 없음),
+  `reference_class_for(user_class, cross)`. **짝짓기는 반드시 이 모듈만 경유.**
+- 세션 비교 API(`routes/segmentation.py`) — 교차 반영 완료. 응답에
+  `comparable.cross_paired` 추가, `class_names`는 사용자 기준으로 통일.
+- `scripts/verify_part_pairing.py` — 규칙 검증 (런북 등재).
+
+**B가 할 것 — `app/worker/handlers/vlm.py` (부위 진단 짝짓기)**:
+현재 레퍼런스/사용자 양쪽을 같은 `class_name` 키로 당긴다. 교차 세션이면
+레퍼런스 쪽 접근만 `part_pairing.reference_class_for(name, cross)`로 바꿔야 한다:
+1. `cross = part_pairing.is_cross_paired(사용자 photo 행)` 을 컨텍스트에서 한 번 계산
+2. `ref_segments.get(name)` → `ref_segments.get(reference_class_for(name, cross))`
+   (`_to_diagnosis_rows`의 `reference_segment_id` 포함 — 스키마는 ref/user
+   segment_id 를 따로 저장하므로 교차 쌍을 그대로 담을 수 있다)
+3. 레퍼런스 오버레이/하이라이트를 칠할 부위 목록도 ref 프레임으로 변환
+4. `segmap.compare_parts(ref_segments, user_segments, names, ...)` — names 가
+   양쪽 공용 키로 쓰인다면 ref 쪽만 변환해서 넘기도록 수정
+5. 진단문 부위명은 **사용자 기준**(사용자의 오른팔이면 "오른팔")으로 유지
+
+⚠️ 반쯤 반영이 최악이다 — 세션 비교(A, 반영됨)와 부위 진단(B)이 다르게 짝지으면
+왼팔 카드에 오른팔 근거가 붙고 에러는 안 난다. **동결(8/20) 전에 같이 맞추자.**
+검증: 비대칭 포즈 CAPTURE 세션 하나로 세션 비교 API의 쌍과 part_diagnosis 의
+segment_id 쌍이 같은 짝인지 대조.
+
 ## 4. 참고 (A가 이미 처리한 것 중 B에게 영향 있는 것)
 
 - config 기본값 `SAPIENS_SIZE` 5b→1b (`3ef054e`) — **`git pull` 필요.**

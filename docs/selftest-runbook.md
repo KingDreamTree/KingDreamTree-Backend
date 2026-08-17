@@ -146,6 +146,7 @@ python scripts/verify_part_merge.py          # 옷 병합 번짐 방지 회귀
 python scripts/verify_restatement_filter.py  # differences 재진술 필터
 python scripts/verify_seg_scale.py           # 촬영 거리 ↔ 유효 판정 안정성
 python scripts/verify_worker_resilience.py   # 잡 1개 실패에 워커가 죽지 않는지
+python scripts/verify_part_pairing.py        # 좌우 교차 짝짓기 규칙 (거울 매칭)
 ```
 
 > 위 목록에 없던 4개(part_merge·restatement·seg_scale·worker_resilience)는

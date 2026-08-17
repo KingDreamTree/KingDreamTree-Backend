@@ -78,10 +78,18 @@ class ExcludedPart(BaseModel):
 
 
 class ComparableSummary(BaseModel):
-    class_names: list[str] = Field(description="레퍼런스·사용자 양쪽에서 유효한 비교 대상")
+    #: ⚠️ class_names 는 **사용자 사진 기준** 부위명이다. cross_paired=true 면
+    #   각 부위의 비교 상대는 레퍼런스의 **좌우 반대** 부위다 (거울 매칭 촬영).
+    #   프론트는 레퍼런스 쪽 하이라이트만 미러명(Left↔Right)으로 뒤집으면 된다.
+    #   근거·규칙: app/services/part_pairing.py
+    class_names: list[str] = Field(description="양쪽에서 유효한 비교 대상 (사용자 기준 부위명)")
     count: int
     sufficient: bool
     min_required: int
+    cross_paired: bool = Field(
+        default=False,
+        description="true 면 좌우 교차 짝짓기 — 사용자 X ↔ 레퍼런스 mirror(X)",
+    )
     reference_only: list[str] = Field(default_factory=list)
     user_only: list[str] = Field(default_factory=list)
     excluded: list[ExcludedPart] = Field(default_factory=list)

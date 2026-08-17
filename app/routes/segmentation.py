@@ -26,7 +26,7 @@ from app.schemas.segmentation import (
     SegmentationResponse,
     SessionSegmentationResponse,
 )
-from app.services import db, storage
+from app.services import db, part_pairing, storage
 
 router = APIRouter(tags=["segmentation"])
 
@@ -198,11 +198,21 @@ async def get_session_segmentation(session: OwnedSession) -> SessionSegmentation
 
     ref_valid = _valid_comparable(reference)
     user_valid = _valid_comparable(user)
-    both = sorted(ref_valid & user_valid)
+
+    # 거울 매칭 촬영(CAPTURE)이면 좌우 교차로 짝짓는다 — 규칙은 part_pairing 참고.
+    # 비교 목록의 기준 좌표계는 **사용자 부위명**으로 통일한다.
+    cross = part_pairing.is_cross_paired(user_photo)
+    ref_valid_user_frame = (
+        {part_pairing.mirror_class(c) for c in ref_valid} if cross else ref_valid
+    )
+    both = sorted(user_valid & ref_valid_user_frame)
 
     # 양쪽에서 빠진 부위는 한 번만 알려준다 — 같은 안내가 두 줄 나오면 지저분하다.
+    # ⚠️ excluded 판정은 각자 자기 사진의 부위명으로 한다 — 레퍼런스 쪽 비교
+    #    대상 집합은 교차 시 미러명으로 되돌려서 넘긴다.
     compared = set(both)
-    ref_excluded = _excluded(reference, "REFERENCE", compared)
+    compared_ref_frame = {part_pairing.reference_class_for(c, cross) for c in both}
+    ref_excluded = _excluded(reference, "REFERENCE", compared_ref_frame)
     user_excluded = _excluded(user, "USER", compared)
 
     seen: set[str] = set()
@@ -225,8 +235,13 @@ async def get_session_segmentation(session: OwnedSession) -> SessionSegmentation
             count=len(both),
             sufficient=len(both) >= settings.min_comparable_parts,
             min_required=settings.min_comparable_parts,
-            reference_only=sorted(ref_valid - user_valid),
-            user_only=sorted(user_valid - ref_valid),
+            cross_paired=cross,
+            # reference_only 는 레퍼런스 자기 부위명으로 돌려준다 (미러 되돌림)
+            reference_only=sorted(
+                part_pairing.mirror_class(c) if cross else c
+                for c in (ref_valid_user_frame - user_valid)
+            ),
+            user_only=sorted(user_valid - ref_valid_user_frame),
             excluded=merged,
         ),
     )

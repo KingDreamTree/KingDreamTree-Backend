@@ -42,7 +42,6 @@ def run(**kwargs):
 
 
 INBODY_FAT = {"gender": "MALE", "body_fat_percentage": 27.0, "bmi": 26.0, "weight": 80.0}
-INBODY_FIT = {"gender": "MALE", "body_fat_percentage": 18.9, "bmi": 22.0, "weight": 63.5}
 PRIORITY = ["Left_Upper_Arm", "Right_Upper_Arm", "Torso"]
 
 

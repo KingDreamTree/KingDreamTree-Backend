@@ -46,7 +46,7 @@
 
 <script type="module">
 import { poseScore, framingScore, facingDelta, evaluate, oksScore, createHoldGate,
-         mirrorLandmarks, mirrorSuspected,
+         mirrorLandmarks,
          KEYPOINT_SIGMA, COCO_17, COCO_BODY_12, COCO_FROM_MEDIAPIPE, IDX }
   from "./pose-score.js";
 
@@ -325,7 +325,7 @@ const tests = [
     expect: true,
     run: () => { try { poseScore(REF, build(), null); return false; } catch { return true; } },
   },
-  // ── 거울 (2026-08-17 리허설 신고 "갤러리 업로드 유사도 0%" 재현) ──────────
+  // ── 거울 — 실시간 촬영이 왜 거울 기준으로 판정·저장하는지 (2026-08-18) ─────
   {
     name: "거울 — 대칭 자세는 반전해도 그대로 통과",
     why: "★ 다리·몸통처럼 수직에 가까운 세그먼트는 반전해도 각도가 안 변한다 — 대칭 자세에서는 거울 문제가 안 보이는 이유",
@@ -333,28 +333,16 @@ const tests = [
     run: () => poseScore(REF, mirrorLandmarks(build()), C).score,
   },
   {
-    name: "거울 — 비대칭 자세를 화면 보이는 대로 따라 하면 0",
-    why: "★★ 신고 재현. 갤러리 경로는 정방향 판정인데 사람은 거울처럼 모방한다(반전 저장 셀피도 같은 결과). 팔이 hard_tol_deg 를 넘어 정확히 0%",
+    name: "거울 — 비대칭 자세를 정방향으로 채점하면 0",
+    why: "★★ 사람은 프리뷰(거울)에 보이는 대로 따라 한다. 정방향으로 채점하면 팔이 hard_tol_deg 를 넘어 정확히 0% — 실시간 촬영이 레퍼런스를 반전해 채점하는 이유",
     expect: "JOINT_TOO_FAR",
     run: () => poseScore(ASYM_REF, mirrorLandmarks(build(ASYM)), C).reason,
   },
   {
-    name: "거울 의심 — 반전이면 설명되는 실패에 뜬다",
-    why: "★ 위 상황에서 힌트가 나가야 사용자가 체크박스로 고칠 수 있다",
-    expect: true,
-    run: () => mirrorSuspected(ASYM_REF, mirrorLandmarks(build(ASYM)), C),
-  },
-  {
-    name: "거울 의심 — 그냥 딴 자세에는 안 뜬다",
-    why: "★ 반전으로 설명 안 되는 실패에 이 힌트를 띄우면 엉뚱한 걸 고치게 된다",
-    expect: false,
-    run: () => mirrorSuspected(ASYM_REF, build(shift(75)), C),
-  },
-  {
-    name: "거울 의심 — 통과한 사진에는 안 뜬다",
-    why: "자세 사유(POSE)로 거부됐을 때만 보는 힌트다",
-    expect: false,
-    run: () => mirrorSuspected(REF, build(), C),
+    name: "거울 — 반전 기준으로 채점하면 통과",
+    why: "★ 위와 같은 사진을 실시간 촬영 규칙(레퍼런스 반전)으로 채점하면 만점. 저장도 같은 방향으로 하므로 이후 비교가 이름 그대로 성립한다",
+    expect: 100,
+    run: () => poseScore(mirrorLandmarks(ASYM_REF), mirrorLandmarks(build(ASYM)), C).score,
   },
   // ── OKS ────────────────────────────────────────────────────────────────
   {

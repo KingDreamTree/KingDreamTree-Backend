@@ -116,11 +116,24 @@ def _build(
     )
     photo_url, _ = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
 
+    # ⚠️ 병합 맵은 **있으면 준다.** 이 필드가 생기기 전에 만들어진 세션에는 파일이
+    #    없으므로 서명 URL 생성이 실패할 수 있다 — 그때는 null 로 두고 프론트가
+    #    map_url 로 폴백한다. 여기서 예외를 내면 멀쩡한 조회가 통째로 죽는다.
+    #    ⚠️ photo 행에는 user_id 가 없다 (schema.sql: session_id 만 있다). 저장된
+    #       map_path 에서 파일명만 바꿔 유도한다 — 두 파일은 같은 폴더에 나란히 있다.
+    merged_map_url = None
+    merged_path = segmentation["map_path"].rsplit("/", 1)[0] + "/map_merged.png"
+    try:
+        merged_map_url, _ = storage.signed_url(segmentation["storage_bucket"], merged_path)
+    except Exception:  # noqa: BLE001
+        pass
+
     return SegmentationResponse(
         segmentation_id=str(segmentation["segmentation_id"]),
         photo_id=str(photo_id),
         kind=photo["kind"],
         map_url=map_url,
+        merged_map_url=merged_map_url,
         map_width=segmentation["map_width"],
         map_height=segmentation["map_height"],
         photo_url=photo_url,

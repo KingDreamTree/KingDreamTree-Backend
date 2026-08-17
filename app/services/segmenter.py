@@ -73,6 +73,11 @@ class SegmentationResult:
     inference_ms: int
     parts: list[PartStat] = field(default_factory=list)
 
+    #: 오버레이용 병합 맵 PNG. 병합을 껐으면 None.
+    #: ⚠️ 원본 map_png 를 덮지 않고 **나란히** 둔다 — 맵은 추론 결과의 원본이고,
+    #:    병합 규칙을 바꿀 때 재추론 없이 다시 만들 수 있어야 한다.
+    merged_map_png: bytes | None = None
+
     #: 옷 병합 **전** 기준으로 유효했던 비교 대상 수.
     #: ⚠️ parts 의 유효 수와 크게 차이나면 "옷을 많이 입었다"는 뜻이다.
     #:    병합은 헐렁한 옷 실루엣도 유효하게 만들어버리므로, 재촬영 판단은
@@ -379,6 +384,8 @@ def segment(
 
     return SegmentationResult(
         map_png=encode_map_png(labels),
+        # ⚠️ stat_labels 는 이미 계산된 병합 배열이다 — 인코딩만 한 번 더 한다.
+        merged_map_png=(encode_map_png(stat_labels) if settings.seg_merge_clothing else None),
         map_width=w,
         map_height=h,
         label_map=label_map,

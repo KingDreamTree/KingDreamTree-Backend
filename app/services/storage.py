@@ -192,6 +192,20 @@ def map_path(user_id: UUID, session_id: UUID, kind: str) -> str:
     return f"{user_id}/{session_id}/{kind.lower()}/map.png"
 
 
+def merged_map_path(user_id: UUID, session_id: UUID, kind: str) -> str:
+    """오버레이용 병합 맵. 원본 map.png 와 **나란히** 둔다.
+
+    ⚠️ 원본을 덮어쓰지 않는 이유는 part_merge 모듈 주석 참조 — 맵은 추론 결과의
+       원본이고, 병합 규칙을 바꿀 때 재추론 없이 다시 만들 수 있어야 한다.
+
+    ⚠️ 이 파일이 필요한 이유 — 통계(palette)는 병합 **후** 기준인데 원본 맵에는
+       옷이 옷으로 남아 있다. 프론트가 원본 맵을 라벨값으로 칠하면 실측(2026-08-17)
+       기준 허벅지의 19~21% 가 안 칠해진다. VLM 오버레이는 segmap.merge_map 을
+       태워 이미 맞춰져 있었고, 프론트만 어긋나 있었다.
+    """
+    return f"{user_id}/{session_id}/{kind.lower()}/map_merged.png"
+
+
 def crop_path(user_id: UUID, session_id: UUID, kind: str, class_name: str) -> str:
     """body-parts/{user_id}/{session_id}/reference/{class_name}.png
 

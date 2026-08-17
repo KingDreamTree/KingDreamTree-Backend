@@ -459,9 +459,10 @@ def parse_overall_response(
         "cautions": _as_str_list(parsed.get("cautions")),
         # ── 사진을 직접 보고 낸 전체 형태 판단 (2026-08-17) ──
         "silhouette": silhouette.strip() if isinstance(silhouette, str) else None,
-        # ⚠️ 3개까지만. 프롬프트도 1~3개로 지시하지만 지시는 어겨질 수 있고,
+        # ⚠️ 2개까지만. 프롬프트도 1~2개로 지시하지만 지시는 어겨질 수 있고,
         #    많아지면 "부위 카드 복사"가 섞여 들어온다 (그게 이 필드의 실패 형태다).
-        "key_differences": _as_str_list(parsed.get("key_differences"))[:3],
+        #    화면 요약 상자가 고정 폭이라 길이도 함께 눌러야 한다.
+        "key_differences": _as_str_list(parsed.get("key_differences"))[:2],
         "confidence": _confidence_ratio(parsed.get("confidence")),
     }
 

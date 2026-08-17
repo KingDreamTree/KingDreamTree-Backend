@@ -367,6 +367,26 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     inbody, inbody_source = _inbody_for(session_id)
     overall_input = [_for_overall(r) for r in done]
 
+    # ── 원본 두 장을 종합에도 넣는다 (2026-08-17) ──────────────────────────────
+    # 부위 9개를 각각 정확히 봐도 "상체는 가까운데 하체가 얇다" 같은 **부위 사이의
+    # 관계**는 어느 카드에도 안 나온다. 등급의 합계에는 비율이 없기 때문이다.
+    #
+    # ⚠️ 전처리는 F08 과 **같은 헬퍼**(_load_side → segmap.fit_for_vlm)를 쓴다.
+    #    여기서 따로 리사이즈하면 두 호출이 다른 그림을 보게 되고, 그 차이는
+    #    "왜 부위 진단과 종합이 다른 말을 하지?"로 나타난다.
+    # ⚠️ 사진을 못 구해도 종합을 실패시키지 않는다. 부위 진단은 멀쩡한데 요약만
+    #    비는 상태가 더 나쁘다 — 텍스트 전용으로 되돌아간다(폴백).
+    ref_photo = user_photo = None
+    try:
+        context = diagnosis_repo.build_comparison_context(session_id)
+        if context["ready"]:
+            ref_photo, _, _ = _load_side(context, PhotoKind.REFERENCE)
+            user_photo, _, _ = _load_side(context, PhotoKind.USER)
+    except Exception:  # noqa: BLE001
+        log.warning("종합 진단용 사진을 준비하지 못했습니다 — 텍스트 전용으로 진행합니다", exc_info=True)
+
+    log.info("종합 진단 입력: 사진 %s", "2장" if ref_photo and user_photo else "없음(폴백)")
+
     # 점수는 코드가 계산한다 (score_source=RULE). VLM 은 격차 "판정"까지만 하고
     # 판정→점수 합산은 규칙이다 — "68점이 왜 68점인가"에 공식으로 답하기 위해서.
     # 근거·공식은 app/services/scoring.py 모듈 docstring.
@@ -381,6 +401,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             score=score,
             # 검출조차 안 된 비교 대상 — 없으면 LLM 이 본 적 없는 부위를 칭찬한다.
             excluded=_excluded_parts(session_id, {r["class_name"] for r in rows}),
+            reference_photo=ref_photo,
+            user_photo=user_photo,
         )
     )
 
@@ -399,6 +421,14 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             "raw_response": {
                 "llm": result.get("raw_response"),
                 "score_breakdown": scored["breakdown"] if scored else None,
+                # ⚠️ 전용 컬럼이 아니라 여기 담는다. 컬럼을 만들려면 DDL 이 필요한데
+                #    이 코드에서 실행할 경로가 없다 (PostgREST 는 CRUD 만, 접속
+                #    문자열도 없다). 마이그레이션 파일은 db/migrations 에 두었고,
+                #    적용하면 그때 컬럼으로 승격하면 된다 — 읽는 쪽(routes/analysis)
+                #    한 곳만 바꾸면 되도록 키 이름을 컬럼명과 같게 맞춰둔다.
+                "silhouette": result.get("silhouette"),
+                "key_differences": result.get("key_differences") or [],
+                "confidence": result.get("confidence"),
             },
             "status": str(DomainStatus.DONE),
         },
@@ -409,6 +439,9 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         "judged": len(done),
         "failed": len(failed),
         "inbody": inbody_source,
+        # 잡 결과에 남겨 "이번 종합이 사진을 봤는가"를 나중에 되짚을 수 있게 한다.
+        "photos": "2" if ref_photo and user_photo else "0",
+        "confidence": result.get("confidence"),
     }
 
 

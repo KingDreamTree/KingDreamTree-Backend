@@ -36,6 +36,18 @@ from app.schemas.enums import DomainStatus, JobKind, JobStatus
 from app.services import db, diagnosis_repo, inbody_repo
 from app.worker import queue
 
+def _overall_extra(row: dict[str, Any], key: str) -> Any:
+    """F09 가 사진을 보고 낸 추가 판단 (silhouette / key_differences / confidence).
+
+    ⚠️ 컬럼이 있으면 컬럼을, 없으면 raw_response 안을 본다. 마이그레이션을 적용한
+       환경과 아직 안 한 환경이 같은 코드로 돌아야 한다. 컬럼으로 승격되면
+       이 함수만 지우면 된다 — 키 이름을 컬럼명과 같게 맞춰뒀다.
+    """
+    if row.get(key) is not None:
+        return row[key]
+    return (row.get("raw_response") or {}).get(key)
+
+
 router = APIRouter(tags=["analysis"])
 
 
@@ -206,13 +218,26 @@ async def get_analysis(session: OwnedSession) -> AnalysisResponse:
                 priority_parts=overall_row.get("priority_parts") or [],
                 strengths=overall_row.get("strengths") or [],
                 cautions=overall_row.get("cautions") or [],
+                # ⚠️ 전용 컬럼이 생기기 전까지는 raw_response 안에 있다 (핸들러 주석 참고).
+                silhouette=_overall_extra(overall_row, "silhouette"),
+                key_differences=_overall_extra(overall_row, "key_differences") or [],
+                confidence=_overall_extra(overall_row, "confidence"),
                 status=overall_row["status"],
             )
             if overall_row
             else None
         ),
         parts=[to_part_dto(r, master.get(r["class_name"], {})) for r in rows],
-        excluded=[ExcludedPart(**e) for e in context["excluded"]],
+        # ⚠️ parts 는 **진단 당시** 저장된 행이고 excluded 는 **지금** 다시 계산한다.
+        #    그 사이 재세그멘테이션 등으로 비교 가능 집합이 바뀌면 같은 부위가
+        #    카드에도 뜨고 "분석에서 빠졌다"에도 뜬다 (실측 2026-08-17: 다리 4개).
+        #    진단 결과가 있다는 건 그때는 비교됐다는 뜻이므로 카드 쪽을 신뢰하고
+        #    제외 목록에서 뺀다 — 사용자에게 앞뒤 안 맞는 두 문장을 보이지 않는다.
+        excluded=[
+            ExcludedPart(**e)
+            for e in context["excluded"]
+            if e["class_name"] not in {r["class_name"] for r in rows}
+        ],
         inbody_id=UUID(str(inbody["inbody_id"])) if inbody else None,
         disclaimer=DISCLAIMER,
     )

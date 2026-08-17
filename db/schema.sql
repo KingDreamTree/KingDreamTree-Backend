@@ -359,6 +359,12 @@ CREATE TABLE overall_diagnosis (
     priority_parts        JSONB,
     strengths             JSONB,
     cautions              JSONB,
+    --: F09 가 원본 사진을 직접 보고 낸 전체 형태 판단 (2026-08-17 추가).
+    --  부위 카드로는 드러나지 않는 관계 — 상하체 균형, 어깨-허리 폭 비율 등.
+    key_differences       JSONB,
+    silhouette            TEXT,
+    --: 종합 판단의 확신도. ⚠️ similarity_score 와 무관하다 — 점수는 규칙이 계산한다.
+    confidence            NUMERIC(3, 2) CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 1),
     raw_response          JSONB,
     status                VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                           CHECK (status IN ('PENDING', 'DONE', 'FAILED')),

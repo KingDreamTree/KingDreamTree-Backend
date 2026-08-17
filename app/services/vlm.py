@@ -96,6 +96,17 @@ def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
         "priority_parts": [p["class_name"] for p in ranked[:3]],
         "strengths": ["하체 균형이 좋습니다"],
         "cautions": ["좌우 차이가 있어 균형 운동을 권합니다"],
+        # ⚠️ 실제 호출과 같은 키를 낸다. mock 만 키가 적으면 USE_MOCK 로 개발한
+        #    프론트가 실서버에서 처음 보는 필드를 만난다 (반대도 마찬가지다).
+        "silhouette": (
+            "어깨에서 허리로 내려오는 폭은 목표와 비슷하지만, "
+            "상체 대비 하체의 볼륨이 목표 쪽이 더 큽니다. (mock)"
+        ),
+        "key_differences": [
+            "상체 대비 하체 볼륨이 목표보다 적습니다 (mock)",
+            "어깨 폭 대비 허리가 넓어 전체 윤곽이 다르게 보입니다 (mock)",
+        ],
+        "confidence": 0.8,
         "raw_response": {"mock": True},
     }
 
@@ -248,6 +259,46 @@ def _norm_ko(text: str) -> str:
     return re.sub(r"[\s.,!?·…\"'()]", "", text)
 
 
+#: 판단 불가 부위의 서술에서 잘라낼 "처방" 신호. 못 봤다면서 방향을 제시하는 문장이
+#: 실물로 나왔다 — "눈으로 확인하지 못했습니다. 근육량을 늘리는 방향이 적합합니다."
+#: ⚠️ 관찰 문장("…확인하지 못했습니다")에는 이 말들이 없어서 관찰만 남는다.
+_PRESCRIPTION_MARKERS = (
+    "늘리",
+    "키우",
+    "강화",
+    "집중",
+    "권장",
+    "적합",
+    "보완",
+    "발달",
+    "운동을",
+    "방향",
+    "것이 좋",
+)
+
+
+def _strip_prescription(assessment: str | None) -> str | None:
+    """판단 불가 부위의 서술에서 처방 문장을 걷어낸다.
+
+    ⚠️ 이 함수가 필요한 이유는 프롬프트가 이미 금지하고 있는데도 나오기 때문이다.
+       "못 봤다"와 "이렇게 하세요"가 한 서술에 같이 있으면 사용자는 뒤 문장을 믿고,
+       그 부위는 실제로 근거가 0 이다. 이 코드베이스의 규칙 — 모델이 반복해서
+       어기는 규칙은 산문이 아니라 코드로 막는다.
+    """
+    if not assessment:
+        return assessment
+    kept = [
+        sentence
+        for sentence in assessment.split(". ")
+        if not any(marker in sentence for marker in _PRESCRIPTION_MARKERS)
+    ]
+    if not kept:
+        # 처방만 있고 관찰이 없었다는 뜻 — 부위명은 호출부가 붙이므로 여기선 중립문.
+        return "사진에서 이 부위를 확인하지 못했습니다."
+    out = ". ".join(part.rstrip(". ") for part in kept)
+    return out if out.endswith(".") else out + "."
+
+
 def _coerce_part(
     item: Any, allowed: set[str], inbody_available: bool = True
 ) -> dict[str, Any] | None:
@@ -296,7 +347,21 @@ def _coerce_part(
         )
         gap_level = None
 
+    # ⚠️ 판단 불가면 표(프롬프트 §옷에 가려도…)가 정한 상태는 하나뿐이다:
+    #    gap_level=null + confidence=LOW. 실측(2026-08-17)에서 모델이 표의 절반만
+    #    적용해 blocked_reason 은 "인바디 기준 판단"인데 gap_level 은 null,
+    #    confidence 는 MEDIUM 인 — 표에 없는 상태를 보내왔다. 그 상태로 저장되면
+    #    "못 봤는데 꽤 믿을 만하다"가 되어 종합·루틴이 그 부위를 근거로 삼는다.
+    if gap_level is None:
+        forced = _strip_prescription(assessment)
+        if forced != assessment:
+            log.warning("%s: 판단 불가인데 처방 문장이 있어 제거", class_name)
+            assessment = forced
+            differences = _drop_restatements(differences, assessment)
+
     confidence = _enum_or_none(item.get("confidence"), Confidence)
+    if gap_level is None:
+        confidence = str(Confidence.LOW)
     if confidence is None:
         # 확신도를 못 읽었다고 진단을 버리진 않는다. 안전한 쪽(LOW)으로 둔다 —
         # LOW 는 종합 진단에서 가중치가 낮아지므로 과신 방향의 오류가 없다.
@@ -403,6 +468,25 @@ def parse_part_response(
     }
 
 
+def _confidence_ratio(value: Any) -> float | None:
+    """종합 판단의 확신도 0.0~1.0. 못 읽으면 None (없는 것과 못 읽은 것을 구분하지 않는다).
+
+    ⚠️ similarity_score 와 다른 값이다. 점수는 scoring 이 규칙으로 계산하고 LLM 이
+       보낸 점수는 버리지만, 이 confidence 는 **LLM 만 알 수 있는 것**이라 받는다 —
+       "내가 방금 쓴 판단을 얼마나 믿을 수 있나"는 규칙으로 계산할 수 없다.
+
+    ⚠️ 0~100 으로 보내오면 100 으로 나눈다. 실측에서 모델이 곧잘 그렇게 답한다.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    ratio = float(value)
+    if ratio > 1.0:
+        ratio = ratio / 100.0
+    if not 0.0 <= ratio <= 1.0:
+        return None
+    return round(ratio, 2)
+
+
 def parse_overall_response(
     parsed: dict[str, Any],
     class_names: set[str],
@@ -420,12 +504,20 @@ def parse_overall_response(
     priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:3]
 
     summary = parsed.get("summary")
+    silhouette = parsed.get("silhouette")
 
     return {
         "summary": summary.strip() if isinstance(summary, str) else None,
         "priority_parts": priority,
         "strengths": _as_str_list(parsed.get("strengths")),
         "cautions": _as_str_list(parsed.get("cautions")),
+        # ── 사진을 직접 보고 낸 전체 형태 판단 (2026-08-17) ──
+        "silhouette": silhouette.strip() if isinstance(silhouette, str) else None,
+        # ⚠️ 2개까지만. 프롬프트도 1~2개로 지시하지만 지시는 어겨질 수 있고,
+        #    많아지면 "부위 카드 복사"가 섞여 들어온다 (그게 이 필드의 실패 형태다).
+        #    화면 요약 상자가 고정 폭이라 길이도 함께 눌러야 한다.
+        "key_differences": _as_str_list(parsed.get("key_differences"))[:2],
+        "confidence": _confidence_ratio(parsed.get("confidence")),
     }
 
 
@@ -489,20 +581,39 @@ async def diagnose_overall(
     inbody: dict[str, Any] | None,
     score: int | None = None,
     excluded: list[str] | None = None,
+    reference_photo: bytes | None = None,
+    user_photo: bytes | None = None,
 ) -> dict[str, Any]:
-    """F09 — 부위별 진단을 종합한다. **이미지를 보내지 않는다** (텍스트 전용).
+    """F09 — 원본 두 장을 직접 보고 종합한다.
+
+    2026-08-17 변경: 텍스트 전용이었으나 원본 사진을 함께 받는다. 부위 9개를 각각
+    정확히 봐도 **부위 사이의 관계**(상하체 균형, 어깨-허리 폭 비율)는 어느 카드에도
+    안 나오기 때문이다 — 등급의 합계에는 비율이 없다.
 
     Args:
         results: F08 에서 저장에 성공한 부위 진단 전체 (판단 불가 포함)
         failed:  기술적으로 실패한 부위 이름
         score:   scoring.compute_similarity() 결과. 프롬프트에 주입해 summary 가
                  점수와 모순되지 않게 한다. LLM 출력의 점수는 어차피 버린다.
+        reference_photo / user_photo:
+                 **이미 전처리된** JPEG (segmap.fit_for_vlm → encode_jpeg).
+                 여기서 다시 리사이즈하지 않는다 — 호출자가 F08 과 같은 헬퍼로
+                 만든 것을 그대로 넘긴다.
+                 ⚠️ 둘 중 하나라도 없으면 **텍스트 전용으로 되돌아간다.** 사진을
+                    못 구했다고 종합을 실패시키면, 부위 진단은 멀쩡한데 화면에
+                    요약이 통째로 비는 상태가 된다.
+
+    Returns:
+        {summary, priority_parts, strengths, cautions,
+         silhouette, key_differences, confidence, raw_response}
     """
     judged = [p for p in results if p.get("gap_level")]
     blocked = [p for p in results if not p.get("gap_level")]
 
     if settings.use_mock:
         return _mock_overall(judged or results)
+
+    has_images = reference_photo is not None and user_photo is not None
 
     text = build_overall_prompt(
         parts=judged,
@@ -511,11 +622,22 @@ async def diagnose_overall(
         inbody=inbody,
         score=score,
         excluded=excluded,
-    )
-    parsed, raw = await _call_json(
-        OVERALL_SYSTEM, [{"type": "text", "text": text}], OVERALL_MAX_TOKENS
+        has_images=has_images,
     )
 
-    out = parse_overall_response(parsed, {p["class_name"] for p in results})
+    # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
+    #    어긋나면 종합이 정반대로 나온다. F08 과 같은 규칙이다.
+    content: list[dict[str, Any]] = []
+    if has_images:
+        content += [_image_block(reference_photo), _image_block(user_photo)]  # type: ignore[arg-type]
+    content.append({"type": "text", "text": text})
+
+    parsed, raw = await _call_json(OVERALL_SYSTEM, content, OVERALL_MAX_TOKENS)
+
+    # ⚠️ 우선 부위 후보는 **판단된 부위만**이다. 판단 불가 부위가 여기 들어가면
+    #    루틴의 볼륨 가중(L2)이 "못 본 부위"에 실린다 — 실측(2026-08-17)에서
+    #    허벅지 2개가 gap_level=null 인 채 priority 3 을 달고 있었다.
+    judged_names = {p["class_name"] for p in results if p.get("gap_level")}
+    out = parse_overall_response(parsed, judged_names or {p["class_name"] for p in results})
     out["raw_response"] = raw
     return out

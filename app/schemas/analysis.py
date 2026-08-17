@@ -87,6 +87,14 @@ class OverallDiagnosisDto(BaseModel):
     priority_parts: list[str] = Field(default_factory=list)
     strengths: list[str] = Field(default_factory=list)
     cautions: list[str] = Field(default_factory=list)
+    #: F09 가 원본 두 장을 직접 보고 낸 전체 형태 판단 (2026-08-17 추가).
+    #  ⚠️ 전부 선택 필드다. 이 변경 이전 세션은 null / 빈 배열로 내려간다 —
+    #     기존 프론트는 summary·priority_parts 만으로도 그대로 동작한다.
+    silhouette: str | None = None
+    key_differences: list[str] = Field(default_factory=list)
+    #: 종합 판단의 확신도 0.0~1.0. ⚠️ similarity_score 와 무관하다 —
+    #  점수는 규칙이 계산하고(score_source=RULE), 이건 "이 종합을 얼마나 믿을 수 있나"다.
+    confidence: float | None = None
     status: DomainStatus
 
 
@@ -119,6 +127,9 @@ class AnalysisResponse(BaseModel):
                     "priority_parts": ["Left_Upper_Arm", "Torso"],
                     "strengths": ["하체 균형이 좋습니다"],
                     "cautions": [],
+                    "silhouette": "어깨 폭은 목표와 비슷하지만 상체 대비 하체 볼륨이 적습니다.",
+                    "key_differences": ["상체 대비 하체 볼륨이 목표보다 적습니다"],
+                    "confidence": 0.8,
                     "status": "DONE",
                 },
                 "parts": [

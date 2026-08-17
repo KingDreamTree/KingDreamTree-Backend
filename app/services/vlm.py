@@ -277,6 +277,38 @@ _PRESCRIPTION_MARKERS = (
 )
 
 
+#: 진단문에 나오면 안 되는 운동 종목 이름. **루틴이 카탈로그에서 고르는 영역**이라
+#: 여기서 종목을 약속하면 다음 화면과 어긋난다 ("아까는 덤벨 컬이라더니").
+#: ⚠️ 프롬프트가 두 곳에서 금지하는데도 나온다 (실측 2026-08-17: 몸통 카드 "플랭크").
+#:    짧은 토큰("컬")은 다른 낱말에 섞이므로 넣지 않는다 — 어차피 "덤벨 컬" 형태라
+#:    "덤벨"에서 걸린다.
+_EXERCISE_NAMES = (
+    "덤벨", "바벨", "케틀벨", "플랭크", "스쿼트", "런지", "팔굽혀펴기", "푸시업",
+    "풀업", "친업", "데드리프트", "벤치프레스", "숄더프레스", "레그프레스",
+    "랫풀다운", "크런치", "레그레이즈", "레터럴 레이즈", "사이드 레이즈",
+)
+
+
+def _strip_exercise_names(assessment: str | None) -> str | None:
+    """종목 이름이 든 문장을 통째로 걷어낸다.
+
+    문장 단위로 지우는 이유 — "플랭크와 같은 코어 운동을 통해"에서 낱말만 빼면
+    "와 같은 코어 운동을 통해"가 남는다. 이 진단의 본체는 **관찰**이고 처방은
+    덧붙임이므로, 통째로 빼도 카드는 성립한다.
+    """
+    if not assessment:
+        return assessment
+    kept = [
+        sentence
+        for sentence in assessment.split(". ")
+        if not any(name in sentence for name in _EXERCISE_NAMES)
+    ]
+    if not kept or len(kept) == len(assessment.split(". ")):
+        return assessment if kept else None
+    out = ". ".join(part.rstrip(". ") for part in kept)
+    return out if out.endswith(".") else out + "."
+
+
 def _strip_prescription(assessment: str | None) -> str | None:
     """판단 불가 부위의 서술에서 처방 문장을 걷어낸다.
 
@@ -315,6 +347,12 @@ def _coerce_part(
 
     assessment = item.get("assessment")
     assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
+
+    # ⚠️ 종목 이름은 등급과 무관하게 항상 막는다 (판단 불가 게이트보다 먼저).
+    stripped = _strip_exercise_names(assessment)
+    if stripped != assessment:
+        log.warning("%s: 진단문에 운동 종목 이름이 있어 해당 문장 제거", class_name)
+        assessment = stripped
 
     differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
 

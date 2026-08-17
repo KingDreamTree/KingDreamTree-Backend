@@ -259,6 +259,46 @@ def _norm_ko(text: str) -> str:
     return re.sub(r"[\s.,!?·…\"'()]", "", text)
 
 
+#: 판단 불가 부위의 서술에서 잘라낼 "처방" 신호. 못 봤다면서 방향을 제시하는 문장이
+#: 실물로 나왔다 — "눈으로 확인하지 못했습니다. 근육량을 늘리는 방향이 적합합니다."
+#: ⚠️ 관찰 문장("…확인하지 못했습니다")에는 이 말들이 없어서 관찰만 남는다.
+_PRESCRIPTION_MARKERS = (
+    "늘리",
+    "키우",
+    "강화",
+    "집중",
+    "권장",
+    "적합",
+    "보완",
+    "발달",
+    "운동을",
+    "방향",
+    "것이 좋",
+)
+
+
+def _strip_prescription(assessment: str | None) -> str | None:
+    """판단 불가 부위의 서술에서 처방 문장을 걷어낸다.
+
+    ⚠️ 이 함수가 필요한 이유는 프롬프트가 이미 금지하고 있는데도 나오기 때문이다.
+       "못 봤다"와 "이렇게 하세요"가 한 서술에 같이 있으면 사용자는 뒤 문장을 믿고,
+       그 부위는 실제로 근거가 0 이다. 이 코드베이스의 규칙 — 모델이 반복해서
+       어기는 규칙은 산문이 아니라 코드로 막는다.
+    """
+    if not assessment:
+        return assessment
+    kept = [
+        sentence
+        for sentence in assessment.split(". ")
+        if not any(marker in sentence for marker in _PRESCRIPTION_MARKERS)
+    ]
+    if not kept:
+        # 처방만 있고 관찰이 없었다는 뜻 — 부위명은 호출부가 붙이므로 여기선 중립문.
+        return "사진에서 이 부위를 확인하지 못했습니다."
+    out = ". ".join(part.rstrip(". ") for part in kept)
+    return out if out.endswith(".") else out + "."
+
+
 def _coerce_part(
     item: Any, allowed: set[str], inbody_available: bool = True
 ) -> dict[str, Any] | None:
@@ -307,7 +347,21 @@ def _coerce_part(
         )
         gap_level = None
 
+    # ⚠️ 판단 불가면 표(프롬프트 §옷에 가려도…)가 정한 상태는 하나뿐이다:
+    #    gap_level=null + confidence=LOW. 실측(2026-08-17)에서 모델이 표의 절반만
+    #    적용해 blocked_reason 은 "인바디 기준 판단"인데 gap_level 은 null,
+    #    confidence 는 MEDIUM 인 — 표에 없는 상태를 보내왔다. 그 상태로 저장되면
+    #    "못 봤는데 꽤 믿을 만하다"가 되어 종합·루틴이 그 부위를 근거로 삼는다.
+    if gap_level is None:
+        forced = _strip_prescription(assessment)
+        if forced != assessment:
+            log.warning("%s: 판단 불가인데 처방 문장이 있어 제거", class_name)
+            assessment = forced
+            differences = _drop_restatements(differences, assessment)
+
     confidence = _enum_or_none(item.get("confidence"), Confidence)
+    if gap_level is None:
+        confidence = str(Confidence.LOW)
     if confidence is None:
         # 확신도를 못 읽었다고 진단을 버리진 않는다. 안전한 쪽(LOW)으로 둔다 —
         # LOW 는 종합 진단에서 가중치가 낮아지므로 과신 방향의 오류가 없다.
@@ -580,6 +634,10 @@ async def diagnose_overall(
 
     parsed, raw = await _call_json(OVERALL_SYSTEM, content, OVERALL_MAX_TOKENS)
 
-    out = parse_overall_response(parsed, {p["class_name"] for p in results})
+    # ⚠️ 우선 부위 후보는 **판단된 부위만**이다. 판단 불가 부위가 여기 들어가면
+    #    루틴의 볼륨 가중(L2)이 "못 본 부위"에 실린다 — 실측(2026-08-17)에서
+    #    허벅지 2개가 gap_level=null 인 채 priority 3 을 달고 있었다.
+    judged_names = {p["class_name"] for p in results if p.get("gap_level")}
+    out = parse_overall_response(parsed, judged_names or {p["class_name"] for p in results})
     out["raw_response"] = raw
     return out

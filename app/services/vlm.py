@@ -93,7 +93,6 @@ def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
             "차이는 상체, 특히 양쪽 팔 근육에서 가장 큽니다. "
             "4주간 팔 위주의 상체 운동에 집중하면 실루엣이 눈에 띄게 달라질 거예요. (mock)"
         ),
-        "priority_parts": [p["class_name"] for p in ranked[:3]],
         "strengths": ["하체 균형이 좋습니다"],
         "cautions": ["좌우 차이가 있어 균형 운동을 권합니다"],
         # ⚠️ 실제 호출과 같은 키를 낸다. mock 만 키가 적으면 USE_MOCK 로 개발한
@@ -529,28 +528,20 @@ def _confidence_ratio(value: Any) -> float | None:
     return round(ratio, 2)
 
 
-def parse_overall_response(
-    parsed: dict[str, Any],
-    class_names: set[str],
-) -> dict[str, Any]:
-    """종합 진단 응답 검증. priority_parts 는 실재하는 부위 이름만 남긴다.
+def parse_overall_response(parsed: dict[str, Any]) -> dict[str, Any]:
+    """종합 진단 응답 검증 — **설명 문장만** 받는다.
 
-    ⚠️ similarity_score 는 여기 없다 — 점수는 scoring.compute_similarity() 가
-       규칙으로 계산한다 (score_source=RULE). LLM 이 점수를 보내와도 버린다.
+    ⚠️ 구조적 판단은 전부 코드가 한다. LLM 이 보내와도 버린다:
+         similarity_score → scoring.compute_similarity()  (score_source=RULE)
+         priority_parts   → scoring.rank_priority()
+       LLM 의 몫은 "이미지에서 무엇이 관찰되는가"를 문장으로 만드는 것뿐이다.
     """
-    # ⚠️ 상위 3개만 남긴다 — "전부 시급"은 우선순위가 아니다. 실측(2026-08-15):
-    #    판단된 5부위가 전부 priority_parts 로 내려와 루틴 보강(L2 가중)이 모든
-    #    슬롯에 흩어졌다. 가중이 흩어지면 주간 상한에 눌려 사실상 균등 배분이
-    #    되어 개인화 신호가 사라진다. 프롬프트도 1~3개로 지시하지만, 지시는
-    #    어겨질 수 있으므로 코드가 자른다.
-    priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:3]
 
     summary = parsed.get("summary")
     silhouette = parsed.get("silhouette")
 
     return {
         "summary": summary.strip() if isinstance(summary, str) else None,
-        "priority_parts": priority,
         "strengths": _as_str_list(parsed.get("strengths")),
         "cautions": _as_str_list(parsed.get("cautions")),
         # ── 사진을 직접 보고 낸 전체 형태 판단 (2026-08-17) ──
@@ -625,6 +616,7 @@ async def diagnose_overall(
     excluded: list[str] | None = None,
     reference_photo: bytes | None = None,
     user_photo: bytes | None = None,
+    priority_parts: list[str] | None = None,
 ) -> dict[str, Any]:
     """F09 — 원본 두 장을 직접 보고 종합한다.
 
@@ -665,6 +657,7 @@ async def diagnose_overall(
         score=score,
         excluded=excluded,
         has_images=has_images,
+        priority_parts=priority_parts,
     )
 
     # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
@@ -679,7 +672,6 @@ async def diagnose_overall(
     # ⚠️ 우선 부위 후보는 **판단된 부위만**이다. 판단 불가 부위가 여기 들어가면
     #    루틴의 볼륨 가중(L2)이 "못 본 부위"에 실린다 — 실측(2026-08-17)에서
     #    허벅지 2개가 gap_level=null 인 채 priority 3 을 달고 있었다.
-    judged_names = {p["class_name"] for p in results if p.get("gap_level")}
-    out = parse_overall_response(parsed, judged_names or {p["class_name"] for p in results})
+    out = parse_overall_response(parsed)
     out["raw_response"] = raw
     return out

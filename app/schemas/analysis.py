@@ -95,6 +95,9 @@ class OverallDiagnosisDto(BaseModel):
     #: 종합 판단의 확신도 0.0~1.0. ⚠️ similarity_score 와 무관하다 —
     #  점수는 규칙이 계산하고(score_source=RULE), 이건 "이 종합을 얼마나 믿을 수 있나"다.
     confidence: float | None = None
+    #: 이번 비교에서 무엇을 못 봤는지. **규칙이 DB 에서 만든다** — LLM 문장이 아니다.
+    #  "왜 이 부위는 비교를 못 했나"에 데이터로 답하기 위한 필드.
+    comparison_limitations: list[str] = Field(default_factory=list)
     status: DomainStatus
 
 

@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.prompts.overall_diagnosis import build_overall_prompt  # noqa: E402
 from app.schemas.analysis import OverallDiagnosisDto  # noqa: E402
+from app.services.scoring import rank_priority  # noqa: E402
 from app.services.vlm import parse_overall_response  # noqa: E402
 
 FAILED = 0
@@ -43,19 +44,16 @@ def main() -> int:
             "summary": "  전신을 고루 하면서 팔에 세트를 더 얹는 방향입니다.  ",
             "silhouette": "  어깨 대비 허리가 넓어 전체 윤곽이 다릅니다.  ",
             "key_differences": ["상체 대비 하체 볼륨이 적습니다", "어깨-허리 폭 비율이 다릅니다"],
-            "priority_parts": ["Torso", "Left_Upper_Arm", "없는부위", "Right_Upper_Arm"],
             "strengths": ["하체가 목표에 가깝습니다"],
             "cautions": [],
             "confidence": 0.82,
-        },
-        CLASSES,
+        }
     )
     check("silhouette 공백 제거", out["silhouette"] == "어깨 대비 허리가 넓어 전체 윤곽이 다릅니다.")
     check("key_differences 보존", out["key_differences"] == [
         "상체 대비 하체 볼륨이 적습니다", "어깨-허리 폭 비율이 다릅니다"])
     check("confidence 그대로", out["confidence"] == 0.82, str(out["confidence"]))
-    check("실재하지 않는 부위 제거", "없는부위" not in out["priority_parts"], str(out["priority_parts"]))
-    check("priority_parts 3개 상한", len(out["priority_parts"]) <= 3, str(out["priority_parts"]))
+    check("LLM 의 priority_parts 는 버린다", "priority_parts" not in out, str(sorted(out)))
 
     # ── 2. confidence 방어 ────────────────────────────────────────────────
     print("\n2. confidence 정규화 — 모델이 0~100 으로 답하는 경우가 잦다")
@@ -68,19 +66,18 @@ def main() -> int:
         (-3, None, "음수는 버린다"),
         (True, None, "bool 은 숫자가 아니다"),
     ]:
-        got = parse_overall_response({"confidence": raw}, CLASSES)["confidence"]
+        got = parse_overall_response({"confidence": raw})["confidence"]
         check(label, got == want, f"입력={raw!r} → {got!r}")
 
     # ── 3. 필드가 통째로 없는 응답 (구 모델·형식 붕괴) ───────────────────
     print("\n3. 새 필드가 아예 없는 응답 — 옛 형식으로 답해도 죽지 않아야 한다")
     legacy = parse_overall_response(
-        {"summary": "요약", "priority_parts": ["Torso"], "strengths": [], "cautions": []},
-        CLASSES,
+        {"summary": "요약", "strengths": [], "cautions": []}
     )
     check("silhouette 은 None", legacy["silhouette"] is None)
     check("key_differences 는 빈 배열", legacy["key_differences"] == [])
     check("confidence 는 None", legacy["confidence"] is None)
-    check("기존 필드는 그대로", legacy["summary"] == "요약" and legacy["priority_parts"] == ["Torso"])
+    check("기존 필드는 그대로", legacy["summary"] == "요약")
 
     # ── 4. 프롬프트가 사진 유무를 정직하게 말하는가 ──────────────────────
     print("\n4. 프롬프트 — 사진이 없을 때 있다고 말하면 안 된다")
@@ -104,6 +101,42 @@ def main() -> int:
         {"similarity_score", "score_source", "summary", "priority_parts",
          "strengths", "cautions", "status"} <= set(dumped),
     )
+
+    # ── 6. 우선순위는 규칙이 정한다 (VLM 아님) ───────────────────────────
+    print("\n6. 우선순위 — 규칙이 정하고 LLM 은 설명만 한다")
+    parts = [
+        {"class_name": "Torso", "gap_level": "SLIGHT", "confidence": "HIGH"},
+        {"class_name": "Left_Upper_Arm", "gap_level": "SIGNIFICANT", "confidence": "MEDIUM"},
+        {"class_name": "Right_Upper_Arm", "gap_level": "SIGNIFICANT", "confidence": "HIGH"},
+        {"class_name": "Left_Upper_Leg", "gap_level": None, "confidence": "LOW"},
+    ]
+    picked, why = rank_priority(parts)
+    check("격차 큰 순", picked[:2] == ["Right_Upper_Arm", "Left_Upper_Arm"], str(picked))
+    check("같은 등급이면 확신도 높은 쪽 먼저", picked[0] == "Right_Upper_Arm", str(picked))
+    check("판단 불가 부위는 제외", "Left_Upper_Leg" not in picked, str(picked))
+    check("3개 상한", len(picked) <= 3, str(picked))
+    check("근거 문장이 남는다", "격차가 큰 순" in why, why)
+    check("같은 입력 → 같은 출력", rank_priority(parts)[0] == picked)
+    check("판단된 부위가 없으면 빈 목록", rank_priority([{"class_name": "X", "gap_level": None}])[0] == [])
+
+    # ── 7. 측정 금지 — 종합 프롬프트에도 있어야 한다 ──────────────────────
+    print("\n7. 프롬프트 — VLM 에게 몸을 재게 하지 않는다")
+    sys_prompt = __import__("app.prompts.overall_diagnosis", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
+    for label, needle in [
+        ("치수 추정 금지", "실제 신체 치수"),
+        ("근육량·체지방률 금지", "실제 근육량"),
+        ("절대 크기 비교 금지", "절대 크기"),
+        ("가치 판단 금지", "가치 판단"),
+        ("관찰 어투 제시", "차이가 관찰됩니다"),
+        ("우선순위는 규칙이 정한다", "우선순위는 당신이 정하지 않습니다"),
+    ]:
+        check(label, needle in sys_prompt)
+
+    # ── 8. 비교 한계 필드 ─────────────────────────────────────────────────
+    print("\n8. comparison_limitations — 응답 계약")
+    dto2 = OverallDiagnosisDto(status="DONE")
+    check("기본값은 빈 배열", dto2.comparison_limitations == [])
+    check("응답에 키가 있다", "comparison_limitations" in dto2.model_dump())
 
     print("\n" + ("[O] 전부 통과" if not FAILED else f"[X] {FAILED}건 실패"))
     return 1 if FAILED else 0

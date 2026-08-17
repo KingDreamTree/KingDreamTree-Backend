@@ -222,6 +222,7 @@ async def get_analysis(session: OwnedSession) -> AnalysisResponse:
                 silhouette=_overall_extra(overall_row, "silhouette"),
                 key_differences=_overall_extra(overall_row, "key_differences") or [],
                 confidence=_overall_extra(overall_row, "confidence"),
+                comparison_limitations=_overall_extra(overall_row, "comparison_limitations") or [],
                 status=overall_row["status"],
             )
             if overall_row

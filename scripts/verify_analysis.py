@@ -210,19 +210,19 @@ def test_partial_acceptance() -> None:
 
     overall = vlm.parse_overall_response(
         {
-            # ⚠️ LLM 이 점수를 보내와도 **버려야 한다.** 유사도는 규칙이 계산한다
-            #    (scoring.compute_similarity, score_source=RULE). 여기서 통과시키면
-            #    "AI 가 뱉은 숫자"가 화면에 그대로 나가고 재현성이 깨진다.
+            # ⚠️ LLM 이 보내와도 **버려야 하는 것 둘.** 유사도는 규칙이 계산하고
+            #    (scoring.compute_similarity, score_source=RULE), 우선순위도 규칙이
+            #    정한다 (scoring.rank_priority, 2026-08-17). 여기서 통과시키면
+            #    "AI 가 뱉은 숫자·순서"가 화면과 루틴 가중에 그대로 나간다.
             "similarity_score": 140,
             "summary": "요약",
             "priority_parts": ["Torso", "Nonexistent_Part"],
             "strengths": "하체가 좋습니다",  # 문자열 → 배열
             "cautions": [],
-        },
-        set(names),
+        }
     )
     check("LLM 이 보낸 점수는 버림 (규칙이 계산)", "similarity_score" not in overall)
-    check("없는 부위는 우선순위에서 제거", overall["priority_parts"] == ["Torso"])
+    check("LLM 이 보낸 우선순위는 버림 (규칙이 정함)", "priority_parts" not in overall)
     check("strengths 배열화", overall["strengths"] == ["하체가 좋습니다"])
 
 
@@ -559,21 +559,23 @@ def test_baseline_separation() -> None:
     )
 
     # F09 — 우선순위는 코드가 3개로 자른다 (프롬프트 지시만으로는 부족)
-    capped = vlm.parse_overall_response(
-        {
-            "summary": "s",
-            "priority_parts": ["Torso", "Left_Upper_Arm", "Right_Upper_Arm", "Left_Lower_Arm"],
-        },
-        {"Torso", "Left_Upper_Arm", "Right_Upper_Arm", "Left_Lower_Arm"},
+    # ⚠️ 2026-08-17 — 우선순위 상한(3개)은 파서가 아니라 규칙이 건다.
+    #    scoring.rank_priority 가 정하고 verify_overall_silhouette 이 검증한다.
+    from app.services.scoring import rank_priority
+
+    picked, _ = rank_priority(
+        [
+            {"class_name": "Torso", "gap_level": "SIGNIFICANT", "confidence": "HIGH"},
+            {"class_name": "Left_Upper_Arm", "gap_level": "SIGNIFICANT", "confidence": "HIGH"},
+            {"class_name": "Right_Upper_Arm", "gap_level": "MODERATE", "confidence": "HIGH"},
+            {"class_name": "Left_Lower_Arm", "gap_level": "SLIGHT", "confidence": "HIGH"},
+        ]
     )
-    check(
-        "priority_parts 상위 3개만 (순서 유지)",
-        capped["priority_parts"] == ["Torso", "Left_Upper_Arm", "Right_Upper_Arm"],
-    )
+    check("우선순위 상위 3개만 (규칙)", len(picked) == 3, str(picked))
 
     from app.prompts.overall_diagnosis import SYSTEM_PROMPT as overall_system
 
-    check("F09 우선순위 1~3개 지시", "1~3개만" in overall_system)
+    check("F09 는 우선순위를 정하지 않는다", "우선순위는 당신이 정하지 않습니다" in overall_system)
     # ⚠️ 요약이 "팔부터 하고 몸통은 그다음" 같은 **순서**를 말하면 실제 루틴과
     #    어긋난다. 루틴은 전신 기본 볼륨 + 약점 세트 가산이지 부위를 차례로
     #    돌지 않는다 (routine_templates.apply_weakness_boost). 진단 화면에서

@@ -91,3 +91,46 @@ def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
             },
         },
     }
+
+
+#: 확신도 → 서열 (같은 등급이면 확실하게 본 쪽을 앞에 둔다).
+_CONFIDENCE_ORDINAL: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+
+
+def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str], str]:
+    """개선 우선순위를 **규칙으로** 정한다. LLM 이 정하지 않는다.
+
+    왜 코드가 정하는가
+        이 목록은 화면 문구로만 쓰이는 게 아니라 **운동 루틴의 볼륨 가중 대상**이 된다
+        (routine.apply_weakness_boost). LLM 이 정하면 같은 진단에서 매번 다른 부위가
+        보강되고, "왜 이 부위인가"에 답할 근거가 남지 않는다.
+        점수를 규칙으로 계산하는 것과 같은 이유다 (모듈 docstring 참고).
+
+    정렬 기준 (앞이 우선)
+        1. gap_level 이 큰 순         — 목표와 가장 먼 곳
+        2. confidence 가 높은 순      — 같은 격차면 확실하게 본 쪽
+        3. 부위 이름 (사전순)          — 남은 동률은 실행마다 같은 답이 나오게 고정
+
+    ⚠️ 판단된 부위만 들어온다. gap_level 이 없는 부위(판단 불가)는 애초에 근거가
+       없으므로 보강 대상이 될 수 없다.
+    ⚠️ limit=3 — "전부 시급"은 우선순위가 아니다. 가중이 흩어지면 주간 상한에 눌려
+       사실상 균등 배분이 되어 개인화 신호가 사라진다 (실측 2026-08-15).
+
+    Returns:
+        (우선 부위 class_name 목록, 사람이 읽는 근거 문장)
+    """
+    judged = [p for p in parts if p.get("gap_level") in _GAP_ORDINAL]
+    if not judged:
+        return [], "판단된 부위가 없어 우선순위를 정할 수 없습니다."
+
+    ordered = sorted(
+        judged,
+        key=lambda p: (
+            -_GAP_ORDINAL[p["gap_level"]],
+            _CONFIDENCE_ORDINAL.get(str(p.get("confidence") or "LOW"), 2),
+            p["class_name"],
+        ),
+    )
+    picked = ordered[:limit]
+    detail = " · ".join(f"{p['class_name']}({_GAP_KO[p['gap_level']]})" for p in picked)
+    return [p["class_name"] for p in picked], f"격차가 큰 순으로 규칙 선정 — {detail}"

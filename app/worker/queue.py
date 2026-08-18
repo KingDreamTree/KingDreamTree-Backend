@@ -64,6 +64,32 @@ def is_stale(job: dict[str, Any], older_than_sec: int | None = None) -> bool:
     return (datetime.now(timezone.utc) - at).total_seconds() > limit
 
 
+#: 한 워커 프로세스가 함께 맡는 kind 묶음. 생존 판정의 단위다.
+#: ⚠️ 배포 구성(docker-compose 의 --kinds, RunPod 의 세그 워커)과 맞춰야 한다.
+#:    여기가 실제 배치보다 넓으면 죽은 워커를 살아있다고 보고, 좁으면 정상 대기를
+#:    장애로 본다(2026-08-17 오탐의 원인).
+_WORKER_POOLS: tuple[tuple[str, ...], ...] = (
+    # GPU 워커 (RunPod 또는 로컬 GPU)
+    (str(JobKind.SEG_REFERENCE), str(JobKind.SEG_USER)),
+    # EC2 워커 — 하나가 아래 전부를 한 번에 하나씩 처리한다
+    (
+        str(JobKind.OCR_INBODY),
+        str(JobKind.VLM_PART),
+        str(JobKind.VLM_OVERALL),
+        str(JobKind.ROUTINE_GEN),
+        str(JobKind.ROUTINE_PATCH),
+    ),
+)
+
+
+def _pool_of(kind: str) -> tuple[str, ...]:
+    """이 kind 를 맡은 워커가 함께 처리하는 kind 들. 모르는 kind 면 자기 자신만."""
+    for pool in _WORKER_POOLS:
+        if str(kind) in pool:
+            return pool
+    return (str(kind),)
+
+
 def is_stalled(job: dict[str, Any]) -> bool:
     """**아무도 안 집어가는 잡**인가 — 프론트 안내 문구를 가르는 힌트.
 
@@ -104,18 +130,25 @@ def is_stalled(job: dict[str, Any]) -> bool:
     if waited <= settings.job_stall_hint_after_sec:
         return False
 
-    # 같은 kind 를 처리 중인 워커가 있나 — 있으면 순서를 기다리는 중일 뿐이다.
+    # 같은 **워커**가 뭔가를 처리 중인가 — 있으면 순서를 기다리는 중일 뿐이다.
+    #
+    # ⚠️ 여기를 "같은 kind"로 좁혔다가 오탐이 났다 (2026-08-17, 프론트 신고).
+    #    EC2 워커 하나가 OCR·VLM·루틴을 **한 번에 하나씩** 처리하므로, 루틴 생성이
+    #    도는 동안 VLM 잡은 정상적으로 PENDING 이다. kind 로만 보면 그 정상 대기가
+    #    "아무도 안 집어감"으로 잡힌다. 워커가 맡은 kind 묶음 전체를 봐야 한다.
+    pool = _pool_of(job["kind"])
     running = (
         get_client()
         .table("job")
-        .select("job_id")
-        .eq("kind", str(job["kind"]))
+        .select("job_id,status,started_at")
+        .in_("kind", pool)
         .eq("status", str(JobStatus.PROCESSING))
-        .limit(1)
         .execute()
         .data
-    )
-    return not running
+    ) or []
+    # ⚠️ 좀비(PROCESSING 인 채 죽은 잡)는 생존 근거가 못 된다. 그걸 세면 워커가
+    #    죽은 상황에서 자기가 남긴 좀비가 정지 감지를 15분간 가려버린다.
+    return not any(not is_stale(r) for r in running)
 
 
 def find_open(

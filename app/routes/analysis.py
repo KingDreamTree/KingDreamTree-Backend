@@ -12,6 +12,7 @@
    한 번 더 나간다 — 가장 비싼 호출이 두 번 되는 것이다.
 """
 
+import logging
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -47,6 +48,8 @@ def _overall_extra(row: dict[str, Any], key: str) -> Any:
         return row[key]
     return (row.get("raw_response") or {}).get(key)
 
+
+log = logging.getLogger("routes.analysis")
 
 router = APIRouter(tags=["analysis"])
 
@@ -171,10 +174,19 @@ async def analysis_progress(session: OwnedSession) -> AnalysisProgressResponse:
     )
 
     # ⚠️ 아직 안 끝난 쪽만 본다. 끝난 잡은 정의상 정지 상태가 아니다.
-    stalled = any(
-        job is not None and queue.is_stalled(job)
-        for job in (part_job, overall_job)
-    )
+    stalled_jobs = [
+        job for job in (part_job, overall_job) if job is not None and queue.is_stalled(job)
+    ]
+    stalled = bool(stalled_jobs)
+    if stalled:
+        # ⚠️ 프론트는 이 신호를 화면에 안 띄운다(기획 판단, 2026-08-17). 그래서
+        #    **여기 로그가 유일한 감지 수단**이다. 워커가 죽으면 사용자는 조용히
+        #    기다리기만 하므로 신고가 안 들어온다.
+        log.warning(
+            "정지 감지 — 잡을 집어가는 워커가 없습니다: %s (session=%s)",
+            [f"{j['kind']}:{j['status']}" for j in stalled_jobs],
+            session_id,
+        )
 
     return AnalysisProgressResponse(
         part=PartProgress(

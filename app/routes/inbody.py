@@ -28,7 +28,7 @@ from app.schemas.inbody import (
     InbodyPatchRequest,
     InbodySegmentDto,
 )
-from app.services import images, inbody_repo, ocr, storage
+from app.services import diagnosis_repo, images, inbody_repo, ocr, storage
 from app.worker import queue
 
 log = logging.getLogger("routes.inbody")
@@ -112,6 +112,10 @@ async def upload_inbody(
         pages.append(jpeg)
 
     session_id = UUID(str(session["session_id"]))
+    # ⚠️ 이미 끝난 진단이 있다면 지운다 — 이 업로드가 끝나면 체지방률이
+    #    새로 생기거나 바뀔 수 있는데, 가드③(POST /analysis)이 옛 진단을
+    #    DONE으로 보고 재실행을 건너뛰면 새 인바디가 영영 반영되지 않는다.
+    diagnosis_repo.clear_diagnoses(session_id)
     row = inbody_repo.create_inbody(session_id, device_type)
     inbody_id = UUID(str(row["inbody_id"]))
 
@@ -244,6 +248,11 @@ async def delete_inbody(user_id: UserId, row: OwnedInbody) -> None:
     임시 경로는 job.payload 에만 있어 행에서 알 수 없으므로,
     inbody_temp_path 규칙(`{user_id}/{inbody_id}_{n}.jpg`)으로 prefix 를 훑는다.
     DONE 이면 핸들러가 이미 지웠으니 보통 0건이다.
+
+    ⚠️ 진단도 함께 지운다 (2026-08-18). `POST /analysis`는 overall이 DONE이면
+       재실행을 건너뛴다(가드③) — 인바디를 지워도 진단이 남아있으면 "인바디를
+       뺐는데 재실행하면 여전히 인바디 기반 결과"가 된다. photos.py 의
+       `_discard_existing`과 같은 이유·같은 처리.
     """
     inbody_id = UUID(str(row["inbody_id"]))
     marker = f"{user_id}/{inbody_id}_"
@@ -254,3 +263,4 @@ async def delete_inbody(user_id: UserId, row: OwnedInbody) -> None:
     ]
     storage.remove(settings.bucket_inbody_temp, leftovers)
     inbody_repo.delete_inbody(inbody_id)
+    diagnosis_repo.clear_diagnoses(UUID(str(row["session_id"])))

@@ -352,6 +352,7 @@ async def build_routine(
     inbody: dict[str, Any] | None,
     priority_parts: list[str] | None = None,
     asymmetric_parts: list[str] | None = None,
+    part_names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """4주기 루틴을 조립한다 (주기당 N일 — 확정 모델).
 
@@ -359,7 +360,9 @@ async def build_routine(
         days_per_week:    사용자가 고른 1~7 (N)
         inbody:           inbody 행 (없으면 None → BALANCE 확정)
         priority_parts:   F09 우선 개선 부위 (없으면 가중 없이 기본 볼륨만)
-        asymmetric_parts: 좌우 차이가 큰 부위 — 해당 슬롯에서 단측 운동 우선
+        asymmetric_parts: 좌우 차이가 큰 부위 — 해당 슬롯에서 단측 운동
+        part_names:       {class_name: 한글명} — 전략 설명 문구용. 없으면 영문 그대로.
+                          ⚠️ 이 서비스는 DB 를 보지 않는다 (호출부가 넘긴다). 우선
 
     Returns:
         {
@@ -477,6 +480,15 @@ async def build_routine(
         )
     )
 
+    strategy = build_strategy(
+        mode=mode,
+        mode_reason=mode_info["reason"],
+        days_per_week=days_per_week,
+        boosts=boosts,
+        days=out_days,
+        part_names=part_names,
+    )
+
     return {
         "mode": mode,
         "mode_basis": mode_info["basis"],
@@ -484,6 +496,7 @@ async def build_routine(
         "days_per_week": days_per_week,
         "cycles": 4,
         "goal": goal,
+        "strategy": strategy,
         "focus_areas": list(boosts),
         "notice": notice,
         "disclaimer": DISCLAIMER,
@@ -627,3 +640,102 @@ def _summarize_changes(changes: list[dict]) -> str:
         return "변경 사항 없음"
     labels = [_CHANGE_LABELS.get(c["function"], c["function"]) for c in changes]
     return ", ".join(labels) + f" ({len(changes)}건)"
+
+
+# --------------------------------------------------------------------------- #
+# 루틴 전략 설명 — **실제로 생성된 루틴에서 조립한다**
+# --------------------------------------------------------------------------- #
+
+
+def build_strategy(
+    mode: str,
+    mode_reason: str | None,
+    days_per_week: int,
+    boosts: dict[str, int],
+    days: list[dict[str, Any]],
+    part_names: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """"왜 이 루틴인가"를 만든 근거에서 되짚어 **줄글 한 문단**으로 만든다.
+
+    ⚠️ **LLM 을 쓰지 않는다.** 여기 들어가는 값은 전부 방금 이 루틴을 만들 때
+       실제로 쓴 것들이다 — 모드는 체지방률 판정 결과, 가중은 apply_weakness_boost
+       가 실제로 얹은 세트 수, 유산소 여부는 슬롯에 실제로 들어갔는지.
+       LLM 에게 쓰게 하면 "실제 루틴과 다른 설명"이 나올 수 있고, 그게 이 화면의
+       유일한 실패 형태다 (설명과 루틴이 어긋나는 것).
+
+    ⚠️ 번호 목록이 아니라 **이어지는 산문**이다. 항목을 끊어 나열하면 설명이
+       아니라 체크리스트로 읽힌다 — 이 상자는 "왜 이렇게 짰는지" 를 말하는 곳이다.
+
+    ⚠️ 화면의 «4주간 핵심 목표» 상자가 이 값을 쓴다. goal 은 한 줄 제목이고
+       body 는 그 아래 본문이다 — 둘은 다른 필드다.
+
+    Returns:
+        {"headline", "body", "mode", "mode_reason", "volume",
+         "strength_days", "cardio_days"}
+    """
+    names = part_names or {}
+    cardio_days = sum(
+        1 for d in days if any(e.get("exercise_kind") == "CARDIO" for e in d.get("exercises", []))
+    )
+
+    # ── 문단 조립 — 접속으로 이어 붙여 한 편의 말이 되게 한다 ──────────────
+    parts: list[str] = []
+
+    # ① 모드 — 왜 감량을 섞었나 / 왜 근력 중심인가. 판정 문장을 그대로 쓴다.
+    if mode_reason:
+        parts.append(mode_reason.rstrip())
+
+    # ② 일수 — 사용자가 고른 값이 골격을 정한다.
+    split = "전신을 매번 고르게" if days_per_week <= 3 else "상체와 하체를 나눠서"
+    parts.append(
+        f"주 {days_per_week}일을 고르셔서 {split} 도는 구성으로 짰고, "
+        f"같은 {days_per_week}일 구성을 4주기 반복합니다."
+    )
+
+    # ③ 가중 — 진단이 실제로 바꾼 부분. 없으면 없다고 말한다.
+    if boosts:
+        detail = ", ".join(
+            f"{names.get(part, part)}에 {added}세트" for part, added in boosts.items()
+        )
+        parts.append(
+            f"비교 진단에서 격차가 컸던 {detail}를 주간 볼륨으로 더 얹었고, "
+            "나머지 부위도 기본 볼륨은 그대로 받습니다."
+        )
+    else:
+        parts.append(
+            "특정 부위에 치우치지 않고 전 부위가 기본 볼륨을 그대로 받는 구성입니다."
+        )
+
+    # ④ 유산소 — 실제로 슬롯에 들어간 경우에만.
+    if cardio_days:
+        parts.append(
+            f"감량을 함께 하는 구성이라 근력일 {cardio_days}일에 유산소를 붙였는데, "
+            "무게는 낮추지 않고 세트 사이 휴식만 줄여 근육을 지키는 방식입니다."
+        )
+
+    body = " ".join(parts)
+
+    # 헤드라인은 화면의 «4주간 핵심 목표» 상자 제목이라 "4주"로 맞춘다.
+    # 일수(주 N일)는 바로 아래 body 문단에서 이미 말한다 — 여기서 또 쓰면 중복이다.
+    headline = (
+        "체지방을 줄이면서 근육을 지키는 4주 루틴"
+        if mode == "CUT"
+        else (
+            "약점 부위를 보완하는 4주 균형 루틴"
+            if boosts
+            else "기초 체력과 균형을 만드는 4주 루틴"
+        )
+    )
+
+    return {
+        "headline": headline,
+        "body": body,
+        "mode": mode,
+        "mode_reason": mode_reason,
+        "volume": [
+            {"part": names.get(part, part), "added_sets": added}
+            for part, added in boosts.items()
+        ],
+        "strength_days": len(days),
+        "cardio_days": cardio_days,
+    }

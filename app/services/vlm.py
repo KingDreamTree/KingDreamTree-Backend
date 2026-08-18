@@ -39,7 +39,9 @@ VLM_MODEL = "gpt-4o"
 
 #: 부위 수만큼 항목이 나와야 하므로 넉넉히. 9부위 × 항목당 ~150토큰 + 여유.
 PART_MAX_TOKENS = 4096
-OVERALL_MAX_TOKENS = 1024
+#: ⚠️ 2026-08-17 상향 — 프로필 A·B·방향·전략·다음사이클이 추가돼 1024 로는 잘린다.
+#:    잘리면 JSON 이 깨져 종합 진단이 통째로 실패한다 (부분 저장이 없다).
+OVERALL_MAX_TOKENS = 2048
 
 
 class VlmResponseError(RuntimeError):
@@ -93,7 +95,6 @@ def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
             "차이는 상체, 특히 양쪽 팔 근육에서 가장 큽니다. "
             "4주간 팔 위주의 상체 운동에 집중하면 실루엣이 눈에 띄게 달라질 거예요. (mock)"
         ),
-        "priority_parts": [p["class_name"] for p in ranked[:3]],
         "strengths": ["하체 균형이 좋습니다"],
         "cautions": ["좌우 차이가 있어 균형 운동을 권합니다"],
         # ⚠️ 실제 호출과 같은 키를 낸다. mock 만 키가 적으면 USE_MOCK 로 개발한
@@ -107,6 +108,17 @@ def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
             "어깨 폭 대비 허리가 넓어 전체 윤곽이 다르게 보입니다 (mock)",
         ],
         "confidence": 0.8,
+        "user_profile": {
+            "summary": "상체보다 하체 쪽 실루엣이 상대적으로 강조되어 보입니다. (mock)",
+            "characteristics": ["어깨 대비 허리 폭 차이가 크지 않음", "하체 외곽선이 뚜렷함"],
+        },
+        "reference_profile": {
+            "summary": "어깨에서 허리로 내려오는 폭 변화가 뚜렷하게 관찰됩니다. (mock)",
+            "characteristics": ["상체 폭이 상대적으로 강조됨", "허리 라인이 뚜렷함"],
+        },
+        "direction_summary": "약점 부위의 근력 강화를 우선하는 방향입니다. (mock)",
+        "strategy_focus": ["상체 볼륨을 만드는 데 무게를 싣습니다 (mock)"],
+        "next_cycle": "4주 뒤 인바디를 다시 재면 방향을 새로 판정합니다. (mock)",
         "raw_response": {"mock": True},
     }
 
@@ -259,42 +271,80 @@ def _norm_ko(text: str) -> str:
     return re.sub(r"[\s.,!?·…\"'()]", "", text)
 
 
-#: 판단 불가 부위의 서술에서 잘라낼 "처방" 신호. 못 봤다면서 방향을 제시하는 문장이
-#: 실물로 나왔다 — "눈으로 확인하지 못했습니다. 근육량을 늘리는 방향이 적합합니다."
-#: ⚠️ 관찰 문장("…확인하지 못했습니다")에는 이 말들이 없어서 관찰만 남는다.
-_PRESCRIPTION_MARKERS = (
-    "늘리",
-    "키우",
-    "강화",
-    "집중",
-    "권장",
-    "적합",
-    "보완",
-    "발달",
-    "운동을",
-    "방향",
-    "것이 좋",
+#: 부위 카드에서 잘라낼 **권유 어미**. 부위 카드는 본 것만 말하고, 방향은 종합
+#: 진단(silhouette)이 전체를 보고 한 번만 말한다 — 부위마다 방향을 달면 그
+#: 방향들이 서로 맞는지 아무도 보증하지 않는다.
+#:
+#: ⚠️ 낱말이 아니라 **어미**로 가른다. "발달"·"방향" 같은 낱말로 자르면
+#:    "상완 부위의 발달 차이가 주요한 차이로 확인됩니다" 같은 정상 관찰문까지
+#:    날아간다. 관찰은 «나타납니다 / 확인됩니다 / 드러납니다 / 보입니다 /
+#:    어렵습니다» 로 끝나고, 권유는 아래로 끝난다.
+_ADVICE_ENDINGS = (
+    "좋습니다",
+    "필요합니다",
+    "권장합니다",
+    "적합합니다",
+    "추천합니다",
+    "낫습니다",
+    "하세요",
+    "해보세요",
+    "바랍니다",
+    "important",  # 영문 응답 방어 (형식 붕괴 시)
 )
 
 
-def _strip_prescription(assessment: str | None) -> str | None:
-    """판단 불가 부위의 서술에서 처방 문장을 걷어낸다.
+#: 진단문에 나오면 안 되는 운동 종목 이름. **루틴이 카탈로그에서 고르는 영역**이라
+#: 여기서 종목을 약속하면 다음 화면과 어긋난다 ("아까는 덤벨 컬이라더니").
+#: ⚠️ 프롬프트가 두 곳에서 금지하는데도 나온다 (실측 2026-08-17: 몸통 카드 "플랭크").
+#:    짧은 토큰("컬")은 다른 낱말에 섞이므로 넣지 않는다 — 어차피 "덤벨 컬" 형태라
+#:    "덤벨"에서 걸린다.
+_EXERCISE_NAMES = (
+    "덤벨", "바벨", "케틀벨", "플랭크", "스쿼트", "런지", "팔굽혀펴기", "푸시업",
+    "풀업", "친업", "데드리프트", "벤치프레스", "숄더프레스", "레그프레스",
+    "랫풀다운", "크런치", "레그레이즈", "레터럴 레이즈", "사이드 레이즈",
+)
 
-    ⚠️ 이 함수가 필요한 이유는 프롬프트가 이미 금지하고 있는데도 나오기 때문이다.
-       "못 봤다"와 "이렇게 하세요"가 한 서술에 같이 있으면 사용자는 뒤 문장을 믿고,
-       그 부위는 실제로 근거가 0 이다. 이 코드베이스의 규칙 — 모델이 반복해서
-       어기는 규칙은 산문이 아니라 코드로 막는다.
+
+def _strip_exercise_names(assessment: str | None) -> str | None:
+    """종목 이름이 든 문장을 통째로 걷어낸다.
+
+    문장 단위로 지우는 이유 — "플랭크와 같은 코어 운동을 통해"에서 낱말만 빼면
+    "와 같은 코어 운동을 통해"가 남는다. 이 진단의 본체는 **관찰**이고 처방은
+    덧붙임이므로, 통째로 빼도 카드는 성립한다.
     """
     if not assessment:
         return assessment
     kept = [
         sentence
         for sentence in assessment.split(". ")
-        if not any(marker in sentence for marker in _PRESCRIPTION_MARKERS)
+        if not any(name in sentence for name in _EXERCISE_NAMES)
+    ]
+    if not kept or len(kept) == len(assessment.split(". ")):
+        return assessment if kept else None
+    out = ". ".join(part.rstrip(". ") for part in kept)
+    return out if out.endswith(".") else out + "."
+
+
+def _strip_prescription(assessment: str | None) -> str | None:
+    """부위 카드 서술에서 권유 문장을 걷어낸다. 관찰 문장만 남긴다.
+
+    ⚠️ 이 함수가 필요한 이유는 프롬프트가 두 곳에서 금지하는데도 나오기 때문이다
+       (실측 2026-08-17: "팔을 굽혀 드는 운동에 집중하는 것이 좋습니다").
+       이 리포의 규칙 — 모델이 반복해서 어기는 규칙은 산문이 아니라 코드로 막는다.
+
+    ⚠️ 판단 불가 부위에서는 특히 중요하다. "못 봤다" 뒤에 방향이 붙으면 사용자는
+       뒤 문장을 믿는데 그 부위의 근거는 0 이다.
+    """
+    if not assessment:
+        return assessment
+    kept = [
+        sentence
+        for sentence in assessment.split(". ")
+        if not any(sentence.rstrip(". ").endswith(end) for end in _ADVICE_ENDINGS)
     ]
     if not kept:
-        # 처방만 있고 관찰이 없었다는 뜻 — 부위명은 호출부가 붙이므로 여기선 중립문.
-        return "사진에서 이 부위를 확인하지 못했습니다."
+        # 권유만 있고 관찰이 없었다 — 진단이라 부를 수 없으므로 버린다.
+        return None
     out = ". ".join(part.rstrip(". ") for part in kept)
     return out if out.endswith(".") else out + "."
 
@@ -315,6 +365,17 @@ def _coerce_part(
 
     assessment = item.get("assessment")
     assessment = assessment.strip() if isinstance(assessment, str) and assessment.strip() else None
+
+    # ⚠️ 종목 이름과 권유 문장은 **등급과 무관하게 항상** 막는다.
+    #    부위 카드는 본 것만 말한다 — 방향은 종합 진단이 전체를 보고 한 번만 말한다.
+    stripped = _strip_exercise_names(assessment)
+    if stripped != assessment:
+        log.warning("%s: 진단문에 운동 종목 이름이 있어 해당 문장 제거", class_name)
+        assessment = stripped
+    stripped = _strip_prescription(assessment)
+    if stripped != assessment:
+        log.warning("%s: 진단문에 권유 문장이 있어 제거", class_name)
+        assessment = stripped
 
     differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
 
@@ -352,13 +413,6 @@ def _coerce_part(
     #    적용해 blocked_reason 은 "인바디 기준 판단"인데 gap_level 은 null,
     #    confidence 는 MEDIUM 인 — 표에 없는 상태를 보내왔다. 그 상태로 저장되면
     #    "못 봤는데 꽤 믿을 만하다"가 되어 종합·루틴이 그 부위를 근거로 삼는다.
-    if gap_level is None:
-        forced = _strip_prescription(assessment)
-        if forced != assessment:
-            log.warning("%s: 판단 불가인데 처방 문장이 있어 제거", class_name)
-            assessment = forced
-            differences = _drop_restatements(differences, assessment)
-
     confidence = _enum_or_none(item.get("confidence"), Confidence)
     if gap_level is None:
         confidence = str(Confidence.LOW)
@@ -487,28 +541,36 @@ def _confidence_ratio(value: Any) -> float | None:
     return round(ratio, 2)
 
 
-def parse_overall_response(
-    parsed: dict[str, Any],
-    class_names: set[str],
-) -> dict[str, Any]:
-    """종합 진단 응답 검증. priority_parts 는 실재하는 부위 이름만 남긴다.
+def _profile(value: Any) -> dict[str, Any] | None:
+    """{summary, characteristics[]} 한 덩어리. 못 읽으면 None.
 
-    ⚠️ similarity_score 는 여기 없다 — 점수는 scoring.compute_similarity() 가
-       규칙으로 계산한다 (score_source=RULE). LLM 이 점수를 보내와도 버린다.
+    ⚠️ characteristics 는 3개로 자른다 — 프롬프트도 2~3개로 지시하지만 지시는
+       어겨질 수 있고, 길어지면 «비교문»이 섞여 들어온다(이 필드의 실패 형태).
     """
-    # ⚠️ 상위 3개만 남긴다 — "전부 시급"은 우선순위가 아니다. 실측(2026-08-15):
-    #    판단된 5부위가 전부 priority_parts 로 내려와 루틴 보강(L2 가중)이 모든
-    #    슬롯에 흩어졌다. 가중이 흩어지면 주간 상한에 눌려 사실상 균등 배분이
-    #    되어 개인화 신호가 사라진다. 프롬프트도 1~3개로 지시하지만, 지시는
-    #    어겨질 수 있으므로 코드가 자른다.
-    priority = [p for p in _as_str_list(parsed.get("priority_parts")) if p in class_names][:3]
+    if not isinstance(value, dict):
+        return None
+    summary = value.get("summary")
+    summary = summary.strip() if isinstance(summary, str) and summary.strip() else None
+    items = _as_str_list(value.get("characteristics"))[:3]
+    if summary is None and not items:
+        return None
+    return {"summary": summary, "characteristics": items}
+
+
+def parse_overall_response(parsed: dict[str, Any]) -> dict[str, Any]:
+    """종합 진단 응답 검증 — **설명 문장만** 받는다.
+
+    ⚠️ 구조적 판단은 전부 코드가 한다. LLM 이 보내와도 버린다:
+         similarity_score → scoring.compute_similarity()  (score_source=RULE)
+         priority_parts   → scoring.rank_priority()
+       LLM 의 몫은 "이미지에서 무엇이 관찰되는가"를 문장으로 만드는 것뿐이다.
+    """
 
     summary = parsed.get("summary")
     silhouette = parsed.get("silhouette")
 
     return {
         "summary": summary.strip() if isinstance(summary, str) else None,
-        "priority_parts": priority,
         "strengths": _as_str_list(parsed.get("strengths")),
         "cautions": _as_str_list(parsed.get("cautions")),
         # ── 사진을 직접 보고 낸 전체 형태 판단 (2026-08-17) ──
@@ -518,6 +580,24 @@ def parse_overall_response(
         #    화면 요약 상자가 고정 폭이라 길이도 함께 눌러야 한다.
         "key_differences": _as_str_list(parsed.get("key_differences"))[:2],
         "confidence": _confidence_ratio(parsed.get("confidence")),
+        # ── 전체 프로필 A·B (2026-08-17) ──
+        "user_profile": _profile(parsed.get("user_profile")),
+        "reference_profile": _profile(parsed.get("reference_profile")),
+        # ── 방향·전략은 **설명 문장만** 받는다 ──
+        # ⚠️ priority·mode 는 파싱하지 않는다. 규칙(scoring.decide_direction /
+        #    routine_mode.decide_mode)이 정하고 호출자가 저장한다. LLM 이
+        #    보내와도 버린다 — 점수·우선순위와 같은 원칙이다.
+        "direction_summary": (
+            parsed["direction_summary"].strip()
+            if isinstance(parsed.get("direction_summary"), str) and parsed["direction_summary"].strip()
+            else None
+        ),
+        "strategy_focus": _as_str_list(parsed.get("strategy_focus"))[:2],
+        "next_cycle": (
+            parsed["next_cycle"].strip()
+            if isinstance(parsed.get("next_cycle"), str) and parsed["next_cycle"].strip()
+            else None
+        ),
     }
 
 
@@ -583,6 +663,10 @@ async def diagnose_overall(
     excluded: list[str] | None = None,
     reference_photo: bytes | None = None,
     user_photo: bytes | None = None,
+    priority_parts: list[str] | None = None,
+    direction: dict[str, Any] | None = None,
+    cut_notice: str | None = None,
+    shares: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """F09 — 원본 두 장을 직접 보고 종합한다.
 
@@ -623,6 +707,10 @@ async def diagnose_overall(
         score=score,
         excluded=excluded,
         has_images=has_images,
+        priority_parts=priority_parts,
+        direction=direction,
+        cut_notice=cut_notice,
+        shares=shares,
     )
 
     # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
@@ -637,7 +725,6 @@ async def diagnose_overall(
     # ⚠️ 우선 부위 후보는 **판단된 부위만**이다. 판단 불가 부위가 여기 들어가면
     #    루틴의 볼륨 가중(L2)이 "못 본 부위"에 실린다 — 실측(2026-08-17)에서
     #    허벅지 2개가 gap_level=null 인 채 priority 3 을 달고 있었다.
-    judged_names = {p["class_name"] for p in results if p.get("gap_level")}
-    out = parse_overall_response(parsed, judged_names or {p["class_name"] for p in results})
+    out = parse_overall_response(parsed)
     out["raw_response"] = raw
     return out

@@ -99,7 +99,22 @@ def _store(
     extra: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """사진을 저장하고 세그 잡을 건다. (photo 행, job 행) 반환."""
-    jpeg, width, height = images.encode_photo(img, mirrored=is_mirrored)
+    # ⚠️ 거울 되돌리기를 **여기서** 한다 (예전엔 encode_photo 안에서 했다).
+    #    아래 크롭이 랜드마크와 같은 좌표계에서 일어나야 하는데, extra 의
+    #    랜드마크는 이미 언미러된 상태라 이미지도 먼저 맞춰야 한다.
+    if is_mirrored:
+        img = images.flip_horizontal(img)
+
+    # ⚠️ Sapiens2 입력 비율(3:4)로 맞춘다. 전처리기가 비율을 보존하지 않고
+    #    강제로 늘리기 때문에, 16:9 노트북 웹캠 사진은 사람이 가로로 2.37배
+    #    눌린 채 모델에 들어간다 (images.fit_to_model_aspect 주석 참고).
+    #    ⚠️ 사진과 랜드마크를 **함께** 옮긴다. 하나만 바꾸면 조용히 어긋난다.
+    landmarks = extra.get("pose_landmarks")
+    img, cropped_landmarks = images.fit_to_model_aspect(img, landmarks)
+    if cropped_landmarks is not landmarks:
+        extra = {**extra, "pose_landmarks": cropped_landmarks}
+
+    jpeg, width, height = images.encode_photo(img)
 
     path = storage.photo_path(user_id, session_id, str(kind))
     storage.upload(settings.bucket_photos, path, jpeg, "image/jpeg")

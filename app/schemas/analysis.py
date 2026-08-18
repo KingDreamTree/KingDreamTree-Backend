@@ -76,6 +76,42 @@ class PartDiagnosisDto(BaseModel):
     status: DomainStatus
 
 
+class BodyProfileDto(BaseModel):
+    """한 사진의 전체 프레임 특징. **비교가 아니라 단독 관찰**이다.
+
+    ⚠️ 골격이 아니라 «보이는 프레임 특징»이다 — 사진으로 뼈를 재지 않는다.
+    """
+
+    summary: str | None = None
+    characteristics: list[str] = Field(default_factory=list)
+
+
+class RealisticDirectionDto(BaseModel):
+    """개선 방향. **priority·reason 은 규칙이 정한다** (scoring.decide_direction).
+
+    summary 만 LLM 이 쓴 설명 문장이다.
+    """
+
+    priority: str | None = None
+    reason: str | None = None
+    summary: str | None = None
+
+
+class ExerciseStrategyDto(BaseModel):
+    """운동 전략. **mode·mode_basis·mode_reason 은 규칙이 정한다**
+    (routine_mode.decide_mode — 체지방률 기준, 루틴 생성이 쓰는 값과 동일).
+
+    focus·next_cycle 만 LLM 이 쓴 설명 문장이다.
+    ⚠️ 단계(1→2→3) 개념은 없다. 루틴은 4주기 반복이고 주기마다 내용이 같다.
+    """
+
+    mode: str | None = None
+    mode_basis: str | None = None
+    mode_reason: str | None = None
+    focus: list[str] = Field(default_factory=list)
+    next_cycle: str | None = None
+
+
 class OverallDiagnosisDto(BaseModel):
     similarity_score: int | None = None
     # ⚠️ 기본값은 RULE 이다. 점수는 scoring.compute_similarity() 가 규칙으로
@@ -95,6 +131,15 @@ class OverallDiagnosisDto(BaseModel):
     #: 종합 판단의 확신도 0.0~1.0. ⚠️ similarity_score 와 무관하다 —
     #  점수는 규칙이 계산하고(score_source=RULE), 이건 "이 종합을 얼마나 믿을 수 있나"다.
     confidence: float | None = None
+    #: 이번 비교에서 무엇을 못 봤는지. **규칙이 DB 에서 만든다** — LLM 문장이 아니다.
+    #  "왜 이 부위는 비교를 못 했나"에 데이터로 답하기 위한 필드.
+    comparison_limitations: list[str] = Field(default_factory=list)
+    #: 두 사진 각각의 전체 프레임 특징 (2026-08-17). 비교는 silhouette 이 한다.
+    user_profile: BodyProfileDto | None = None
+    reference_profile: BodyProfileDto | None = None
+    #: 개선 방향·운동 전략. ⚠️ 핵심 판정은 규칙이 하고 LLM 은 설명만 한다.
+    realistic_direction: RealisticDirectionDto | None = None
+    exercise_strategy: ExerciseStrategyDto | None = None
     status: DomainStatus
 
 

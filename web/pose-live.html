@@ -350,16 +350,39 @@ $("reshoot").onclick = () => {
 // ── 셔터 ──────────────────────────────────────────────────────────────────
 let lastScore = 0;
 
+//: Sapiens2 입력 비율 (preprocessor_config.json: 768x1024).
+const MODEL_ASPECT = 3 / 4;
+
+/**
+ * 프레임을 3:4 로 센터 크롭할 영역. 이미 3:4 면 전체.
+ *
+ * ⚠️ 노트북 웹캠은 물리적으로 가로 센서라 getUserMedia 의 세로 요청이 무시된다
+ *    (960x1280 을 요청해도 1280x720 이 온다). 그대로 올리면 Sapiens2 전처리기가
+ *    비율을 보존하지 않고 768x1024 로 늘려 사람이 가로로 2.37배 눌린다.
+ * ⚠️ 미리보기 박스가 이미 CSS 로 3:4 라, 여기서 3:4 로 자르면 **사용자가 본 것과
+ *    찍히는 것이 일치**한다 — 예전엔 세로 프레임을 보며 자세를 맞췄는데 실제로는
+ *    그 밖까지 포함된 가로 원본이 저장됐다.
+ */
+function cropBox(w, h) {
+  if (Math.abs(w / h - MODEL_ASPECT) <= 0.02) return { sx: 0, sy: 0, sw: w, sh: h };
+  const [sw, sh] = w / h > MODEL_ASPECT
+    ? [Math.round(h * MODEL_ASPECT), h]
+    : [w, Math.round(w / MODEL_ASPECT)];
+  return { sx: Math.round((w - sw) / 2), sy: Math.round((h - sh) / 2), sw, sh };
+}
+
 function capture(r) {
   const v = $("video");
+  const b = cropBox(v.videoWidth, v.videoHeight);
   const c = document.createElement("canvas");
-  c.width = v.videoWidth; c.height = v.videoHeight;
+  c.width = b.sw; c.height = b.sh;
   // ⚠️ 카메라 원본을 그린다. 거울 모드는 보기 전용이다 — 좌표와 마찬가지로
   //    사진도 비반전이어야 서버로 올라가는 것과 같다.
-  c.getContext("2d").drawImage(v, 0, 0);
+  c.getContext("2d").drawImage(v, b.sx, b.sy, b.sw, b.sh, 0, 0, b.sw, b.sh);
 
   $("shot").src = c.toDataURL("image/jpeg", 0.9);
-  $("shotmeta").textContent = `${v.videoWidth}×${v.videoHeight}`;
+  $("shotmeta").textContent = `${b.sw}×${b.sh}` +
+    (b.sw !== v.videoWidth ? ` (원본 ${v.videoWidth}×${v.videoHeight} → 3:4 크롭)` : "");
   $("vals").innerHTML =
     `자세 P <b>${r.pose_similarity.toFixed(1)}</b> · 거리 F <b>${r.framing_score.toFixed(3)}</b> · ` +
     `방향 R <b>${r.facing_delta.toFixed(3)}</b> · OKS <b>${r.oks.toFixed(3)}</b>`;

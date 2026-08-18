@@ -36,11 +36,13 @@ from app.services import (
     diagnosis_repo,
     inbody_repo,
     part_pairing,
+    routine_mode,
     scoring,
     segmap,
     storage,
     vlm,
 )
+from app.services.routine_templates import CUT_NOTICE
 from app.worker import queue
 from app.worker.registry import register
 
@@ -343,6 +345,91 @@ def _for_overall(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+#: 부위가 비교에서 빠지거나 흐릿해진 사유 → 사용자·심사위원이 읽는 문장.
+_LIMIT_MESSAGE = {
+    "TOO_SMALL": "{name}: 옷에 가려 외곽선이 충분히 드러나지 않았습니다",
+    "TOO_SMALL_RATIO": "{name}: 사진에서 너무 작게 잡혀 형태를 비교하기 어렵습니다",
+    "TRUNCATED": "{name}: 화면에서 잘려 전체 형태를 확인할 수 없습니다",
+    "NOT_DETECTED": "{name}: 사진에서 부위가 검출되지 않았습니다",
+    "NOT_COMPARABLE": "{name}: 비교 대상 부위가 아닙니다",
+}
+
+
+def _comparison_limitations(
+    rows: list[dict[str, Any]], session_id: UUID
+) -> list[str]:
+    """이번 비교에서 **무엇을 못 봤는지**를 데이터에서 만든다.
+
+    두 종류를 합친다:
+      1. 진단은 됐지만 판단 불가로 끝난 부위 (gap_level 이 null)
+      2. 아예 비교 대상에 못 든 부위 (한쪽에서만 유효하거나 미검출)
+
+    ⚠️ LLM 에게 만들게 하지 않는다. "왜 이 부위는 비교를 못 했나"는 DB 가 아는
+       사실이고, 문장으로 지어내면 근거가 그 문장뿐이 된다.
+    """
+    master = {row["class_name"]: row for row in db.list_body_parts()}
+    out: list[str] = []
+
+    for row in rows:
+        if row.get("gap_level"):
+            continue
+        name = master.get(row["class_name"], {}).get("name_ko") or row["class_name"]
+        out.append(f"{name}: 사진에서 형태를 확인하지 못해 비교하지 않았습니다")
+
+    context = diagnosis_repo.build_comparison_context(session_id)
+    diagnosed = {r["class_name"] for r in rows}
+    for item in context.get("excluded") or []:
+        if item["class_name"] in diagnosed:
+            continue  # 카드가 있으면 그쪽이 사유를 이미 말한다
+        template = _LIMIT_MESSAGE.get(item.get("reason") or "", "{name}: 비교하지 못했습니다")
+        out.append(template.format(name=item.get("name_ko") or item["class_name"]))
+
+    return out
+
+
+#: 실루엣 서술에 쓸 묶음. 부위 9개를 그대로 주면 모델이 무엇이 큰지 못 고른다.
+_SHARE_GROUPS = {
+    "몸통": ("Torso",),
+    "팔": ("Left_Upper_Arm", "Left_Lower_Arm", "Right_Upper_Arm", "Right_Lower_Arm"),
+    "하체": ("Left_Upper_Leg", "Left_Lower_Leg", "Right_Upper_Leg", "Right_Lower_Leg"),
+}
+
+
+def _body_shares(session_id: UUID) -> dict[str, Any]:
+    """상체·하체 면적 비중을 묶어서 낸다 — **실루엣 서술의 방향을 고정하려고.**
+
+    ⚠️ 이게 없으면 모델이 방향을 뒤집는다. 실측(2026-08-18): 몸통 +13%,
+       하체 −2% 인데 "하체 비중이 더 높게 나타납니다" 라고 썼다.
+       눈으로만 보면 어느 쪽이 더 큰지 헷갈리므로 숫자로 못 박는다.
+
+    ⚠️ 분모는 «비교 대상 부위 전체»다 (segmap.compare_parts 규칙). 촬영 거리·
+       해상도가 상쇄되므로 두 사진을 그대로 견줄 수 있다.
+    """
+    context = diagnosis_repo.build_comparison_context(session_id)
+    if not context["ready"] or not context["parts"]:
+        return {}
+    names = [p["class_name"] for p in context["parts"]]
+    metrics = segmap.compare_parts(
+        context["segments"][str(PhotoKind.REFERENCE)],
+        context["segments"][str(PhotoKind.USER)],
+        names,
+        context["person_classes"],
+    )
+    rows = metrics.get("parts") or {}
+
+    out: dict[str, Any] = {}
+    for label, members in _SHARE_GROUPS.items():
+        present = [m for m in members if m in rows]
+        if not present:
+            continue
+        ref = sum(rows[m]["reference"]["area_share"] for m in present)
+        usr = sum(rows[m]["user"]["area_share"] for m in present)
+        if ref <= 0:
+            continue
+        out[label] = {"reference": ref, "user": usr, "delta": (usr - ref) / ref * 100}
+    return out
+
+
 def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     session_id = UUID(str(job["session_id"]))
     rows = diagnosis_repo.list_part_diagnoses(session_id)
@@ -393,6 +480,37 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     scored = scoring.compute_similarity(overall_input)
     score = scored["score"] if scored else None
 
+    # ⚠️ 우선순위도 **코드가 정한다** (2026-08-17). 종전에는 VLM 이 priority_parts 를
+    #    보내고 코드는 이름만 검증했다. 그런데 이 목록은 화면 문구로만 쓰이는 게
+    #    아니라 루틴의 볼륨 가중 대상이 된다 — LLM 이 정하면 같은 진단에서 매번 다른
+    #    부위가 보강되고 "왜 이 부위인가"에 답할 근거가 남지 않는다.
+    priority_parts, priority_rationale = scoring.rank_priority(overall_input)
+    log.info("우선 부위(규칙): %s", priority_rationale)
+
+    # ⚠️ 비교 한계도 **규칙으로** 만든다. 어느 부위가 왜 빠졌는지는 DB 가 알고 있다 —
+    #    LLM 에게 물으면 그럴듯한 문장이 나오지만 근거는 그 문장뿐이다.
+    #    심사에서 "왜 이 부위는 비교를 못 했나"에 데이터로 답하기 위한 필드다.
+    limitations = _comparison_limitations(rows, session_id)
+
+    # ── 개선 방향도 **규칙이 정한다** (2026-08-17) ────────────────────────────
+    # ⚠️ decide_mode 는 인바디만 받는 순수 함수이고 "같은 인바디면 항상 같은 결과"라고
+    #    docstring 이 보증한다. ROUTINE_GEN 이 나중에 다시 호출해도 같은 값이 나오므로
+    #    루틴 로직은 건드리지 않는다 — 여기서는 **설명에 쓸 근거**를 미리 얻는 것뿐이다.
+    # ⚠️ "감량이 먼저인가 근력이 먼저인가"는 체성분 판단이라 사진으로 할 수 없다.
+    #    이미 체지방률로 판정하는 규칙이 있으므로 그 결과를 승계한다.
+    mode_info = routine_mode.decide_mode(inbody)
+    direction = scoring.decide_direction(
+        mode_info, overall_input, blocked_count=len(rows) - len(done)
+    )
+    cut_notice = CUT_NOTICE if str(mode_info.get("mode")) == "CUT" else None
+    shares = _body_shares(session_id)
+    log.info(
+        "개선 방향(규칙): %s · 모드 %s(%s)",
+        direction["priority"],
+        direction["mode"],
+        direction["mode_basis"],
+    )
+
     result = asyncio.run(
         vlm.diagnose_overall(
             results=overall_input,
@@ -403,6 +521,10 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             excluded=_excluded_parts(session_id, {r["class_name"] for r in rows}),
             reference_photo=ref_photo,
             user_photo=user_photo,
+            priority_parts=priority_parts,
+            direction=direction,
+            cut_notice=cut_notice,
+            shares=shares,
         )
     )
 
@@ -413,7 +535,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             "score_source": str(ScoreSource.RULE),
             "score_rationale": scored["rationale"] if scored else None,
             "summary": result["summary"],
-            "priority_parts": result["priority_parts"],
+            # ⚠️ VLM 이 보낸 값이 아니라 규칙이 정한 값이다 (위 rank_priority).
+            "priority_parts": priority_parts,
             "strengths": result["strengths"],
             "cautions": result["cautions"],
             # breakdown 을 함께 박제 — 심사·디버깅 때 "이 점수가 어떻게 나왔나"를
@@ -421,6 +544,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             "raw_response": {
                 "llm": result.get("raw_response"),
                 "score_breakdown": scored["breakdown"] if scored else None,
+                # 심사·디버깅용 — "왜 이 부위가 우선인가"에 공식으로 답한다.
+                "priority_rationale": priority_rationale,
                 # ⚠️ 전용 컬럼이 아니라 여기 담는다. 컬럼을 만들려면 DDL 이 필요한데
                 #    이 코드에서 실행할 경로가 없다 (PostgREST 는 CRUD 만, 접속
                 #    문자열도 없다). 마이그레이션 파일은 db/migrations 에 두었고,
@@ -429,6 +554,23 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
                 "silhouette": result.get("silhouette"),
                 "key_differences": result.get("key_differences") or [],
                 "confidence": result.get("confidence"),
+                "comparison_limitations": limitations,
+                # ── 전체 프로필 · 방향 · 전략 (2026-08-17) ──
+                # ⚠️ priority·mode·mode_reason 은 **규칙 값**이다. LLM 이 보낸 게 아니다.
+                "user_profile": result.get("user_profile"),
+                "reference_profile": result.get("reference_profile"),
+                "realistic_direction": {
+                    "priority": direction["priority"],
+                    "reason": direction["reason"],
+                    "summary": result.get("direction_summary"),
+                },
+                "exercise_strategy": {
+                    "mode": direction["mode"],
+                    "mode_basis": direction["mode_basis"],
+                    "mode_reason": direction["mode_reason"],
+                    "focus": result.get("strategy_focus") or [],
+                    "next_cycle": result.get("next_cycle"),
+                },
             },
             "status": str(DomainStatus.DONE),
         },
@@ -441,6 +583,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         "inbody": inbody_source,
         # 잡 결과에 남겨 "이번 종합이 사진을 봤는가"를 나중에 되짚을 수 있게 한다.
         "photos": "2" if ref_photo and user_photo else "0",
+        "direction": direction["priority"],
+        "mode": direction["mode"],
         "confidence": result.get("confidence"),
     }
 

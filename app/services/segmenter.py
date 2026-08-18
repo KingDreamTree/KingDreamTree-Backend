@@ -289,6 +289,12 @@ def compute_parts(
         invalid_reason: str | None = None
         if class_name not in comparable:
             invalid_reason = InvalidReason.NOT_COMPARABLE
+        elif is_truncated:
+            # ⚠️ 옷 가림(TOO_SMALL)과 다른 사유다 (2026-08-18, issue #86).
+            #    잘린 부위는 남은 픽셀/비율이 임계값을 넘어도 전체 형태를 알 수
+            #    없다 — "작게 잡혔다"가 아니라 "일부가 화면 밖에 있다"가 진짜
+            #    이유이므로, 크기 판정보다 먼저 본다.
+            invalid_reason = InvalidReason.TRUNCATED
         elif count < settings.seg_min_pixels:
             invalid_reason = InvalidReason.TOO_SMALL
         elif area_ratio < settings.seg_min_ratio:

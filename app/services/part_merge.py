@@ -42,6 +42,28 @@ CLOTHING_CLASSES: tuple[str, ...] = ("Upper_Clothing", "Lower_Clothing", "Appare
 #:    근거 없는 숫자가 된다.
 MAX_STEPS = 256
 
+#: 흡수량 상한 — 부위 하나가 옷에서 가져갈 수 있는 픽셀은 **자기 씨앗의 N배**까지
+#: (2026-08-17, 프론트 재현 리포트). 상한이 없으면 씨앗 크기와 무관하게 닿는
+#: 옷을 전부 삼킨다 — 실측: 발목 노이즈 2px 가 바짓가랑이 12,476px 를,
+#: 오라벨 상완 261px 가 정강이 "상의" 12,520px 를 흡수(98%가 옷).
+#:
+#: ⚠️ 왜 20인가 — 살리려던 원래 케이스를 죽이면 안 된다. 긴팔에서 노출 씨앗이
+#:    손목 언저리 수백 px 뿐이어도 소매 수천 px 는 흡수돼야 한다(20배면 충분).
+#:    반대로 노이즈 씨앗(수 px)은 수십 px 에서 멈춘다. 잠정값 — 실호출 로그가
+#:    쌓이면 clothing_ratio 게이트와 함께 재조정한다.
+#: ⚠️ 상한 검사는 스텝 단위라 마지막 스텝에서 파면(한 겹) 만큼 넘칠 수 있다.
+#:    정확히 자르려면 픽셀 단위 정렬이 필요한데, 넘침이 둘레 한 겹로 유계라
+#:    복잡도를 치를 가치가 없다.
+ABSORB_CAP_RATIO = 20
+
+#: 좌우 경계벽에 쓰는 부위 접미사 — Left_X/Right_X 둘 다 씨앗이 있을 때만
+#: 두 씨앗 무게중심의 가운데 x 를 벽으로 세운다 (2026-08-17, 같은 리포트).
+#: 벽이 없으면 왼쪽 씨앗이 바짓가랑이를 넘어 오른쪽 다리의 옷까지 삼켜
+#: bbox 가 양쪽 다리를 덮는다 — 좌우 굵기 비교가 그 순간 무의미해진다.
+#: ⚠️ 한쪽 씨앗이 없으면 벽을 세우지 않는다 — 기준 없이 자르면 정당한 흡수까지
+#:    막는다(그 손해는 흡수량 상한이 유계로 막아준다).
+_LR_SUFFIXES: tuple[str, ...] = ("Upper_Arm", "Lower_Arm", "Upper_Leg", "Lower_Leg")
+
 #: 옷이 **덮을 수 있는 부위**. 여기 없는 부위로는 번지지 않는다.
 #:
 #: ⚠️ 이건 모듈 주석이 경계한 "옷 → 부위 고정 매핑"이 아니다. 그건 소매를
@@ -138,6 +160,30 @@ def _spread_one(
     filled = np.where(np.isin(crop, list(target_values)), crop, 0).astype(np.uint8)
     remaining = crop_cloth.copy()
 
+    # ── 구조 제약 (2026-08-17, 프론트 재현 리포트) ──────────────────────────
+    # ② 흡수량 상한 — 클래스별 씨앗 픽셀 수 × ABSORB_CAP_RATIO
+    seed_values, seed_counts = np.unique(filled[filled > 0], return_counts=True)
+    cap = {int(v): int(c) * ABSORB_CAP_RATIO for v, c in zip(seed_values, seed_counts)}
+    absorbed_by = {int(v): 0 for v in seed_values}
+
+    # ① 좌우 경계벽 — Left_X/Right_X 둘 다 씨앗이 있으면 무게중심 가운데가 벽.
+    #    ⚠️ 라벨 이름이 아니라 **씨앗의 실제 위치**로 좌우를 정한다 — 거울 사진이든
+    #       라벨이 뒤집혔든, 벽은 "자기 무게중심이 있는 쪽만 흡수"로 동작한다.
+    walls: list[tuple[int, float, bool]] = []  # (클래스값, 벽 x, 자기쪽이 왼쪽인가)
+    for suffix in _LR_SUFFIXES:
+        lv = value_of.get(f"Left_{suffix}")
+        rv = value_of.get(f"Right_{suffix}")
+        if lv is None or rv is None or lv not in cap or rv not in cap:
+            continue
+        lx = float(np.nonzero(filled == lv)[1].mean())
+        rx = float(np.nonzero(filled == rv)[1].mean())
+        if lx == rx:
+            continue  # 같은 열에 겹침 — 벽을 세울 근거가 없다
+        wall = (lx + rx) / 2
+        walls.append((lv, wall, lx < rx))
+        walls.append((rv, wall, rx < lx))
+    col = np.arange(filled.shape[1])[None, :]
+
     for _ in range(max_steps):
         if not remaining.any():
             break
@@ -161,12 +207,22 @@ def _spread_one(
                     rolled[:, -1] = 0
             candidate = np.where(candidate == 0, rolled, candidate)
 
+        # ① 벽 너머 픽셀은 못 가져간다 / ② 상한에 닿은 클래스는 흡수를 멈춘다
+        for v, wall, keep_left in walls:
+            beyond = (col > wall) if keep_left else (col < wall)
+            candidate = np.where((candidate == v) & beyond, 0, candidate)
+        for v, used in absorbed_by.items():
+            if used >= cap[v]:
+                candidate = np.where(candidate == v, 0, candidate)
+
         take = remaining & (candidate > 0)
         if not take.any():
             break  # 더 번질 곳이 없다 — 남은 옷은 옷으로 둔다
 
         filled = np.where(take, candidate, filled)
         remaining &= ~take
+        for v, c in zip(*np.unique(candidate[take], return_counts=True)):
+            absorbed_by[int(v)] = absorbed_by.get(int(v), 0) + int(c)
 
     merged = labels.copy()
     absorbed = crop_cloth & (filled > 0)

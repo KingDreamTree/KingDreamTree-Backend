@@ -89,6 +89,43 @@ def main() -> int:
         int((merged == 4).sum()) == int((c == 4).sum()),
     )
 
+    # ── 4. 흡수량 상한: 노이즈 씨앗이 옷을 통째로 삼키면 안 된다 ────────────
+    #     실측(2026-08-17, 프론트 리포트) — 발목 노이즈 2px 가 바짓가랑이
+    #     12,476px 를 흡수해 bbox 가 양쪽 다리를 덮었다.
+    d = np.zeros((100, 120), dtype=np.uint8)
+    d[20:90, 10:110] = 4  # 바지 7,000px
+    d[89, 60:62] = 5  # 노이즈 씨앗 2px
+    _, contrib = part_merge.merge_clothing(d, LM, TARGETS)
+    limit = 2 * part_merge.ABSORB_CAP_RATIO
+    absorbed = contrib.get("Left_Upper_Leg", 0)
+    check(
+        "노이즈 씨앗 2px 의 흡수가 상한에서 멈춘다",
+        # 상한 검사가 스텝 단위라 파면 한 겹만큼 넘칠 수 있다 — 두 배면 충분히 엄격
+        0 < absorbed <= limit * 2,
+        f"{absorbed}px (상한 {limit}px, 종전 수천 px)",
+    )
+
+    # ── 5. 좌우 경계벽: 왼쪽 씨앗이 오른쪽 다리의 옷을 삼키면 안 된다 ───────
+    lm_lr = {"4": "Lower_Clothing", "5": "Left_Upper_Leg", "6": "Right_Upper_Leg"}
+    e = np.zeros((100, 200), dtype=np.uint8)
+    e[30:90, 20:180] = 4  # 바지가 양쪽 다리에 걸침
+    e[85:90, 30:60] = 5  # 왼쪽 씨앗
+    e[85:90, 140:170] = 6  # 오른쪽 씨앗
+    merged, _ = part_merge.merge_clothing(e, lm_lr, {"Left_Upper_Leg", "Right_Upper_Leg"})
+    wall = (45 + 155) / 2  # 두 씨앗 무게중심의 가운데
+    left_max = int(np.nonzero(merged == 5)[1].max())
+    right_min = int(np.nonzero(merged == 6)[1].min())
+    check(
+        "왼쪽 씨앗이 벽을 넘지 않는다",
+        left_max <= wall,
+        f"Left 최대 x={left_max}, 벽={wall:.0f}",
+    )
+    check(
+        "오른쪽 씨앗이 벽을 넘지 않는다",
+        right_min >= wall,
+        f"Right 최소 x={right_min}, 벽={wall:.0f}",
+    )
+
     print()
     if _failed:
         print(f"실패 {len(_failed)}건: {', '.join(_failed)}")

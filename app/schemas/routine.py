@@ -91,10 +91,10 @@ class RoutineStrategyDto(BaseModel):
     """
 
     headline: str | None = None
+    #: "왜 이렇게 짰나" — **줄글 한 문단.** 항목 나열이 아니라 이어지는 산문이다.
+    body: str | None = None
     mode: str | None = None
     mode_reason: str | None = None
-    #: "왜 이렇게 짰나" 문장들. 순서대로 읽으면 근거가 이어진다.
-    reasons: list[str] = Field(default_factory=list)
     #: 부위별로 실제 얹은 세트 수 — 진단이 루틴을 바꾼 유일한 지점.
     volume: list[dict[str, Any]] = Field(default_factory=list)
     strength_days: int | None = None

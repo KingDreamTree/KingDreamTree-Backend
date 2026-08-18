@@ -199,7 +199,15 @@ async def apply(session: OwnedSession, body: CoachApplyRequest) -> CoachApplyRes
             {
                 "goal": routine.get("goal"),
                 "focus_areas": routine.get("focus_areas"),
-                "raw_response": {"source": "COACH_CHAT", "base_version": routine["version"]},
+                "raw_response": {
+                    "source": "COACH_CHAT",
+                    "base_version": routine["version"],
+                    # ⚠️ 승계 안 하면 화면의 «4주간 핵심 목표» 본문이 사라진다 —
+                    #    worker/handlers/routine.py 의 _patch 와 같은 이유·같은 처리
+                    #    (2026-08-18, #91). 코치 대화도 새 버전을 만드는 동안
+                    #    똑같이 raw_response 를 통째로 갈아치우고 있었다.
+                    "strategy": (routine.get("raw_response") or {}).get("strategy"),
+                },
                 "status": str(DomainStatus.DONE),
             },
         )

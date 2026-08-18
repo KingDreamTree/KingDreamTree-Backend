@@ -93,6 +93,25 @@ function requireCriteria(c) {
 // --------------------------------------------------------------------------
 
 /**
+ * 화면비 보정 — x·y 의 눈금을 맞춘다.
+ *
+ * ⚠️ MediaPipe 좌표는 x 를 **너비로**, y 를 **높이로** 각각 나눈 값이다.
+ *    16:9 노트북 웹캠이면 x 눈금이 y 눈금의 1.78 배라, **같은 자세인데도**
+ *    각도와 길이가 다르게 읽힌다. 실측: 물리적 45° 팔이 3:4 사진에서 36.9°,
+ *    16:9 사진에서 60.6° 로 나온다 — 관절 하나에 최대 24° 의 가짜 오차다.
+ *    9 개 각도에 동시에 실리므로 평균이 통째로 밀려 올라간다.
+ *
+ * x 에 화면비(가로/세로)를 곱하면 둘 다 "높이 단위"가 되어 등방(isotropic)이 된다.
+ * normalizeForOks 가 쓰던 것과 같은 보정을 각도·길이 계산에도 적용하는 것이다.
+ *
+ * ⚠️ visibility 는 그대로 옮긴다 — 가시성 판정이 보정 뒤에도 같아야 한다.
+ */
+function withAspect(lm, aspect) {
+  if (!(aspect > 0) || aspect === 1) return lm;
+  return lm.map((p) => (p ? { ...p, x: p.x * aspect } : p));
+}
+
+/**
  * @returns {{score:number, reason:string|null, usedAngles:number, diffs:object}}
  *
  * reason 이 null 이 아니면 score 는 0 이다.
@@ -110,9 +129,14 @@ function requireCriteria(c) {
  *    를 넘겨 전체를 0점으로 만들었다. "육안으로 같은데 안 찍히는" 제1 원인.
  *    투영 길이 < 몸통 길이 × min_seg_ratio 면 그 세그먼트는 없는 것으로 본다.
  */
-export function poseScore(ref, user, criteria) {
+export function poseScore(ref, user, criteria, { refAspect = 1, userAspect = 1 } = {}) {
   const c = requireCriteria(criteria);
   const diffs = {};
+
+  // ⚠️ 각도·길이를 재기 전에 화면비를 맞춘다 (§withAspect). 이걸 빼면 레퍼런스와
+  //    사용자가 **다른 눈금의 자로 잰 각도**를 비교하게 된다.
+  ref = withAspect(ref, refAspect);
+  user = withAspect(user, userAspect);
 
   const tRef = torsoLength(ref, c.min_visibility);
   const tUser = torsoLength(user, c.min_visibility);
@@ -203,10 +227,12 @@ function torsoLength(lm, minVisibility) {
  * ⚠️ 어깨나 골반이 안 보이면 0 을 돌려준다. 잴 기준이 없다는 뜻이고,
  *    그때는 "몸이 화면에 다 나오도록"이 맞는 안내다.
  */
-export function framingScore(ref, user, criteria) {
+export function framingScore(ref, user, criteria, { refAspect = 1, userAspect = 1 } = {}) {
   const c = requireCriteria(criteria);
-  const a = torsoLength(ref, c.min_visibility);
-  const b = torsoLength(user, c.min_visibility);
+  // ⚠️ 몸통 길이도 거리 계산이라 화면비 보정이 필요하다 (§withAspect).
+  //    세로가 늘어난 좌표계에서는 몸통이 실제보다 길게 읽혀 F 가 부풀려진다.
+  const a = torsoLength(withAspect(ref, refAspect), c.min_visibility);
+  const b = torsoLength(withAspect(user, userAspect), c.min_visibility);
   if (a <= 0 || b <= 0) return 0;
   const ratio = b / a;
   return Math.min(ratio, 1 / ratio);
@@ -600,8 +626,8 @@ export function evaluate(
 ) {
   const c = requireCriteria(criteria);
 
-  const pose = poseScore(ref, user, c);
-  const framing = framingScore(ref, user, c);
+  const pose = poseScore(ref, user, c, { refAspect, userAspect });
+  const framing = framingScore(ref, user, c, { refAspect, userAspect });
   const facing = facingDelta(ref, user);
   // ⚠️ **관찰만 한다.** 아래 판정에 쓰지 않는다 — 잡음을 재기 전에 관문을
   //    갈아끼우면 나아졌는지 나빠졌는지 판단할 기준이 없다.

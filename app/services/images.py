@@ -15,6 +15,8 @@ from __future__ import annotations
 import io
 import logging
 
+from typing import Any
+
 from PIL import Image, ImageOps
 
 from app.config import settings
@@ -126,3 +128,105 @@ def encode_photo(img: Image.Image, mirrored: bool = False) -> tuple[bytes, int, 
     # ⚠️ EXIF를 싣지 않는다. 위치정보가 사람 사진에 붙어 나가면 안 된다.
     img.save(buf, format="JPEG", quality=90)
     return buf.getvalue(), w, h
+
+
+# --------------------------------------------------------------------------- #
+# Sapiens2 입력 규격 맞추기
+# --------------------------------------------------------------------------- #
+
+#: Sapiens2 세그 모델의 입력 비율 (preprocessor_config.json: height=1024, width=768).
+MODEL_ASPECT = 768 / 1024  # 0.75 (가로/세로)
+
+#: 이 오차 안이면 손대지 않는다. 폰 세로 사진(3:4)은 그대로 통과한다.
+_ASPECT_TOL = 0.02
+
+
+def fit_to_model_aspect(
+    img: Image.Image,
+    landmarks: list[dict[str, Any]] | None = None,
+) -> tuple[Image.Image, list[dict[str, Any]] | None]:
+    """사진을 Sapiens2 입력 비율(3:4)로 센터 크롭한다. 랜드마크도 같이 옮긴다.
+
+    ⚠️ **왜 필요한가.** 전처리기가 `do_pad=false` 라 비율을 보존하지 않고
+       768x1024 로 **강제로 늘린다**. 16:9 노트북 웹캠을 넣으면 사람이 가로로
+       2.37 배 눌린 채 모델에 들어가고, 그 형태는 학습 분포 밖이라 부위 경계가
+       무너진다 (실측: 상완이 실선 수준으로 얇아진다).
+       레퍼런스는 대개 폰 세로(3:4)라 왜곡이 0 이다 — 그래서 "레퍼런스는 되는데
+       사용자 사진만 안 되는" 증상으로 나타난다.
+
+    ⚠️ **왜 패딩이 아니라 크롭인가.** 전처리기의 `do_pad=True` 경로를 켜면 비율은
+       보존되지만 캔버스의 58% 가 검은 여백이 되어 사람 픽셀이 반토막 난다
+       (상완 72px → 30px). 게다가 맵에 레터박스가 남아 `segmap.scales()` 의
+       단순 배율 가정이 깨진다. 크롭은 캔버스를 100% 쓰고 좌표 매핑도 그대로다.
+
+    ⚠️ **사람 중심으로 자른다.** 화면 중앙 기준으로 자르면 한쪽에 서 있는 사람이
+       잘린다. 랜드마크가 있으면 그 중심을 크롭 중심으로 쓴다.
+
+    ⚠️ **거울 되돌리기 뒤에 불러야 한다.** 이미지와 랜드마크가 같은 좌표계여야
+       같은 박스로 자를 수 있다.
+
+    Returns:
+        (크롭된 이미지, 재정규화된 랜드마크). 이미 규격이면 입력을 그대로 돌려준다.
+    """
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return img, landmarks
+    if abs(w / h - MODEL_ASPECT) <= _ASPECT_TOL:
+        return img, landmarks  # 이미 3:4 — 손대지 않는다
+
+    if w / h > MODEL_ASPECT:  # 가로가 넓다 → 좌우를 자른다
+        cw, ch = round(h * MODEL_ASPECT), h
+    else:  # 세로가 길다 → 위아래를 자른다
+        cw, ch = w, round(w / MODEL_ASPECT)
+    cw, ch = max(1, min(cw, w)), max(1, min(ch, h))
+
+    cx, cy = _focus(landmarks, w, h)
+    left = _clamp(round(cx - cw / 2), 0, w - cw)
+    top = _clamp(round(cy - ch / 2), 0, h - ch)
+    box = (left, top, left + cw, top + ch)
+
+    return img.crop(box), _recenter_landmarks(landmarks, box, (w, h))
+
+
+def _clamp(v: int, lo: int, hi: int) -> int:
+    return max(lo, min(v, hi))
+
+
+def _focus(landmarks: list[dict[str, Any]] | None, w: int, h: int) -> tuple[float, float]:
+    """크롭 중심 (픽셀). 랜드마크가 있으면 인물 bbox 중심, 없으면 화면 중앙.
+
+    ⚠️ visibility 가 낮은 점은 좌표가 추측값이라 뺀다 — 넣으면 화면 밖의 엉뚱한
+       추정치가 중심을 끌고 간다.
+    """
+    if landmarks:
+        xs = [p["x"] for p in landmarks if p and float(p.get("visibility", 1.0)) >= 0.5]
+        ys = [p["y"] for p in landmarks if p and float(p.get("visibility", 1.0)) >= 0.5]
+        if xs and ys:
+            return (min(xs) + max(xs)) / 2 * w, (min(ys) + max(ys)) / 2 * h
+    return w / 2, h / 2
+
+
+def _recenter_landmarks(
+    landmarks: list[dict[str, Any]] | None,
+    box: tuple[int, int, int, int],
+    size: tuple[int, int],
+) -> list[dict[str, Any]] | None:
+    """정규화 좌표(0~1)를 크롭 기준으로 다시 정규화한다.
+
+    ⚠️ 이걸 빼면 사진만 잘리고 좌표는 원본 기준으로 남아 **조용히 어긋난다.**
+       자세 점수도, 나중의 좌표 사용도 전부 틀리는데 에러는 안 난다.
+    ⚠️ 크롭 밖으로 나간 점은 0~1 을 벗어난다. 잘라내지 않고 그대로 둔다 —
+       visibility 와 함께 "프레임 밖"이라는 사실 자체가 정보다.
+    """
+    if not landmarks:
+        return landmarks
+    left, top, right, bottom = box
+    w, h = size
+    cw, ch = max(1, right - left), max(1, bottom - top)
+    out: list[dict[str, Any]] = []
+    for p in landmarks:
+        if not p:
+            out.append(p)
+            continue
+        out.append({**p, "x": (p["x"] * w - left) / cw, "y": (p["y"] * h - top) / ch})
+    return out

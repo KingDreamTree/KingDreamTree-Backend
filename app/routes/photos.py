@@ -30,7 +30,7 @@ from app.errors import (
 )
 from app.schemas.enums import CaptureSource, JobKind, PhotoKind, PoseScaleBasis
 from app.schemas.photo import ReferencePhotoResponse, UserPhotoResponse
-from app.services import db, images, photo_screening, pose, storage
+from app.services import db, diagnosis_repo, images, photo_screening, pose, storage
 from app.worker import queue
 
 log = logging.getLogger("routes.photos")
@@ -67,6 +67,12 @@ def _discard_existing(user_id: UUID, session_id: UUID, kind: PhotoKind) -> None:
     ⚠️ **삭제 순서가 중요하다.** 크롭 → 맵 → 원본 → 행.
        행을 먼저 지우면 어느 Storage 파일을 지워야 하는지 알 수 없게 된다
        (FK CASCADE는 Storage를 건드리지 않는다).
+
+    ⚠️ 진단(part_diagnosis/overall_diagnosis)도 함께 지운다 (2026-08-18).
+       `POST /analysis`의 가드③은 overall이 DONE이면 재실행을 건너뛴다 —
+       사진을 갈아 끼워도 진단 행이 남아있으면 옛 사진 기준 결과를 계속
+       돌려준다("다시 올려도 똑같이 나온다"). 사진이 바뀌면 그 사진에서
+       나온 진단은 더 이상 진실이 아니므로 같이 지운다.
     """
     existing = db.get_photo(session_id, kind)
     if existing is None:
@@ -79,6 +85,8 @@ def _discard_existing(user_id: UUID, session_id: UUID, kind: PhotoKind) -> None:
     canceled = queue.cancel_open_for_photo(session_id, photo_id)
     if canceled:
         log.info("사진 교체로 잡 %d건 취소: photo_id=%s", canceled, photo_id)
+
+    diagnosis_repo.clear_diagnoses(session_id)
 
     storage.delete_prefix(settings.bucket_body_parts, f"{user_id}/{session_id}/{str(kind).lower()}")
 

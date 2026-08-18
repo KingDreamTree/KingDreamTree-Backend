@@ -65,6 +65,8 @@ def _detail(routine: dict) -> RoutineDetailResponse:
             **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"], session_id)
         ),
         notice=(routine.get("raw_response") or {}).get("notice"),
+        # ⚠️ 전용 컬럼이 아니라 raw_response 안에 있다 (생성 시 통째로 저장된다).
+        strategy=(routine.get("raw_response") or {}).get("strategy"),
         disclaimer=DISCLAIMER,
     )
 

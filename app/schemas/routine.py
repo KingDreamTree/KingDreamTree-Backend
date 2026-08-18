@@ -12,6 +12,8 @@
 
 from uuid import UUID
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from app.schemas.enums import DomainStatus, GenerationType
@@ -80,6 +82,25 @@ class RoutineProgressDto(BaseModel):
     day_source: str = "COUNT"
 
 
+class RoutineStrategyDto(BaseModel):
+    """«4주간 핵심 목표» 상자 본문 — **실제로 생성된 루틴에서 조립한다.**
+
+    ⚠️ LLM 이 쓰지 않는다. 모드는 체지방률 판정 결과, volume 은 실제로 얹은 세트 수,
+       cardio_days 는 슬롯에 실제로 들어간 날 수다. 설명과 루틴이 어긋날 수 없다.
+    ⚠️ goal 은 한 줄 제목, 이건 그 아래 본문이다 — 둘은 다른 필드다.
+    """
+
+    headline: str | None = None
+    mode: str | None = None
+    mode_reason: str | None = None
+    #: "왜 이렇게 짰나" 문장들. 순서대로 읽으면 근거가 이어진다.
+    reasons: list[str] = Field(default_factory=list)
+    #: 부위별로 실제 얹은 세트 수 — 진단이 루틴을 바꾼 유일한 지점.
+    volume: list[dict[str, Any]] = Field(default_factory=list)
+    strength_days: int | None = None
+    cardio_days: int | None = None
+
+
 class RoutineDetailResponse(BaseModel):
     month_routine_id: UUID
     version: int
@@ -94,6 +115,8 @@ class RoutineDetailResponse(BaseModel):
     days: list[RoutineDayDto] = Field(default_factory=list)
     progress: RoutineProgressDto
     notice: str | None = None
+    #: 루틴 구성 근거 (2026-08-18). 없으면 null — 이 필드 이전 루틴은 안 갖고 있다.
+    strategy: RoutineStrategyDto | None = None
     disclaimer: str
 
 

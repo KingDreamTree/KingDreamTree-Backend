@@ -30,6 +30,7 @@ from uuid import UUID
 from app.schemas.enums import DomainStatus, GenerationType, JobKind
 from app.services import (
     coach_chat,
+    db,
     contraindication,
     diagnosis_repo,
     exercise_catalog,
@@ -150,6 +151,9 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                 inbody=inbody_row,
                 priority_parts=priority_parts,
                 asymmetric_parts=asymmetric,
+                # 전략 설명 문구에 한글 부위명을 쓴다 — 서비스 계층은 DB 를 보지 않는다.
+                part_names={r["class_name"]: r.get("name_ko") or r["class_name"]
+                            for r in db.list_body_parts()},
             )
         )
         routine_repo.replace_days(month_routine_id, plan["days"], days_per_week)
@@ -166,6 +170,9 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                     "notice": plan["notice"],
                     "boosts": plan["boosts"],
                     "weekly_sets": plan["weekly_sets"],
+                    # «4주간 핵심 목표» 상자 본문. 생성 시점의 루틴에서 조립했으므로
+                    # 나중에 읽어도 그때의 근거 그대로다.
+                    "strategy": plan["strategy"],
                     "selection": plan["selection"],
                 },
                 "status": str(DomainStatus.DONE),

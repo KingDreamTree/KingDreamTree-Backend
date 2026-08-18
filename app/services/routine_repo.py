@@ -29,6 +29,7 @@ from typing import Any
 from uuid import UUID
 
 from app.schemas.enums import DomainStatus, GenerationType
+from app.services import exercise_catalog
 from app.services.db import get_client
 
 #: 한 루틴이 반복되는 주기 수. 4주 프로그램이라는 뜻.
@@ -269,8 +270,18 @@ def list_days(month_routine_id: UUID) -> list[dict[str, Any]]:
         .execute()
         .data
     )
+    # ⚠️ 미디어(이미지·영상)는 **저장값이 아니라 카탈로그에서 붙인다** (2026-08-17).
+    #    영상 URL 을 뒤늦게 채웠는데, 컬럼에 저장하는 방식이면 그 전에 만들어진
+    #    루틴은 영원히 영상이 없다 — 사용자가 루틴을 다시 만들어야 한다.
+    #    exercise_ref 로 조회 시점에 붙이면 기존 루틴에도 그대로 나온다.
+    #    ⚠️ image_url 은 저장값을 우선한다 — 카탈로그가 갱신돼도 그때 그 루틴이
+    #       가리키던 그림이 바뀌지 않게. 영상은 저장된 적이 없으니 카탈로그가 원본이다.
+    media = exercise_catalog.media_by_ref()
     by_day: dict[str, list[dict[str, Any]]] = {}
     for e in exercises:
+        m = media.get(e.get("exercise_ref") or "", {})
+        e["image_url"] = e.get("image_url") or m.get("image_url")
+        e["video_url"] = m.get("video_url")
         by_day.setdefault(e["routine_day_id"], []).append(e)
 
     for d in days:

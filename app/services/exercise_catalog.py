@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -278,6 +279,33 @@ def load_catalog(path: Path | None = None) -> list[dict[str, Any]]:
             "RAPIDAPI_KEY=... python scripts/fetch_exercisedb.py fetch 를 먼저 실행하세요."
         )
     return json.loads(src.read_text(encoding="utf-8"))["exercises"]
+
+
+@lru_cache(maxsize=1)
+def media_by_ref() -> dict[str, dict[str, str | None]]:
+    """exercise_ref → {image_url, video_url}. 저장된 루틴에 미디어를 되붙일 때 쓴다.
+
+    ⚠️ **미디어를 routine_day_exercise 에 다시 저장하지 않기 위한 조회다.**
+       영상 URL 은 2026-08-17 에 뒤늦게 채웠는데(scripts/fetch_exercise_videos.py),
+       컬럼에 넣는 방식이었으면 그 전에 만들어진 루틴은 영원히 영상이 없다 —
+       사용자가 루틴을 다시 만들어야 한다. exercise_ref 로 조회 시점에 붙이면
+       기존 루틴도 그대로 살아난다.
+
+    ⚠️ 카탈로그가 없으면 빈 표를 돌려준다. 미디어는 있으면 좋은 값이지
+       루틴 조회를 막을 이유가 아니다 (CatalogNotBuiltError 를 여기서 삼킨다).
+    """
+    try:
+        catalog = load_catalog()
+    except CatalogNotBuiltError:
+        return {}
+    return {
+        item["exercise_ref"]: {
+            "image_url": item.get("image_url"),
+            "video_url": item.get("video_url"),
+        }
+        for item in catalog
+        if item.get("exercise_ref")
+    }
 
 
 def _is_compound(item: dict[str, Any]) -> bool:

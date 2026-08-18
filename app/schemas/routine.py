@@ -50,6 +50,11 @@ class ExerciseDto(BaseModel):
     #: ExerciseDB 원본 id. 이미지로 되짚을 수 있고 "지어낸 운동이 아님"의 근거다.
     exercise_ref: str | None = None
     image_url: str | None = None
+    #: 시연 영상(mp4). 있으면 이미지 대신 재생하면 된다 — 자세를 훨씬 잘 전달한다.
+    #: ⚠️ 저장값이 아니라 **조회 시 카탈로그에서 붙인다**(routine_repo.list_days).
+    #:    그래서 영상 도입(2026-08-17) 전에 만들어진 루틴에도 그대로 나온다.
+    #: ⚠️ null 일 수 있다 — 그때는 image_url 로 폴백할 것.
+    video_url: str | None = None
     exercise_kind: str = "STRENGTH"
     muscle_group: str | None = None
 

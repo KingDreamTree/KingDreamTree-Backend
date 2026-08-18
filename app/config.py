@@ -163,6 +163,16 @@ class Settings(BaseSettings):
     job_stale_after_sec: int = 900  # 15분
     #: 회수 검사 주기. 매 폴링마다 돌리면 쓸데없는 쿼리가 쌓인다.
     job_reclaim_interval_sec: int = 60
+    #: **아무도 안 집어가는 잡**으로 볼 시간 (프론트 안내용 힌트, 2026-08-17).
+    #  ⚠️ 회수(reclaim)와 무관하다. 회수는 워커가 실행하는 것이라 **워커가 아예
+    #     없으면 영영 안 돈다** — PENDING 인 잡은 시도 0회로 무한정 남는다.
+    #     실제로 GPU 워커가 꺼진 채 세그 잡이 쌓여 사용자가 로딩 화면에 갇혔다.
+    #     그 상태를 서버가 알려줘야 프론트가 "조금만 더" 대신 "처리가 지연되고
+    #     있어요 + 다시 시도"를 낼 수 있다.
+    #  ⚠️ 30초인 이유 — 살아 있는 워커는 1초마다 큐를 보므로 즉시 집는다.
+    #     30초를 넘겼다면 "큐에서 순서를 기다리는 중"이거나 "워커가 없는 것"인데,
+    #     둘은 같은 kind 의 PROCESSING 잡이 있는지로 가른다 (queue.is_stalled).
+    job_stall_hint_after_sec: int = 30
     # ⚠️ SEG_WORKER_CONCURRENCY / VLM_WORKER_CONCURRENCY 는 2026-08-14 에 지웠다.
     #    각각 이유가 다르다.
     #    - VLM: 부위별 병렬 호출을 폐기하고 전 부위를 한 번에 진단하게 바뀌면서

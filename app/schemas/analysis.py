@@ -53,6 +53,11 @@ class AnalysisProgressResponse(BaseModel):
     part: PartProgress
     overall: OverallProgress
     completed: bool
+    #: 진단 잡을 **아무도 집어가지 않고 있다** (워커가 꺼져 있을 때).
+    #  ⚠️ completed 와 독립이다. completed=false 인 채로 영원히 머무는 상태를
+    #     프론트가 "느린 것"과 구분할 수 있게 하는 힌트다 — 회수는 워커가
+    #     실행하는 코드라 워커가 없으면 이 잡은 저절로 FAILED 가 되지 않는다.
+    stalled: bool = False
 
 
 # ── F09 — 결과 조회 ──────────────────────────────────────────────────────────

@@ -170,6 +170,12 @@ async def analysis_progress(session: OwnedSession) -> AnalysisProgressResponse:
         part_status == JobStatus.FAILED
     )
 
+    # ⚠️ 아직 안 끝난 쪽만 본다. 끝난 잡은 정의상 정지 상태가 아니다.
+    stalled = any(
+        job is not None and queue.is_stalled(job)
+        for job in (part_job, overall_job)
+    )
+
     return AnalysisProgressResponse(
         part=PartProgress(
             done=counts["done"],
@@ -181,6 +187,7 @@ async def analysis_progress(session: OwnedSession) -> AnalysisProgressResponse:
         ),
         overall=OverallProgress(status=overall_status),
         completed=completed,
+        stalled=stalled,
     )
 
 

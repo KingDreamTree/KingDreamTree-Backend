@@ -64,6 +64,60 @@ def is_stale(job: dict[str, Any], older_than_sec: int | None = None) -> bool:
     return (datetime.now(timezone.utc) - at).total_seconds() > limit
 
 
+def is_stalled(job: dict[str, Any]) -> bool:
+    """**아무도 안 집어가는 잡**인가 — 프론트 안내 문구를 가르는 힌트.
+
+    ⚠️ is_stale() 과 다르다. 저쪽은 "워커가 잡을 쥔 채 죽었나"(PROCESSING)이고,
+       이쪽은 "워커가 아예 없나"(PENDING)다. **후자는 회수가 못 살린다** —
+       회수는 워커가 실행하는 코드라서, 워커가 없으면 그 코드도 안 돈다.
+       실제로 GPU 워커가 꺼진 채 세그 잡이 시도 0회로 쌓여, 사용자가 로딩
+       화면에 무한정 갇혔다 (2026-08-17).
+
+    판정:
+      PROCESSING + 오래됨   → True  (죽은 워커. 회수 대상이지만 그때까진 멈춰 있다)
+      PENDING + 오래됨      → 같은 kind 를 지금 처리 중인 잡이 **하나도 없을 때만** True
+
+    ⚠️ 두 번째 조건이 핵심이다. 워커는 한 번에 하나씩 처리하므로, 앞 잡이 도는
+       동안 뒤 잡은 정상적으로 PENDING 이다 (세그는 레퍼런스→사용자 두 건이
+       연달아 들어온다). 그걸 "워커 없음"으로 부르면 멀쩡한 대기를 장애로
+       보고하게 된다. 같은 kind 가 하나라도 PROCESSING 이면 워커는 살아 있다.
+
+    ⚠️ 세션을 가리지 않고 본다 — 워커는 모든 세션의 잡을 처리하므로, 남의
+       세션 잡이 돌고 있어도 "워커가 살아 있다"는 증거가 된다.
+    """
+    status = job.get("status")
+    if status == JobStatus.PROCESSING:
+        return is_stale(job)
+    if status != JobStatus.PENDING:
+        return False
+
+    created = job.get("created_at")
+    if not created:
+        return False
+    try:
+        at = datetime.fromisoformat(str(created).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    waited = (datetime.now(timezone.utc) - at).total_seconds()
+    if waited <= settings.job_stall_hint_after_sec:
+        return False
+
+    # 같은 kind 를 처리 중인 워커가 있나 — 있으면 순서를 기다리는 중일 뿐이다.
+    running = (
+        get_client()
+        .table("job")
+        .select("job_id")
+        .eq("kind", str(job["kind"]))
+        .eq("status", str(JobStatus.PROCESSING))
+        .limit(1)
+        .execute()
+        .data
+    )
+    return not running
+
+
 def find_open(
     session_id: UUID,
     kind: JobKind,

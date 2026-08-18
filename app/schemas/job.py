@@ -26,6 +26,14 @@ class JobResponse(BaseModel):
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
+    stalled: bool = Field(
+        default=False,
+        description=(
+            "아무도 이 잡을 집어가지 않고 있다 (워커가 꺼져 있을 때). "
+            "true 면 '조금만 더 기다려주세요'가 아니라 '처리가 지연되고 있어요 "
+            "+ 다시 시도'로 안내해야 한다. 회수가 못 살리는 상태다."
+        ),
+    )
 
 
 class JobSummary(BaseModel):

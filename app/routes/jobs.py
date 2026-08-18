@@ -36,7 +36,7 @@ async def get_job(user_id: UserId, job_id: Annotated[UUID, Path()]) -> JobRespon
     if session is None or str(session["user_id"]) != str(user_id):
         raise not_found("작업")
 
-    return JobResponse(**job)
+    return JobResponse(**job, stalled=queue.is_stalled(job))
 
 
 @router.get(

@@ -162,7 +162,14 @@ def _spread_one(
 
     # ── 구조 제약 (2026-08-17, 프론트 재현 리포트) ──────────────────────────
     # ② 흡수량 상한 — 클래스별 씨앗 픽셀 수 × ABSORB_CAP_RATIO
-    seed_values, seed_counts = np.unique(filled[filled > 0], return_counts=True)
+    #
+    # ⚠️ 씨앗 수는 **원본 전체**에서 센다. crop(옷 bbox+1px) 안에서 세면 안 된다 —
+    #    실측 사고(2026-08-18): 반바지 bbox 안에 보이는 허벅지 살은 250~350px 뿐인데
+    #    실제 허벅지 노출은 4,000px 이 넘는다. crop 기준이면 상한이 20배가 아니라
+    #    1.2배로 걸려, 옛날 26,237px 흡수하던 허벅지가 4,974px 만 먹었다.
+    #    **병합으로 살리려던 바로 그 케이스(옷에 많이 가린 부위)가 가장 심하게 깎인다** —
+    #    가릴수록 crop 안 씨앗이 작아지기 때문이다. 정확히 반대로 동작했다.
+    seed_values, seed_counts = np.unique(labels[np.isin(labels, list(target_values))], return_counts=True)
     cap = {int(v): int(c) * ABSORB_CAP_RATIO for v, c in zip(seed_values, seed_counts)}
     absorbed_by = {int(v): 0 for v in seed_values}
 
@@ -175,8 +182,14 @@ def _spread_one(
         rv = value_of.get(f"Right_{suffix}")
         if lv is None or rv is None or lv not in cap or rv not in cap:
             continue
-        lx = float(np.nonzero(filled == lv)[1].mean())
-        rx = float(np.nonzero(filled == rv)[1].mean())
+        # ⚠️ 무게중심은 **원본 전체**에서 잡는다. crop 안 씨앗으로 잡으면
+        #    옷 bbox 밖에 있는 다리 대부분이 빠져 중심이 옷 쪽으로 끌려가고,
+        #    crop 에 씨앗이 하나도 없으면 빈 평균(NaN)이 나온다.
+        lxs = np.nonzero(labels == lv)[1]
+        rxs = np.nonzero(labels == rv)[1]
+        if lxs.size == 0 or rxs.size == 0:
+            continue
+        lx, rx = float(lxs.mean()) - x0, float(rxs.mean()) - x0
         if lx == rx:
             continue  # 같은 열에 겹침 — 벽을 세울 근거가 없다
         wall = (lx + rx) / 2

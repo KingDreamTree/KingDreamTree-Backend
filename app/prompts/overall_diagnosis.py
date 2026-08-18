@@ -547,6 +547,11 @@ def _inbody_block(inbody: dict[str, Any] | None) -> str:
     return "\n".join(lines) if lines else "인바디 수치 없음"
 
 
+#: 부위 비중 표의 그룹 전체. ⚠️ handlers/vlm.py `_SHARE_GROUPS` 의 키와 같아야 한다 —
+#: 표에 빠진 그룹을 찾아 "언급 금지"를 걸기 위한 기준 목록이다.
+_SHARE_GROUP_LABELS = ("몸통", "팔", "하체")
+
+
 def build_overall_prompt(
     parts: list[dict[str, Any]],
     blocked: list[dict[str, Any]],
@@ -663,6 +668,23 @@ def build_overall_prompt(
                 "🔴 silhouette·key_differences 는 **이 수치와 같은 방향**이어야 합니다.",
                 "   숫자가 «현재가 더 큼» 이라고 말하는 부위를 «작다»고 쓰면 안 됩니다.",
                 "",
+                # ⚠️ 표에 없는 그룹 = 그쪽 부위가 비교 대상에 하나도 못 들었다는 뜻.
+                #    실측(2026-08-18) — 다리 4부위가 전부 미검출(프레임 잘림)인 세션에서
+                #    모델이 사진에 조금 보이는 잘린 다리를 근거로 "상체 대비 하체
+                #    볼륨이 눈에 띄게 적습니다"를 summary·key_differences·프로필에
+                #    걸쳐 썼다. 잘린 부위는 작아 «보이는» 것이지 작은 게 아니다.
+                *(
+                    [
+                        f"🔴 위 표에 없는 그룹({', '.join(g for g in _SHARE_GROUP_LABELS if g not in shares)})은",
+                        "   그쪽 부위가 비교 대상에 하나도 들지 못했다는 뜻입니다 (사진에서 잘렸거나",
+                        "   검출되지 않음). 사진에 일부가 보여도 프레임에 잘린 모습이라 크기·비중을",
+                        "   판단할 수 없습니다. silhouette · key_differences · summary · 프로필",
+                        "   어디에서도 그 그룹의 크기·비중·볼륨을 언급하지 마세요.",
+                        "",
+                    ]
+                    if any(g not in shares for g in _SHARE_GROUP_LABELS)
+                    else []
+                ),
             ]
             if shares
             else []

@@ -39,7 +39,9 @@ VLM_MODEL = "gpt-4o"
 
 #: 부위 수만큼 항목이 나와야 하므로 넉넉히. 9부위 × 항목당 ~150토큰 + 여유.
 PART_MAX_TOKENS = 4096
-OVERALL_MAX_TOKENS = 1024
+#: ⚠️ 2026-08-17 상향 — 프로필 A·B·방향·전략·다음사이클이 추가돼 1024 로는 잘린다.
+#:    잘리면 JSON 이 깨져 종합 진단이 통째로 실패한다 (부분 저장이 없다).
+OVERALL_MAX_TOKENS = 2048
 
 
 class VlmResponseError(RuntimeError):
@@ -106,6 +108,17 @@ def _mock_overall(parts: list[dict[str, Any]]) -> dict[str, Any]:
             "어깨 폭 대비 허리가 넓어 전체 윤곽이 다르게 보입니다 (mock)",
         ],
         "confidence": 0.8,
+        "user_profile": {
+            "summary": "상체보다 하체 쪽 실루엣이 상대적으로 강조되어 보입니다. (mock)",
+            "characteristics": ["어깨 대비 허리 폭 차이가 크지 않음", "하체 외곽선이 뚜렷함"],
+        },
+        "reference_profile": {
+            "summary": "어깨에서 허리로 내려오는 폭 변화가 뚜렷하게 관찰됩니다. (mock)",
+            "characteristics": ["상체 폭이 상대적으로 강조됨", "허리 라인이 뚜렷함"],
+        },
+        "direction_summary": "약점 부위의 근력 강화를 우선하는 방향입니다. (mock)",
+        "strategy_focus": ["상체 볼륨을 만드는 데 무게를 싣습니다 (mock)"],
+        "next_cycle": "4주 뒤 인바디를 다시 재면 방향을 새로 판정합니다. (mock)",
         "raw_response": {"mock": True},
     }
 
@@ -528,6 +541,22 @@ def _confidence_ratio(value: Any) -> float | None:
     return round(ratio, 2)
 
 
+def _profile(value: Any) -> dict[str, Any] | None:
+    """{summary, characteristics[]} 한 덩어리. 못 읽으면 None.
+
+    ⚠️ characteristics 는 3개로 자른다 — 프롬프트도 2~3개로 지시하지만 지시는
+       어겨질 수 있고, 길어지면 «비교문»이 섞여 들어온다(이 필드의 실패 형태).
+    """
+    if not isinstance(value, dict):
+        return None
+    summary = value.get("summary")
+    summary = summary.strip() if isinstance(summary, str) and summary.strip() else None
+    items = _as_str_list(value.get("characteristics"))[:3]
+    if summary is None and not items:
+        return None
+    return {"summary": summary, "characteristics": items}
+
+
 def parse_overall_response(parsed: dict[str, Any]) -> dict[str, Any]:
     """종합 진단 응답 검증 — **설명 문장만** 받는다.
 
@@ -551,6 +580,24 @@ def parse_overall_response(parsed: dict[str, Any]) -> dict[str, Any]:
         #    화면 요약 상자가 고정 폭이라 길이도 함께 눌러야 한다.
         "key_differences": _as_str_list(parsed.get("key_differences"))[:2],
         "confidence": _confidence_ratio(parsed.get("confidence")),
+        # ── 전체 프로필 A·B (2026-08-17) ──
+        "user_profile": _profile(parsed.get("user_profile")),
+        "reference_profile": _profile(parsed.get("reference_profile")),
+        # ── 방향·전략은 **설명 문장만** 받는다 ──
+        # ⚠️ priority·mode 는 파싱하지 않는다. 규칙(scoring.decide_direction /
+        #    routine_mode.decide_mode)이 정하고 호출자가 저장한다. LLM 이
+        #    보내와도 버린다 — 점수·우선순위와 같은 원칙이다.
+        "direction_summary": (
+            parsed["direction_summary"].strip()
+            if isinstance(parsed.get("direction_summary"), str) and parsed["direction_summary"].strip()
+            else None
+        ),
+        "strategy_focus": _as_str_list(parsed.get("strategy_focus"))[:2],
+        "next_cycle": (
+            parsed["next_cycle"].strip()
+            if isinstance(parsed.get("next_cycle"), str) and parsed["next_cycle"].strip()
+            else None
+        ),
     }
 
 
@@ -617,6 +664,8 @@ async def diagnose_overall(
     reference_photo: bytes | None = None,
     user_photo: bytes | None = None,
     priority_parts: list[str] | None = None,
+    direction: dict[str, Any] | None = None,
+    cut_notice: str | None = None,
 ) -> dict[str, Any]:
     """F09 — 원본 두 장을 직접 보고 종합한다.
 
@@ -658,6 +707,8 @@ async def diagnose_overall(
         excluded=excluded,
         has_images=has_images,
         priority_parts=priority_parts,
+        direction=direction,
+        cut_notice=cut_notice,
     )
 
     # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).

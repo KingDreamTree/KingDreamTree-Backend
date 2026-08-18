@@ -134,3 +134,96 @@ def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str
     picked = ordered[:limit]
     detail = " · ".join(f"{p['class_name']}({_GAP_KO[p['gap_level']]})" for p in picked)
     return [p["class_name"] for p in picked], f"격차가 큰 순으로 규칙 선정 — {detail}"
+
+
+#: 현실적 개선 방향 — **규칙이 정한다.** LLM 은 이 결정을 설명만 한다.
+#:
+#: ⚠️ 값이 곧 화면 문구가 아니다. 문구는 LLM 이 쓰고, 이 값은 "무엇을 근거로
+#:    그렇게 썼는가"를 남기는 기록이자 LLM 이 벗어나면 안 되는 울타리다.
+DIRECTION_FAT_LOSS = "FAT_LOSS_FIRST"
+DIRECTION_STRENGTH = "STRENGTH_FIRST"
+DIRECTION_MAINTAIN = "MAINTAIN"
+DIRECTION_LIMITED = "LIMITED"
+
+
+def decide_direction(
+    mode_info: dict[str, Any],
+    parts: list[dict[str, Any]],
+    blocked_count: int = 0,
+) -> dict[str, Any]:
+    """개선 방향을 결정한다. **결정론적** — 같은 입력이면 항상 같은 결과.
+
+    왜 코드가 정하는가
+        "감량이 먼저인가 근력이 먼저인가"는 체성분 판단이다. 사진으로 할 수 없고,
+        LLM 이 하면 근거가 그 문장뿐이다. 이미 체지방률로 CUT/BALANCE 를 판정하는
+        규칙(routine_mode.decide_mode)이 있으므로 그 결과를 그대로 승계한다.
+        여기서 새 기준을 만들지 않는다 — 루틴이 쓰는 모드와 어긋나면 안 된다.
+
+    Args:
+        mode_info: routine_mode.decide_mode() 반환값 (mode / basis / value / reason)
+        parts:     판단된 부위 진단 (gap_level 이 있는 것)
+        blocked_count: 판단 불가로 끝난 부위 수
+
+    Returns:
+        {"priority", "reason", "mode", "mode_basis", "mode_reason"}
+        priority 는 위 DIRECTION_* 중 하나.
+    """
+    mode = str(mode_info.get("mode") or "BALANCE")
+    basis = str(mode_info.get("basis") or "NO_INBODY")
+    judged = [p for p in parts if p.get("gap_level") in _GAP_ORDINAL]
+
+    common = {
+        "mode": mode,
+        "mode_basis": basis,
+        "mode_reason": mode_info.get("reason"),
+    }
+
+    # ⚠️ 판단 불가가 판단된 부위보다 많으면 방향을 말할 근거가 부족하다.
+    #    이때 "근력 강화 우선"이라고 쓰면 못 본 몸에 대한 처방이 된다.
+    if judged and blocked_count > len(judged):
+        return {
+            **common,
+            "priority": DIRECTION_LIMITED,
+            "reason": (
+                f"판단된 부위 {len(judged)}개보다 확인하지 못한 부위 {blocked_count}개가 많아 "
+                "이번 사진만으로는 방향 판단이 제한적입니다."
+            ),
+        }
+    if not judged:
+        return {
+            **common,
+            "priority": DIRECTION_LIMITED,
+            "reason": "판단된 부위가 없어 방향을 정할 수 없습니다.",
+        }
+
+    # 체지방률 기준 감량 판정은 이미 끝났다 — 그대로 승계한다.
+    if mode == "CUT":
+        return {
+            **common,
+            "priority": DIRECTION_FAT_LOSS,
+            "reason": (
+                f"체지방률 기준({basis})으로 감량 병행이 유리한 상태라, "
+                "체지방 관리를 우선하면서 근력을 유지하는 방향입니다."
+            ),
+        }
+
+    # BALANCE — 격차 분포로 갈린다.
+    worst = max(_GAP_ORDINAL[p["gap_level"]] for p in judged)
+    if worst >= _GAP_ORDINAL["MODERATE"]:
+        note = "" if basis != "NO_INBODY" else " (인바디가 없어 감량 여부는 판단하지 않았습니다)"
+        return {
+            **common,
+            "priority": DIRECTION_STRENGTH,
+            "reason": (
+                "감량이 급한 상태가 아니고 목표와의 격차가 뚜렷한 부위가 있어, "
+                f"약점 부위의 근력 강화를 우선하는 방향입니다.{note}"
+            ),
+        }
+    return {
+        **common,
+        "priority": DIRECTION_MAINTAIN,
+        "reason": (
+            "감량이 급하지 않고 모든 부위의 격차가 크지 않아, "
+            "현재 균형을 유지하며 전신을 고르게 이어가는 방향입니다."
+        ),
+    }

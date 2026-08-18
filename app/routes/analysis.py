@@ -223,6 +223,10 @@ async def get_analysis(session: OwnedSession) -> AnalysisResponse:
                 key_differences=_overall_extra(overall_row, "key_differences") or [],
                 confidence=_overall_extra(overall_row, "confidence"),
                 comparison_limitations=_overall_extra(overall_row, "comparison_limitations") or [],
+                user_profile=_overall_extra(overall_row, "user_profile"),
+                reference_profile=_overall_extra(overall_row, "reference_profile"),
+                realistic_direction=_overall_extra(overall_row, "realistic_direction"),
+                exercise_strategy=_overall_extra(overall_row, "exercise_strategy"),
                 status=overall_row["status"],
             )
             if overall_row

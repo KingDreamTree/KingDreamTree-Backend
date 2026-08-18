@@ -36,11 +36,13 @@ from app.services import (
     diagnosis_repo,
     inbody_repo,
     part_pairing,
+    routine_mode,
     scoring,
     segmap,
     storage,
     vlm,
 )
+from app.services.routine_templates import CUT_NOTICE
 from app.worker import queue
 from app.worker.registry import register
 
@@ -447,6 +449,24 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     #    심사에서 "왜 이 부위는 비교를 못 했나"에 데이터로 답하기 위한 필드다.
     limitations = _comparison_limitations(rows, session_id)
 
+    # ── 개선 방향도 **규칙이 정한다** (2026-08-17) ────────────────────────────
+    # ⚠️ decide_mode 는 인바디만 받는 순수 함수이고 "같은 인바디면 항상 같은 결과"라고
+    #    docstring 이 보증한다. ROUTINE_GEN 이 나중에 다시 호출해도 같은 값이 나오므로
+    #    루틴 로직은 건드리지 않는다 — 여기서는 **설명에 쓸 근거**를 미리 얻는 것뿐이다.
+    # ⚠️ "감량이 먼저인가 근력이 먼저인가"는 체성분 판단이라 사진으로 할 수 없다.
+    #    이미 체지방률로 판정하는 규칙이 있으므로 그 결과를 승계한다.
+    mode_info = routine_mode.decide_mode(inbody)
+    direction = scoring.decide_direction(
+        mode_info, overall_input, blocked_count=len(rows) - len(done)
+    )
+    cut_notice = CUT_NOTICE if str(mode_info.get("mode")) == "CUT" else None
+    log.info(
+        "개선 방향(규칙): %s · 모드 %s(%s)",
+        direction["priority"],
+        direction["mode"],
+        direction["mode_basis"],
+    )
+
     result = asyncio.run(
         vlm.diagnose_overall(
             results=overall_input,
@@ -458,6 +478,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             reference_photo=ref_photo,
             user_photo=user_photo,
             priority_parts=priority_parts,
+            direction=direction,
+            cut_notice=cut_notice,
         )
     )
 
@@ -488,6 +510,22 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
                 "key_differences": result.get("key_differences") or [],
                 "confidence": result.get("confidence"),
                 "comparison_limitations": limitations,
+                # ── 전체 프로필 · 방향 · 전략 (2026-08-17) ──
+                # ⚠️ priority·mode·mode_reason 은 **규칙 값**이다. LLM 이 보낸 게 아니다.
+                "user_profile": result.get("user_profile"),
+                "reference_profile": result.get("reference_profile"),
+                "realistic_direction": {
+                    "priority": direction["priority"],
+                    "reason": direction["reason"],
+                    "summary": result.get("direction_summary"),
+                },
+                "exercise_strategy": {
+                    "mode": direction["mode"],
+                    "mode_basis": direction["mode_basis"],
+                    "mode_reason": direction["mode_reason"],
+                    "focus": result.get("strategy_focus") or [],
+                    "next_cycle": result.get("next_cycle"),
+                },
             },
             "status": str(DomainStatus.DONE),
         },
@@ -500,6 +538,8 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         "inbody": inbody_source,
         # 잡 결과에 남겨 "이번 종합이 사진을 봤는가"를 나중에 되짚을 수 있게 한다.
         "photos": "2" if ref_photo and user_photo else "0",
+        "direction": direction["priority"],
+        "mode": direction["mode"],
         "confidence": result.get("confidence"),
     }
 

@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.prompts.overall_diagnosis import build_overall_prompt  # noqa: E402
 from app.schemas.analysis import OverallDiagnosisDto  # noqa: E402
-from app.services.scoring import rank_priority  # noqa: E402
+from app.services.scoring import decide_direction, rank_priority  # noqa: E402
 from app.services.vlm import parse_overall_response  # noqa: E402
 
 FAILED = 0
@@ -137,6 +137,56 @@ def main() -> int:
     dto2 = OverallDiagnosisDto(status="DONE")
     check("기본값은 빈 배열", dto2.comparison_limitations == [])
     check("응답에 키가 있다", "comparison_limitations" in dto2.model_dump())
+
+    # ── 9. 개선 방향도 규칙이 정한다 ─────────────────────────────────────
+    print("\n9. 개선 방향 — 체지방 판정은 인바디에서, LLM 은 설명만")
+    CUT = {"mode": "CUT", "basis": "BODY_FAT_MEASURED", "reason": "체지방률 27%…"}
+    BAL = {"mode": "BALANCE", "basis": "BODY_FAT_MEASURED", "reason": "체지방률 18%…"}
+    NOI = {"mode": "BALANCE", "basis": "NO_INBODY", "reason": "인바디가 없어…"}
+    big = [{"class_name": "a", "gap_level": "SIGNIFICANT"}]
+    small = [{"class_name": "a", "gap_level": "SLIGHT"}]
+    for label, mi, parts_, blocked, want in [
+        ("CUT → 감량 우선", CUT, big, 0, "FAT_LOSS_FIRST"),
+        ("BALANCE+큰격차 → 근력", BAL, big, 0, "STRENGTH_FIRST"),
+        ("BALANCE+작은격차 → 유지", BAL, small, 0, "MAINTAIN"),
+        ("판단불가 과반 → 제한", BAL, small, 5, "LIMITED"),
+        ("판단 0 → 제한", BAL, [], 3, "LIMITED"),
+    ]:
+        got = decide_direction(mi, parts_, blocked)
+        check(label, got["priority"] == want, f"{got['priority']}")
+    noi = decide_direction(NOI, big, 0)
+    check("인바디 없으면 감량 판단 안 함을 근거에 남긴다", "인바디가 없어" in noi["reason"], noi["reason"][:40])
+    check("모드 근거(basis)를 그대로 승계", noi["mode_basis"] == "NO_INBODY")
+    check("같은 입력 → 같은 출력", decide_direction(CUT, big, 0) == decide_direction(CUT, big, 0))
+
+    # ── 10. 프로필·전략 파싱 + 단계 발명 금지 ────────────────────────────
+    print("\n10. 프로필·전략 — LLM 은 문장만, 판정은 안 보낸다")
+    out2 = parse_overall_response({
+        "user_profile": {"summary": " 하체 강조 ", "characteristics": ["a", "b", "c", "d"]},
+        "reference_profile": {"summary": "상체 강조", "characteristics": ["x"]},
+        "direction_summary": " 근력 우선 ",
+        "strategy_focus": ["상체 볼륨", "코어", "여분"],
+        "next_cycle": "4주 뒤 재측정",
+        "priority": "FAT_LOSS_FIRST",   # ← LLM 이 판정을 보내와도
+        "mode": "CUT",                   # ← 버려야 한다
+    })
+    check("user_profile 공백 제거", out2["user_profile"]["summary"] == "하체 강조")
+    check("characteristics 3개 상한", len(out2["user_profile"]["characteristics"]) == 3)
+    check("strategy_focus 2개 상한", len(out2["strategy_focus"]) == 2)
+    check("direction_summary 공백 제거", out2["direction_summary"] == "근력 우선")
+    check("LLM 의 priority 는 버린다", "priority" not in out2, str(sorted(out2)))
+    check("LLM 의 mode 는 버린다", "mode" not in out2, str(sorted(out2)))
+    check("프로필 없으면 None", parse_overall_response({})["user_profile"] is None)
+
+    sysp = __import__("app.prompts.overall_diagnosis", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
+    for label, needle in [
+        ("골격 확정 금지", "골격 구조"),
+        ("레퍼런스 도달 보장 금지", "도달 보장 대상"),
+        ("단계 발명 금지", "로드맵을 만들지 마세요"),
+        ("프로필은 비교문이 아님", "비교문이 아닙니다"),
+        ("방향은 새로 정하지 않음", "방향을 새로 정하지 마세요"),
+    ]:
+        check(label, needle in sysp)
 
     print("\n" + ("[O] 전부 통과" if not FAILED else f"[X] {FAILED}건 실패"))
     return 1 if FAILED else 0

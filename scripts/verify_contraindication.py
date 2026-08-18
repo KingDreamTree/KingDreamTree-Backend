@@ -20,7 +20,12 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 from app.services import contraindication  # noqa: E402
-from app.services.contraindication import JOINT_GROUPS, affected_groups, enforce  # noqa: E402
+from app.services.contraindication import (  # noqa: E402
+    PART_GROUPS,
+    affected_groups,
+    enforce,
+    normalize_part,
+)
 from app.services.exercise_catalog import SLOT_BODY_PARTS  # noqa: E402
 
 _failures: list[str] = []
@@ -62,7 +67,9 @@ def rule_mapping_names_are_real() -> None:
     """근육군 이름 오타는 조용히 아무것도 매칭하지 않는다 — 가장 위험한 실패."""
     print("\n[근육군 이름 정합]")
     known = set(SLOT_BODY_PARTS)
-    for joint, groups in JOINT_GROUPS.items():
+    # ⚠️ JOINT_GROUPS 만 보면 안 된다 — 근육 매핑이 2026-08-18 에 생겼고
+    #    실제 조회 대상은 통합표(PART_GROUPS)다.
+    for joint, groups in PART_GROUPS.items():
         unknown = groups - known
         check(f"{joint} 매핑이 실제 근육군만 참조", not unknown, str(unknown) if unknown else "")
 
@@ -201,9 +208,31 @@ def rule_interpretation_reflects_applied() -> None:
     )
 
 
+def rule_muscle_pain_is_applied() -> None:
+    """근육 이름으로 온 통증이 루틴에 반영되는가.
+
+    ⚠️ 회귀 방지 (2026-08-18 실사용 버그) — "가슴이 아프다"를 LLM 은 정상 등록했는데
+       JOINT_GROUPS 에 관절 이름만 있어 normalize_part 가 None 을 돌려줬고, 금기가
+       **조용히 버려져** 다음 날 루틴에 가슴 운동이 그대로 남았다.
+    """
+    print()
+    print("[근육 이름 통증 — 조용히 버려지지 않는가]")
+    for text in ("가슴", "가슴이 아파요", "대흉근", "이두", "등", "종아리", "허벅지", "복근"):
+        check(f"{text!r} 매핑됨", normalize_part(text) is not None, "None = 버려짐")
+
+    days, enforced = enforce(_days(), [{"body_part": "가슴", "severity": "BLOCK"}], [])
+    names = {e["name"] for d in days for e in d["exercises"]}
+    check("가슴 BLOCK → 벤치프레스 제거", "벤치프레스" not in names)
+    check("무관한 하체는 유지", "바벨 스쿼트" in names)
+    check("강제 기록 남김", len(enforced) >= 1, f"{len(enforced)}건")
+    # 별칭이 엉뚱한 근육군을 막지 않는가 — "발등"은 "등"을 포함한다.
+    check("'발등' 이 등(광배)으로 새지 않음", normalize_part("발등") == "발목")
+
+
 def main() -> int:
     print("금기 강제 검증")
     rule_mapping_names_are_real()
+    rule_muscle_pain_is_applied()
     rule_warn_reduces_volume()
     rule_block_removes()
     rule_never_empties_a_day()

@@ -62,6 +62,34 @@ JOINT_GROUPS: dict[str, frozenset[str]] = {
     "목": frozenset({"어깨", "후면 어깨", "등"}),
 }
 
+#: 근육 이름 → 제한할 근육군.
+#:
+#: ⚠️ **2026-08-18 추가 — 이게 없어서 근육 통증이 통째로 무시되고 있었다.**
+#:    실사용 사례: "가슴이 아프다" → LLM 은 flag_contraindication(body_part="가슴")
+#:    을 정상 호출했는데, JOINT_GROUPS 에는 관절 이름(무릎·어깨·허리…)만 있어
+#:    normalize_part("가슴") 이 None 을 돌려주고 **조용히 버려졌다.** 다음 날
+#:    루틴에 가슴 운동이 그대로 남았다 — 이 모듈이 막으려던 바로 그 누수다.
+#:
+#: ⚠️ 관절과 달리 **그 근육군만** 제한한다. 관절은 여러 근육군이 함께 부하를
+#:    받으므로 넓게 잡지만(JOINT_GROUPS 주석), 근육통은 그 근육이 원인이라
+#:    넓히면 "빈 Day 를 만들지 않는다" 규칙과 충돌할 만큼 과하게 깎인다.
+#:    예외는 허벅지처럼 앞뒤를 구분하지 않고 말하는 부위뿐이다.
+MUSCLE_GROUPS: dict[str, frozenset[str]] = {
+    "가슴": frozenset({"가슴"}),
+    "등": frozenset({"등"}),
+    "삼두": frozenset({"삼두"}),
+    "이두": frozenset({"이두"}),
+    "대퇴사두": frozenset({"대퇴사두"}),
+    "햄스트링·둔근": frozenset({"햄스트링·둔근"}),
+    "종아리": frozenset({"종아리"}),
+    "코어": frozenset({"코어"}),
+    # 앞뒤를 구분하지 않고 말하는 부위 — 어느 쪽인지 모르므로 둘 다 줄인다.
+    "허벅지": frozenset({"대퇴사두", "햄스트링·둔근"}),
+}
+
+#: 조회용 통합표. 관절이 먼저다 — 이름이 겹치면(예: "어깨") 관절의 넓은 규칙을 쓴다.
+PART_GROUPS: dict[str, frozenset[str]] = {**MUSCLE_GROUPS, **JOINT_GROUPS}
+
 #: 매핑에 없는 부위명이 왔을 때 쓸 별칭. LLM 이 자유 문자열로 주므로 흔한 변형을 흡수한다.
 _ALIASES: dict[str, str] = {
     "무릎관절": "무릎",
@@ -80,6 +108,27 @@ _ALIASES: dict[str, str] = {
     "엘보": "팔꿈치",
     "골반": "고관절",
     "엉덩관절": "고관절",
+    # ⚠️ "발등"은 "등"을 포함한다 — 별칭으로 먼저 잡지 않으면 등(광배) 운동이 막힌다.
+    "발등": "발목",
+    # 근육 별칭 (2026-08-18)
+    "대흉근": "가슴",
+    "흉근": "가슴",
+    "가슴근육": "가슴",
+    "광배근": "등",
+    "승모근": "등",
+    "등근육": "등",
+    "삼두근": "삼두",
+    "상완삼두근": "삼두",
+    "이두근": "이두",
+    "상완이두근": "이두",
+    "둔근": "햄스트링·둔근",
+    "엉덩이": "햄스트링·둔근",
+    "햄스트링": "햄스트링·둔근",
+    "허벅지앞": "대퇴사두",
+    "허벅지뒤": "햄스트링·둔근",
+    "장딴지": "종아리",
+    "복근": "코어",
+    "배": "코어",
 }
 
 _BLOCK, _WARN = "BLOCK", "WARN"
@@ -90,12 +139,14 @@ def normalize_part(body_part: str) -> str | None:
     text = (body_part or "").strip()
     if not text:
         return None
-    if text in JOINT_GROUPS:
+    if text in PART_GROUPS:
         return text
     if text in _ALIASES:
         return _ALIASES[text]
-    # "왼쪽 무릎이" 처럼 수식어가 붙은 경우 — 키를 포함하면 그것으로 본다
-    for key in JOINT_GROUPS:
+    # "왼쪽 무릎이" 처럼 수식어가 붙은 경우 — 키를 포함하면 그것으로 본다.
+    # ⚠️ **긴 키부터** 본다. "등"(1글자)이 "발등"·"허벅지" 같은 말에 먼저 걸리면
+    #    엉뚱한 근육군이 막힌다. 별칭에서 못 잡은 조합의 마지막 방어선이다.
+    for key in sorted(PART_GROUPS, key=len, reverse=True):
         if key in text:
             return key
     return None
@@ -107,12 +158,17 @@ def affected_groups(contraindications: list[dict[str, Any]]) -> dict[str, str]:
     for c in contraindications or []:
         part = normalize_part(str(c.get("body_part") or ""))
         if part is None:
-            log.info(
-                "금기 부위를 매핑하지 못했습니다: %r — 강제 적용 대상 아님", c.get("body_part")
+            # ⚠️ INFO 가 아니라 WARNING 이다. 여기로 빠지면 통증이 기록만 되고
+            #    루틴은 그대로 나간다 — 모듈 주석이 말하는 "조용히 새는" 경로다.
+            #    로그에 이게 쌓이면 PART_GROUPS/_ALIASES 에 그 이름을 추가할 것.
+            log.warning(
+                "금기 부위를 매핑하지 못해 **루틴에 반영되지 않았습니다**: %r "
+                "— PART_GROUPS 에 추가가 필요합니다",
+                c.get("body_part"),
             )
             continue
         severity = _BLOCK if str(c.get("severity")) == _BLOCK else _WARN
-        for group in JOINT_GROUPS[part]:
+        for group in PART_GROUPS[part]:
             if out.get(group) != _BLOCK:
                 out[group] = severity
     return out

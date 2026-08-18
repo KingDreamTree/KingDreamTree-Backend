@@ -362,6 +362,11 @@ def progress(
     done = count_session_logs(session_id)
     total = days_per_week * TOTAL_CYCLES
     completed = done >= total
+    # ⚠️ 분자는 세션 전체 로그인데 분모는 **현재 버전**의 일수다. 「운동 일수 조정」으로
+    #    일수를 줄이면 분모만 작아져 진행률이 100%를 넘는다 (실측: 주7일로 37회 후
+    #    주4일 변경 → 37/16 = 231%). 초과분은 "이미 다 했다" 이상의 정보가 없으므로
+    #    분모에 맞춰 자른다 — completed 판정은 자르기 전 값으로 이미 끝났다.
+    done = min(done, total)
     return {
         "completed_count": done,
         "total_count": total,

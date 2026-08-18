@@ -155,7 +155,11 @@ def main() -> int:
         got = decide_direction(mi, parts_, blocked)
         check(label, got["priority"] == want, f"{got['priority']}")
     noi = decide_direction(NOI, big, 0)
-    check("인바디 없으면 감량 판단 안 함을 근거에 남긴다", "인바디가 없어" in noi["reason"], noi["reason"][:40])
+    check(
+        "인바디 없으면 감량 판단 안 함을 근거에 남긴다",
+        "체지방 정보가 없어" in noi["reason"] and "감량이 급한 상태가 아니고" not in noi["reason"],
+        noi["reason"][:50],
+    )
     check("모드 근거(basis)를 그대로 승계", noi["mode_basis"] == "NO_INBODY")
     check("같은 입력 → 같은 출력", decide_direction(CUT, big, 0) == decide_direction(CUT, big, 0))
 

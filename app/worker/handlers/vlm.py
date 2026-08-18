@@ -387,6 +387,49 @@ def _comparison_limitations(
     return out
 
 
+#: 실루엣 서술에 쓸 묶음. 부위 9개를 그대로 주면 모델이 무엇이 큰지 못 고른다.
+_SHARE_GROUPS = {
+    "몸통": ("Torso",),
+    "팔": ("Left_Upper_Arm", "Left_Lower_Arm", "Right_Upper_Arm", "Right_Lower_Arm"),
+    "하체": ("Left_Upper_Leg", "Left_Lower_Leg", "Right_Upper_Leg", "Right_Lower_Leg"),
+}
+
+
+def _body_shares(session_id: UUID) -> dict[str, Any]:
+    """상체·하체 면적 비중을 묶어서 낸다 — **실루엣 서술의 방향을 고정하려고.**
+
+    ⚠️ 이게 없으면 모델이 방향을 뒤집는다. 실측(2026-08-18): 몸통 +13%,
+       하체 −2% 인데 "하체 비중이 더 높게 나타납니다" 라고 썼다.
+       눈으로만 보면 어느 쪽이 더 큰지 헷갈리므로 숫자로 못 박는다.
+
+    ⚠️ 분모는 «비교 대상 부위 전체»다 (segmap.compare_parts 규칙). 촬영 거리·
+       해상도가 상쇄되므로 두 사진을 그대로 견줄 수 있다.
+    """
+    context = diagnosis_repo.build_comparison_context(session_id)
+    if not context["ready"] or not context["parts"]:
+        return {}
+    names = [p["class_name"] for p in context["parts"]]
+    metrics = segmap.compare_parts(
+        context["segments"][str(PhotoKind.REFERENCE)],
+        context["segments"][str(PhotoKind.USER)],
+        names,
+        context["person_classes"],
+    )
+    rows = metrics.get("parts") or {}
+
+    out: dict[str, Any] = {}
+    for label, members in _SHARE_GROUPS.items():
+        present = [m for m in members if m in rows]
+        if not present:
+            continue
+        ref = sum(rows[m]["reference"]["area_share"] for m in present)
+        usr = sum(rows[m]["user"]["area_share"] for m in present)
+        if ref <= 0:
+            continue
+        out[label] = {"reference": ref, "user": usr, "delta": (usr - ref) / ref * 100}
+    return out
+
+
 def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
     session_id = UUID(str(job["session_id"]))
     rows = diagnosis_repo.list_part_diagnoses(session_id)
@@ -460,6 +503,7 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
         mode_info, overall_input, blocked_count=len(rows) - len(done)
     )
     cut_notice = CUT_NOTICE if str(mode_info.get("mode")) == "CUT" else None
+    shares = _body_shares(session_id)
     log.info(
         "개선 방향(규칙): %s · 모드 %s(%s)",
         direction["priority"],
@@ -480,6 +524,7 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             priority_parts=priority_parts,
             direction=direction,
             cut_notice=cut_notice,
+            shares=shares,
         )
     )
 

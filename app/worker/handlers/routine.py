@@ -337,7 +337,14 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
             {
                 "goal": row.get("goal"),
                 "focus_areas": row.get("focus_areas"),
-                "raw_response": {"source": "WORKOUT_FEEDBACK", "base_version": row["version"]},
+                "raw_response": {
+                    "source": "WORKOUT_FEEDBACK",
+                    "base_version": row["version"],
+                    # ⚠️ 승계 안 하면 화면의 «4주간 핵심 목표» 본문이 사라진다
+                    #    (2026-08-18 실측). 피드백 패치는 모드·가중 근거를 다시
+                    #    계산하지 않으므로 이전 버전 설명이 여전히 맞는 말이다.
+                    "strategy": (row.get("raw_response") or {}).get("strategy"),
+                },
                 "status": str(DomainStatus.DONE),
             },
         )

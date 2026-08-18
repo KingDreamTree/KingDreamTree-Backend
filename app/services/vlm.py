@@ -666,6 +666,7 @@ async def diagnose_overall(
     priority_parts: list[str] | None = None,
     direction: dict[str, Any] | None = None,
     cut_notice: str | None = None,
+    shares: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """F09 — 원본 두 장을 직접 보고 종합한다.
 
@@ -709,6 +710,7 @@ async def diagnose_overall(
         priority_parts=priority_parts,
         direction=direction,
         cut_notice=cut_notice,
+        shares=shares,
     )
 
     # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).

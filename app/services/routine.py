@@ -715,13 +715,15 @@ def build_strategy(
 
     body = " ".join(parts)
 
+    # 헤드라인은 화면의 «4주간 핵심 목표» 상자 제목이라 "4주"로 맞춘다.
+    # 일수(주 N일)는 바로 아래 body 문단에서 이미 말한다 — 여기서 또 쓰면 중복이다.
     headline = (
-        f"체지방을 줄이면서 근육을 지키는 주 {days_per_week}일 루틴"
+        "체지방을 줄이면서 근육을 지키는 4주 루틴"
         if mode == "CUT"
         else (
-            f"약점 부위를 보완하는 주 {days_per_week}일 균형 루틴"
+            "약점 부위를 보완하는 4주 균형 루틴"
             if boosts
-            else f"기초 체력과 균형을 만드는 주 {days_per_week}일 루틴"
+            else "기초 체력과 균형을 만드는 4주 루틴"
         )
     )
 

@@ -96,6 +96,12 @@ def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
 #: 확신도 → 서열 (같은 등급이면 확실하게 본 쪽을 앞에 둔다).
 _CONFIDENCE_ORDINAL: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 
+#: 우선순위 후보에서 제외 — 종아리·전완근은 몸에서 가장 작고 먼 분절이라
+#: 사진 각도·프레이밍 하나로 격차 판정이 쉽게 뒤집힌다(2026-08-18, 사용자 실측:
+#: "판단이 랜덤 같다"). 개선 헤드라인·루틴 볼륨 가중 대상에서 통째로 뺀다 —
+#: 부위 카드 자체(F08)는 그대로 보여주고, "이걸 우선 보강하라"는 권고만 안 한다.
+_PRIORITY_EXCLUDED = {"Left_Lower_Leg", "Right_Lower_Leg", "Left_Lower_Arm", "Right_Lower_Arm"}
+
 
 def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str], str]:
     """개선 우선순위를 **규칙으로** 정한다. LLM 이 정하지 않는다.
@@ -119,7 +125,11 @@ def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str
     Returns:
         (우선 부위 class_name 목록, 사람이 읽는 근거 문장)
     """
-    judged = [p for p in parts if p.get("gap_level") in _GAP_ORDINAL]
+    judged = [
+        p
+        for p in parts
+        if p.get("gap_level") in _GAP_ORDINAL and p.get("class_name") not in _PRIORITY_EXCLUDED
+    ]
     if not judged:
         return [], "판단된 부위가 없어 우선순위를 정할 수 없습니다."
 
@@ -208,15 +218,24 @@ def decide_direction(
         }
 
     # BALANCE — 격차 분포로 갈린다.
+    # ⚠️ "감량이 급하지 않다"는 체지방률을 실제로 봤을 때만 할 수 있는 말이다
+    #    (2026-08-18 정정). basis 가 NO_INBODY/BODY_FAT_UNAVAILABLE 이면 mode 가
+    #    BALANCE 인 건 "안 급해서"가 아니라 "몰라서 기본값을 쓴 것"이다. 예전엔
+    #    이 경우에도 "감량이 급한 상태가 아니고…"를 먼저 단정한 뒤 괄호로
+    #    "(인바디가 없어 판단하지 않았습니다)"를 덧붙였는데, 한 문장 안에서
+    #    스스로를 부정하는 모순이었다 — 안 판단했다면서 안 급하다고 단정한 것.
+    has_fat_judgment = basis in ("BODY_FAT_MEASURED", "BODY_FAT_DERIVED")
     worst = max(_GAP_ORDINAL[p["gap_level"]] for p in judged)
     if worst >= _GAP_ORDINAL["MODERATE"]:
-        note = "" if basis != "NO_INBODY" else " (인바디가 없어 감량 여부는 판단하지 않았습니다)"
         return {
             **common,
             "priority": DIRECTION_STRENGTH,
             "reason": (
                 "감량이 급한 상태가 아니고 목표와의 격차가 뚜렷한 부위가 있어, "
-                f"약점 부위의 근력 강화를 우선하는 방향입니다.{note}"
+                "약점 부위의 근력 강화를 우선하는 방향입니다."
+                if has_fat_judgment
+                else "체지방 정보가 없어 감량 여부는 판단하지 않았고, 목표와의 격차가 "
+                "뚜렷한 부위가 있어 약점 부위의 근력 강화를 우선하는 방향입니다."
             ),
         }
     return {
@@ -225,5 +244,8 @@ def decide_direction(
         "reason": (
             "감량이 급하지 않고 모든 부위의 격차가 크지 않아, "
             "현재 균형을 유지하며 전신을 고르게 이어가는 방향입니다."
+            if has_fat_judgment
+            else "체지방 정보가 없어 감량 여부는 판단하지 않았고, 모든 부위의 격차도 "
+            "크지 않아 현재 균형을 유지하며 전신을 고르게 이어가는 방향입니다."
         ),
     }

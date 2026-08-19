@@ -119,6 +119,19 @@ def _diagnosis_inputs(session_id: UUID) -> tuple[list[str], list[str]]:
     return list(priority), asymmetric
 
 
+def _session_contraindications(session_id: UUID) -> list[dict[str, Any]]:
+    """세션 누적 금기. _generate·_patch 둘 다 같은 조회를 쓴다."""
+    session = (
+        get_client()
+        .table("analysis_session")
+        .select("contraindications")
+        .eq("session_id", str(session_id))
+        .execute()
+        .data
+    )
+    return (session[0].get("contraindications") if session else None) or []
+
+
 def _generate(job: dict[str, Any]) -> dict[str, Any]:
     payload = job.get("payload") or {}
     routine_id_raw = payload.get("month_routine_id")
@@ -156,6 +169,12 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                             for r in db.list_body_parts()},
             )
         )
+        # ⚠️ 재생성도 세션 누적 금기를 강제한다 (#106). _patch 만 하고 여기를
+        #    빠뜨리면 "무릎 통증 신고 → 금기 등록 → 운동 일수 변경(재생성)"
+        #    경로에서 스쿼트가 원상복구된다 — 이 프로젝트 안전 원칙("판단은
+        #    LLM이, 보장은 코드가")이 다른 입구에서 깨지는 사례였다.
+        existing_cx = _session_contraindications(session_id)
+        plan["days"], _ = contraindication.enforce(plan["days"], existing_cx)
         routine_repo.replace_days(month_routine_id, plan["days"], days_per_week)
         routine_repo.update_routine(
             month_routine_id,
@@ -255,14 +274,7 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
     if not feedback.strip():
         return {"skipped": "피드백 없음"}
 
-    session = (
-        client.table("analysis_session")
-        .select("contraindications")
-        .eq("session_id", str(session_id))
-        .execute()
-        .data
-    )
-    existing = (session[0].get("contraindications") if session else None) or []
+    existing = _session_contraindications(session_id)
 
     days = routine_repo.list_days(month_routine_id)
     catalog = exercise_catalog.load_catalog()

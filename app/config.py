@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     bucket_body_parts: str = "body-parts"
     bucket_inbody_temp: str = "inbody-temp"
 
-    signed_url_expires_sec: int = 3600
+    #: ⚠️ 2026-08-19에 3600 → 600으로 단축 (#116). 몸 사진 서명 URL이라
+    #  유출 시 노출 창은 짧을수록 좋다. 화면 한 번 보는 데는 600초로 충분하다.
+    signed_url_expires_sec: int = 600
     signed_url_max_batch: int = 30
 
     # ------------------------------------------------------------------ #

@@ -219,7 +219,7 @@ B가 읽음 → DB SELECT + signed URL 만
 | 1 | **Sapiens2 실제 클래스명·개수** | A가 찍어보고 공유 | A seed / B 프롬프트 부위 목록 |
 | 2 | **OCR 기술** (Document AI / Vision API / OpenAI) | B | B 인바디 전체 |
 | 3 | **인바디 추출 컬럼 확정** (샘플 5~10장 필요) | 둘 다 | `inbody` 스키마 |
-| 4 | 유사도 점수 산출 (VLM 직접 / 규칙 합산) | B | `score_source` |
+| 4 | 목표 근접도 산출 (VLM 직접 / 규칙 합산) | B | `score_source` |
 | 5 | 루틴 진행 기준 (수행 횟수 / 날짜) | 둘 다 | `start_date`, `today` 계산 |
 | 6 | 루틴 생성 분할 (28일 일괄 / 7일×4) | B | `status` 전환 시점 |
 | 7 | VLM 입력 형식 (크롭 / 원본+하이라이트) | B | `bbox_*` 사용 여부 |

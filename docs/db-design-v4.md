@@ -541,7 +541,7 @@ users
 | 2 | ~~Sapiens2 실제 클래스명·개수~~ | — | ✅ **확정 — 29개.** 공식 문서(SEG.md) + 실측 교차 확인. `Eyeglass`(단수)가 2번 |
 | 3 | WIM 3D 결과지 구조 | `inbody` 컬럼 | 실물 샘플 필요 |
 | 4 | 인바디 기종별 인쇄 항목 | `inbody` NULL 여부 | 샘플 5~10장 후 확정 |
-| 5 | 유사도 점수 산출 방식 | `overall_diagnosis.score_source` | 미정 |
+| 5 | 목표 근접도 산출 방식 | `overall_diagnosis.score_source` | 미정 |
 | 6 | 루틴 진행 기준 (날짜/횟수) | `month_routine.start_date` | 미정 (권장: 수행 횟수) |
 | 7 | 루틴 생성 분할 | `month_routine.status` 전환 | 미정 |
 | 8 | ~~VLM 입력 형식~~ | — | ✅ **확정 (2026-08-13): 원본 + 하이라이트** |

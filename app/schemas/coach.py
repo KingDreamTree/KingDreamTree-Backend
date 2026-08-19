@@ -7,7 +7,32 @@
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+#: 클라이언트가 보낼 수 있는 role. "system"이 여기 없다는 게 핵심이다 —
+#: 대화가 stateless라 클라이언트가 messages 를 그대로 왕복시키는데(모듈 주석),
+#: 검증 없이 SYSTEM_PROMPT 뒤에 그대로 스플랫되면 role="system" 메시지를
+#: 끼워 넣어 코치 프롬프트를 자기 것으로 덮어쓸 수 있다 (#112).
+_ALLOWED_ROLES = {"user", "assistant", "tool"}
+
+#: 메시지 하나의 content 상한. 개수 상한(max_length=64)만으로는 메시지 하나를
+#: 아주 길게 만들어 같은 효과(토큰 낭비·프롬프트 스터핑)를 낼 수 있다.
+_MAX_CONTENT_CHARS = 2000
+
+
+def _sanitize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """화이트리스트 밖 role은 버리고, content가 길면 자른다. 통째로 거부하지
+    않는 이유 — 정상 메시지 다수에 이상한 것 하나가 섞였을 때 대화 전체를
+    막는 것보다, 그 하나만 제거하고 계속하는 편이 사용자 경험상 낫다."""
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in _ALLOWED_ROLES:
+            continue
+        content = m.get("content")
+        if isinstance(content, str) and len(content) > _MAX_CONTENT_CHARS:
+            m = {**m, "content": content[:_MAX_CONTENT_CHARS]}
+        out.append(m)
+    return out
 
 
 class CoachChatRequest(BaseModel):
@@ -18,6 +43,11 @@ class CoachChatRequest(BaseModel):
     """
 
     messages: list[dict[str, Any]] = Field(default_factory=list, max_length=64)
+
+    @field_validator("messages")
+    @classmethod
+    def _validate_messages(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _sanitize_messages(v)
 
     model_config = {
         "json_schema_extra": {
@@ -52,6 +82,11 @@ class CoachApplyRequest(BaseModel):
     """
 
     messages: list[dict[str, Any]] = Field(min_length=1, max_length=64)
+
+    @field_validator("messages")
+    @classmethod
+    def _validate_messages(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _sanitize_messages(v)
 
 
 class CoachApplyResponse(BaseModel):

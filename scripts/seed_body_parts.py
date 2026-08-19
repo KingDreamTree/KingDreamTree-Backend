@@ -55,10 +55,10 @@ BODY_PARTS: list[tuple[str, str, str, str | None, bool, str | None, int]] = [
     # ── 비교 대상 9개 — 맨살이 드러나는 부위 ────────────────────────────────
     # ⚠️ 좌/우를 비슷한 색 계열로 잡은 이유: 좌우 반전 사고를 눈으로 잡기 위해서.
     ("Torso", "몸통", "CORE", "TRUNK", True, "#4C6EF5", 1),
-    ("Left_Upper_Arm", "왼팔 상완", "UPPER", "LEFT_ARM", True, "#F76707", 2),
-    ("Left_Lower_Arm", "왼팔 전완", "UPPER", "LEFT_ARM", True, "#FFA94D", 3),
-    ("Right_Upper_Arm", "오른팔 상완", "UPPER", "RIGHT_ARM", True, "#2F9E44", 4),
-    ("Right_Lower_Arm", "오른팔 전완", "UPPER", "RIGHT_ARM", True, "#69DB7C", 5),
+    ("Left_Upper_Arm", "왼쪽 위팔", "UPPER", "LEFT_ARM", True, "#F76707", 2),
+    ("Left_Lower_Arm", "왼쪽 팔뚝", "UPPER", "LEFT_ARM", True, "#FFA94D", 3),
+    ("Right_Upper_Arm", "오른쪽 위팔", "UPPER", "RIGHT_ARM", True, "#2F9E44", 4),
+    ("Right_Lower_Arm", "오른쪽 팔뚝", "UPPER", "RIGHT_ARM", True, "#69DB7C", 5),
     ("Left_Upper_Leg", "왼쪽 허벅지", "LOWER", "LEFT_LEG", True, "#AE3EC9", 6),
     ("Left_Lower_Leg", "왼쪽 종아리", "LOWER", "LEFT_LEG", True, "#DA77F2", 7),
     ("Right_Upper_Leg", "오른쪽 허벅지", "LOWER", "RIGHT_LEG", True, "#E03131", 8),

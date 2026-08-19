@@ -21,7 +21,6 @@ SYSTEM_PROMPT = """너는 인바디(InBody) 체성분 결과지에서 수치를 
 USER_PROMPT = """이 인바디 결과지에서 아래 항목을 읽어 JSON으로 반환해줘.
 
 [헤더]
-- device_type: 우측 상단 대괄호 안 기종명 (예: "InBody570")
 - measured_at: 검사일시의 날짜만 YYYY-MM-DD
 - age: 나이
 - gender: 성별. 남성이면 "MALE", 여성이면 "FEMALE"
@@ -51,24 +50,8 @@ USER_PROMPT = """이 인바디 결과지에서 아래 항목을 읽어 JSON으�
 - segments.<부위>.fat_mass       : 괄호 안 (kg) 값
 - segments.<부위>.fat_percentage : 막대 우측 (%) 값 (예: 108.0)
 
-[체중조절]
-- weight_control.fat_control_kg    : 지방조절 (부호 포함, 예: -2.5)
-- weight_control.muscle_control_kg : 근육조절 (부호 포함, 예: +2.6)
-
-[세포외수분비분석]
-- ecw_ratio: 세포외수분비 (예: 0.375)
-
-[연구항목]
-- bmr_kcal: 기초대사량 (kcal), 정수
-- visceral_fat_level: 내장지방레벨, 정수
-- abdominal_fat_ratio: 복부지방률
-
-[인바디점수]
-- inbody_score: 100점 만점 점수, 정수
-
 반환 형식:
 {
-  "device_type": "InBody570",
   "measured_at": "2025-01-21",
   "age": 22,
   "gender": "MALE",
@@ -79,15 +62,9 @@ USER_PROMPT = """이 인바디 결과지에서 아래 항목을 읽어 JSON으�
   "body_fat_percentage": 18.9,
   "skeletal_muscle_mass": 28.8,
   "fat_free_mass": 51.5,
-  "bmr_kcal": 1482,
   "total_body_water": 37.7,
   "protein": 10.3,
   "minerals": 3.52,
-  "visceral_fat_level": 5,
-  "abdominal_fat_ratio": 0.86,
-  "ecw_ratio": 0.375,
-  "inbody_score": 75,
-  "weight_control": {"fat_control_kg": -2.5, "muscle_control_kg": 2.6},
   "segments": {
     "RIGHT_ARM": {"lean_mass": 2.74, "lean_percentage": 90.6, "fat_mass": 0.6, "fat_percentage": 108.0},
     "LEFT_ARM":  {"lean_mass": 2.72, "lean_percentage": 89.9, "fat_mass": 0.6, "fat_percentage": 112.7},

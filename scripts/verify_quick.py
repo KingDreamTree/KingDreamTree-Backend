@@ -66,6 +66,10 @@ def contract_prompt() -> None:
     check("인바디 기준선 분리", "일반인 평균" in QUICK_SYSTEM)
     check("레퍼런스 보장 금지", "도달 보장 대상" in QUICK_SYSTEM)
     check("점수 생성 금지", "점수를 만들지 마세요" in QUICK_SYSTEM)
+    # 라이브 1차(2026-08-19)에서 "레퍼런스는 근육이…"가 사용자 문장에 그대로
+    # 나왔다 — F09 의 용어 대체표를 퀵에 안 옮긴 누락. 회귀로 고정한다.
+    check("용어 대체표 (레퍼런스→목표 체형)", "| 레퍼런스 | 목표 체형 |" in QUICK_SYSTEM)
+    check("유형 분류 금지 (중간 체형 등)", "등급 딱지" in QUICK_SYSTEM)
     # 원칙 ⑥ — 완성 예문이 없어야 한다 (자석 효과). 자리표시 «» 만 허용.
     check(
         "완성 예문 없음 (자리표시만)",

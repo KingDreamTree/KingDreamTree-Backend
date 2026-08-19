@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-08-19 - 분석 파이프라인 이원화 — 웹캠 퀵 경로 (B)
+
+**무엇이**: 사진 업로드(기존, Sapiens2 유지)와 별개로 **웹캠 퀵 경로** 추가.
+MediaPipe 는 브라우저에서 촬영 가능 여부만 판단(기존 게이트 그대로), 최종
+프레임 1장만 서버로 → 세그 없이 원본 2장 + 인바디를 VLM 1회로 전체 형태 비교
+→ 같은 overall_diagnosis · 같은 루틴 경로. 설계 전문: docs/quick-pipeline.md
+
+- 업로드 form `pipeline=quick` → 세그 잡 미등록 (응답 job_id null)
+- `POST /analysis?mode=quick` → JobKind.VLM_OVERALL + payload.mode="quick"
+    (새 kind 는 job.kind DB CHECK 에 걸림 — 실측 23514, PostgREST 로 DDL 불가)
+- `prompts/quick_diagnosis.py` · `vlm.diagnose_quick`(+mock) ·
+    `handlers._diagnose_quick` · `scoring.decide_direction_quick`
+- 정직성 규칙: 부위 카드 없음 · 점수 null+사유 · priority_parts 빈 배열
+    (한 프레임 인상으로 부위 가중을 만들지 않는다 — D10) · 방향은 인바디 규칙 승계
+
+**기존 경로 불변이 최우선**: pipeline/mode 미지정 = 종전과 동일.
+verify_quick.py §3 이 회귀로 고정 (기본 업로드가 세그 잡을 등록하는지 검사).
+검증 19종 + 스모크 통과.
+
+---
+
 ## 2026-08-15 - 조용한 버그 4건 + e2e 테스트 창 + 진단 기준선 분리 (B)
 
 **잡은 버그** (전부 에러 없이 조용히 새는 종류 — 각 PR 에 재현·실측 기록):

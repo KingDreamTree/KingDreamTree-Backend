@@ -30,6 +30,8 @@ from app.prompts.overall_diagnosis import SYSTEM_PROMPT as OVERALL_SYSTEM
 from app.prompts.overall_diagnosis import build_overall_prompt
 from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SYSTEM
 from app.prompts.part_diagnosis import build_part_prompt
+from app.prompts.quick_diagnosis import SYSTEM_PROMPT as QUICK_SYSTEM
+from app.prompts.quick_diagnosis import build_quick_prompt
 from app.schemas.enums import Confidence, GapLevel
 
 log = logging.getLogger("services.vlm")
@@ -299,9 +301,25 @@ _ADVICE_ENDINGS = (
 #:    짧은 토큰("컬")은 다른 낱말에 섞이므로 넣지 않는다 — 어차피 "덤벨 컬" 형태라
 #:    "덤벨"에서 걸린다.
 _EXERCISE_NAMES = (
-    "덤벨", "바벨", "케틀벨", "플랭크", "스쿼트", "런지", "팔굽혀펴기", "푸시업",
-    "풀업", "친업", "데드리프트", "벤치프레스", "숄더프레스", "레그프레스",
-    "랫풀다운", "크런치", "레그레이즈", "레터럴 레이즈", "사이드 레이즈",
+    "덤벨",
+    "바벨",
+    "케틀벨",
+    "플랭크",
+    "스쿼트",
+    "런지",
+    "팔굽혀펴기",
+    "푸시업",
+    "풀업",
+    "친업",
+    "데드리프트",
+    "벤치프레스",
+    "숄더프레스",
+    "레그프레스",
+    "랫풀다운",
+    "크런치",
+    "레그레이즈",
+    "레터럴 레이즈",
+    "사이드 레이즈",
 )
 
 
@@ -438,6 +456,7 @@ def _coerce_part(
 
 #: 한쪽만 가리키는 말. 이게 들어있으면 반대쪽 카드에 복사할 수 없다.
 _SIDE_WORDS = ("왼", "오른", "좌측", "우측")
+
 
 def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
     """좌우 쌍의 판정·문장을 하나로 맞춘다 (제자리 수정).
@@ -589,7 +608,8 @@ def parse_overall_response(parsed: dict[str, Any]) -> dict[str, Any]:
         #    보내와도 버린다 — 점수·우선순위와 같은 원칙이다.
         "direction_summary": (
             parsed["direction_summary"].strip()
-            if isinstance(parsed.get("direction_summary"), str) and parsed["direction_summary"].strip()
+            if isinstance(parsed.get("direction_summary"), str)
+            and parsed["direction_summary"].strip()
             else None
         ),
         "strategy_focus": _as_str_list(parsed.get("strategy_focus"))[:2],
@@ -651,6 +671,71 @@ async def diagnose_parts(
 
     parsed, raw = await _call_json(PART_SYSTEM, content, PART_MAX_TOKENS)
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
+    out["raw_response"] = raw
+    return out
+
+
+def _mock_quick() -> dict[str, Any]:
+    """USE_MOCK 용 퀵 진단 — 결정론. 스모크가 전 구간을 키 없이 돌린다."""
+    return {
+        "summary": (
+            "지금은 목표 체형과 전체 실루엣에서 차이가 보여요. "
+            "특히 상체 폭에서 차이가 커요. "
+            "4주간 전신 루틴으로 형태를 다듬어볼 예정이에요. (mock)"
+        ),
+        "strengths": [],
+        "cautions": ["웹캠 한 장이라 세부 관찰은 제한적입니다 (mock)"],
+        "silhouette": (
+            "목표는 어깨에서 허리로 폭이 좁아지는 반면, 현재는 그 차이가 "
+            "완만하게 보입니다. 전체 윤곽의 굴곡에서 차이가 관찰됩니다. (mock)"
+        ),
+        "key_differences": ["어깨-허리 폭 관계가 목표와 다르게 보입니다 (mock)"],
+        "confidence": 0.6,
+        "user_profile": {
+            "summary": "위아래 폭 차이가 완만한 실루엣 (mock)",
+            "characteristics": ["외곽선 굴곡이 완만함 (mock)"],
+        },
+        "reference_profile": {
+            "summary": "어깨가 넓고 허리로 좁아지는 실루엣 (mock)",
+            "characteristics": ["상체 폭이 뚜렷함 (mock)"],
+        },
+        "direction_summary": "근력 중심으로 전신을 다듬는 방향이에요. (mock)",
+        "strategy_focus": ["전신 기본 볼륨으로 형태 만들기 (mock)"],
+        "next_cycle": "4주 뒤 같은 자세로 다시 비교해요. (mock)",
+        "raw_response": {"mock": True},
+    }
+
+
+async def diagnose_quick(
+    reference_photo: bytes,
+    user_photo: bytes,
+    inbody: dict[str, Any] | None,
+    direction: dict[str, Any],
+    cut_notice: str | None = None,
+) -> dict[str, Any]:
+    """퀵 진단 — 웹캠 경로. 원본 2장 + 인바디로 전체 형태만 비교한다.
+
+    F08(부위별)을 건너뛰므로 부위 카드·부위 등급·유사도 점수가 없다.
+    출력 필드는 F09 와 같아서 **화면·루틴이 두 모드를 구분 없이 소비한다**
+    (parse_overall_response 재사용이 그 보장이다).
+
+    ⚠️ 사진이 없으면 호출하지 않는다 — 퀵의 근거는 사진뿐이라, 사진 없는
+       퀵 진단은 재료가 0 이다 (F09 의 텍스트 폴백과 다른 점).
+    """
+    if settings.use_mock:
+        return _mock_quick()
+
+    text = build_quick_prompt(inbody=inbody, direction=direction, cut_notice=cut_notice)
+
+    # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
+    content: list[dict[str, Any]] = [
+        _image_block(reference_photo),
+        _image_block(user_photo),
+        {"type": "text", "text": text},
+    ]
+
+    parsed, raw = await _call_json(QUICK_SYSTEM, content, OVERALL_MAX_TOKENS)
+    out = parse_overall_response(parsed)
     out["raw_response"] = raw
     return out
 

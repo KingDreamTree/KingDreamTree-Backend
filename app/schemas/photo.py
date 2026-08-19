@@ -56,7 +56,8 @@ class ReferencePhotoResponse(PhotoBase):
 class UserPhotoResponse(PhotoBase):
     """사용자 사진 저장 응답. 임계값을 통과했을 때만 반환된다."""
 
-    job_id: str = Field(description="SEG_USER 잡")
+    #: ⚠️ 퀵 파이프라인(pipeline=quick)은 세그 잡을 걸지 않으므로 null 이다.
+    job_id: str | None = Field(default=None, description="SEG_USER 잡 (quick 이면 null)")
     capture_source: CaptureSource
     pose_similarity: float
     framing_score: float

@@ -206,10 +206,26 @@ async def patch_inbody(row: OwnedInbody, body: InbodyPatchRequest) -> InbodyDeta
         )
 
     if body.segments:
-        inbody_repo.upsert_segments(
-            inbody_id,
-            [s.model_dump(exclude_none=True) for s in body.segments],
-        )
+        # ⚠️ exclude_unset (exclude_none 아님) — null 과 "안 보냄"을 구분해야 한다.
+        #    fields 는 원래 raw dict라 "보낸 키만 존재"가 자동이지만, segments 는
+        #    Pydantic 모델이라 lean_mass 를 안 보내도 기본값 None 이 채워진다.
+        #    exclude_none 을 쓰면 그 기본값과 "명시적으로 지우려는 null"을
+        #    구분 못 해 후자가 무시된다 — 실측: lean_mass:null 을 보내도 옛 값이
+        #    그대로 남았다. fields 의 "null=삭제" 계약과 맞추려면 exclude_unset 이어야
+        #    "보낸 필드만" 반영되고, 그중 null 인 것만 실제로 지워진다.
+        segment_rows = [s.model_dump(exclude_unset=True) for s in body.segments]
+
+        # segments 도 fields 와 같은 범위 검증을 받는다 — fields 만 400으로 막고
+        # segments 는 그냥 통과시키면 부위별 근육량에 음수·500kg 같은 값이
+        # DB CHECK 위반(500) 또는 무검증 통과로 이어진다 (실측).
+        seg_warns = ocr.sanitize_segments(segment_rows)
+        if seg_warns:
+            raise invalid_request(
+                "저장 가능 범위를 벗어난 부위별 값이 있습니다.",
+                {"violations": [{"field": w["rule"], "message": w["message"]} for w in seg_warns]},
+            )
+
+        inbody_repo.upsert_segments(inbody_id, segment_rows)
 
     patch: dict[str, Any] = dict(fields)
 

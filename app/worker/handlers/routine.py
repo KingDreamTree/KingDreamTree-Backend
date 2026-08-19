@@ -100,11 +100,22 @@ class RoutineInputError(RuntimeError):
 # --------------------------------------------------------------------------- #
 
 
-def _diagnosis_inputs(session_id: UUID) -> tuple[list[str], list[str]]:
-    """진단에서 가져올 두 가지 — 우선 개선 부위, 좌우 비대칭 부위.
+#: 진단 없이 만들어진 루틴에 붙이는 안내. build_routine 이 만드는 SEVEN_DAY_NOTICE·
+#: CUT_NOTICE 와 같은 방식으로 notice 문자열에 이어붙인다.
+_NO_DIAGNOSIS_NOTICE = "체형 비교 진단 없이 생성된 기본 루틴입니다. 진단을 완료하면 약점 부위에 맞춰 다시 만들어드려요."
+
+
+def _diagnosis_inputs(session_id: UUID) -> tuple[list[str], list[str], bool]:
+    """진단에서 가져올 세 가지 — 우선 개선 부위, 좌우 비대칭 부위, 진단 존재 여부.
 
     ⚠️ 진단이 없어도 예외를 던지지 않는다. 진단은 **가중치**이지 구성 요소가
        아니므로, 없으면 가중 없이 기본 볼륨 루틴이 나오면 된다 (D10).
+
+    ⚠️ **"진단이 없음"과 "진단은 했는데 우선 부위가 없음"을 구분한다.** 후자는
+       전 부위가 NONE(격차 없음)이라 정상적으로 생긴 빈 목록이라 안내가 필요
+       없다. 전자만 이 함수의 세 번째 반환값(has_diagnosis)으로 표시한다
+       (실측 — 진단 0건인 세션도 루틴이 조용히 만들어지고, 그게 폴백이라는
+       표시가 화면 어디에도 없었다).
     """
     overall = diagnosis_repo.get_overall(session_id)
     priority = (overall or {}).get("priority_parts") or []
@@ -116,7 +127,7 @@ def _diagnosis_inputs(session_id: UUID) -> tuple[list[str], list[str]]:
         if (p.startswith("Left_") and p.replace("Left_", "Right_", 1) not in priority)
         or (p.startswith("Right_") and p.replace("Right_", "Left_", 1) not in priority)
     ]
-    return list(priority), asymmetric
+    return list(priority), asymmetric, overall is not None
 
 
 def _generate(job: dict[str, Any]) -> dict[str, Any]:
@@ -134,7 +145,7 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
     session_id = UUID(str(row["session_id"]))
     days_per_week = row["exercise_days_per_week"]
 
-    priority_parts, asymmetric = _diagnosis_inputs(session_id)
+    priority_parts, asymmetric, has_diagnosis = _diagnosis_inputs(session_id)
     inbody_row = inbody_repo.latest_done(session_id)
 
     log.info(
@@ -157,6 +168,13 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
             )
         )
         routine_repo.replace_days(month_routine_id, plan["days"], days_per_week)
+
+        notice = plan["notice"]
+        if not has_diagnosis:
+            # 진단이 아예 없어서 개인화 없이 나온 기본 볼륨 루틴이다 — 그렇다는
+            # 표시 없이 나가면 "맞춤 루틴"으로 보인다 (실측, 모듈 상단 참고).
+            notice = f"{notice} {_NO_DIAGNOSIS_NOTICE}" if notice else _NO_DIAGNOSIS_NOTICE
+
         routine_repo.update_routine(
             month_routine_id,
             {
@@ -167,7 +185,7 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                     "mode": plan["mode"],
                     "mode_basis": plan["mode_basis"],
                     "mode_reason": plan["mode_reason"],
-                    "notice": plan["notice"],
+                    "notice": notice,
                     "boosts": plan["boosts"],
                     "weekly_sets": plan["weekly_sets"],
                     # «4주간 핵심 목표» 상자 본문. 생성 시점의 루틴에서 조립했으므로

@@ -101,6 +101,11 @@ class GenerationType(StrEnum):
     FEEDBACK = "FEEDBACK"
 
 
+class ExerciseKind(StrEnum):
+    STRENGTH = "STRENGTH"
+    CARDIO = "CARDIO"
+
+
 class Gender(StrEnum):
     MALE = "MALE"
     FEMALE = "FEMALE"

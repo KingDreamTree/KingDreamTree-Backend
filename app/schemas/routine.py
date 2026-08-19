@@ -16,7 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.schemas.enums import DomainStatus, GenerationType
+from app.schemas.enums import DomainStatus, ExerciseKind, GenerationType
 
 # ── F10 — 생성 ───────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ class ExerciseDto(BaseModel):
     #:    그래서 영상 도입(2026-08-17) 전에 만들어진 루틴에도 그대로 나온다.
     #: ⚠️ null 일 수 있다 — 그때는 image_url 로 폴백할 것.
     video_url: str | None = None
-    exercise_kind: str = "STRENGTH"
+    exercise_kind: ExerciseKind = ExerciseKind.STRENGTH
     muscle_group: str | None = None
 
     sets: int | None = None

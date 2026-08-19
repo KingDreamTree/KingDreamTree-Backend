@@ -16,6 +16,7 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi.concurrency import run_in_threadpool
 from PIL import Image
 
 from app.config import settings
@@ -56,7 +57,10 @@ async def _read_upload(file: UploadFile) -> Image.Image:
         raise file_too_large(settings.max_upload_bytes)
 
     try:
-        return images.load_rgb(raw)
+        # ⚠️ #111 — PIL 디코딩은 CPU 바운드 동기 호출이다. 그대로 부르면
+        #    이벤트 루프를 막아 동시 요청 전부(다른 사용자의 GET /jobs 폴링
+        #    포함)가 그동안 멈춘다. 스레드풀로 뺀다.
+        return await run_in_threadpool(images.load_rgb, raw)
     except images.UnsupportedImageError as e:
         raise unsupported_media_type(file.content_type, ["jpeg", "png", "heic", "webp"]) from e
 
@@ -230,8 +234,11 @@ async def upload_reference(
     pose.ensure_observation_ranges(person_area_ratio=pose_person_area_ratio)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
 
-    _discard_existing(user_id, session_id, PhotoKind.REFERENCE)
-    photo, job = _store(
+    # ⚠️ #111 — Storage·Supabase 호출이 몰린 동기 함수라 스레드풀로 뺀다
+    #    (위 images.load_rgb 와 같은 이유).
+    await run_in_threadpool(_discard_existing, user_id, session_id, PhotoKind.REFERENCE)
+    photo, job = await run_in_threadpool(
+        _store,
         user_id,
         session_id,
         PhotoKind.REFERENCE,
@@ -401,7 +408,10 @@ async def upload_user_photo(
     #    원본 크기로 인코딩 → 디코딩을 한 번씩 더 하는 셈이 된다.
     #    거울 여부는 판정 기준(옷·거리·잘림) 어디에도 영향이 없어 그대로 넘긴다.
     try:
-        screening = await photo_screening.screen(img, _reference_bytes(reference))
+        # ⚠️ #111 — _reference_bytes 는 동기 Storage 다운로드다. await 앞에서
+        #    그대로 부르면 이벤트 루프가 그 왕복 동안 막힌다.
+        ref_bytes = await run_in_threadpool(_reference_bytes, reference)
+        screening = await photo_screening.screen(img, ref_bytes)
     except photo_screening.ScreeningUnavailable:
         raise screening_unavailable() from None
     if not screening.suitable:
@@ -410,8 +420,9 @@ async def upload_user_photo(
             {"reason": screening.reason, "confidence": screening.confidence},
         )
 
-    _discard_existing(user_id, session_id, PhotoKind.USER)
-    photo, job = _store(
+    await run_in_threadpool(_discard_existing, user_id, session_id, PhotoKind.USER)
+    photo, job = await run_in_threadpool(
+        _store,
         user_id,
         session_id,
         PhotoKind.USER,

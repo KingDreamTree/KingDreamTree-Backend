@@ -18,7 +18,7 @@ VLM 이 잘하는 판단은 남기고, 산수는 회수한다. F10 이 분할(�
 
     part_score  = 100 − 25 × ordinal(gap_level)     # NONE 100 · SLIGHT 75
                                                     # MODERATE 50 · SIGNIFICANT 25
-    similarity  = round(mean(part_scores))          # 판단된 부위만, 등가중
+    similarity  = round(weighted_mean(part_scores, confidence_weight))  # 판단된 부위만
 
 방어 근거:
   * **등급당 25점** — gap_level 은 4단계 등간 서열 척도다. 100점 척도에
@@ -27,12 +27,28 @@ VLM 이 잘하는 판단은 남기고, 산수는 회수한다. F10 이 분할(�
     유사성의 존재 여부가 아니다. 포즈 정합을 통과한 같은 인체 정면샷이므로
     최하 등급에도 구조적 유사성은 남는다. 0점은 "비교 불능"에게만 가능한데,
     비교 불능 부위는 애초에 점수에 들어오지 않는다.
-  * **부위 등가중** — 부위별 중요도 가중치는 근거 없는 임의 상수다
-    (clothing_ratio > 0.5 를 폐기한 것과 같은 이유). 중요도는 점수가 아니라
-    priority_parts 로 따로 전달된다.
+  * **부위는 등가중, 신뢰도는 아니다** — 부위별 "중요도"(팔이 몸통보다 중요하다 등)는
+    근거 없는 임의 상수라 안 쓴다(clothing_ratio > 0.5 를 폐기한 것과 같은 이유).
+    중요도는 점수가 아니라 priority_parts 로 따로 전달된다. 하지만 confidence 는
+    "중요도"가 아니라 **그 판정 자체를 얼마나 믿을 수 있는가**다 — 이건 다르다.
   * **판단 불가는 분모에서 제외** — 모르는 것을 감점하면 옷을 입었다는 이유로
     점수가 깎인다. 대신 coverage 를 rationale 에 명시해 "몇 부위로 낸 점수"인지
     숨기지 않는다.
+
+━━ 왜 confidence 가중을 추가했는가 (2026-08-20, 실측) ━━
+
+같은 사진 쌍을 8회 반복 호출했더니 몸통·위팔은 gap_level 이 100% 고정인데
+위쪽 허벅지는 confidence=MEDIUM 이 8/8 로 스스로 "덜 확신함"을 보내면서
+등급도 SIGNIFICANT/MODERATE 사이에서 62%만 일치했다. 그런데 예전 공식은
+이 신호를 버리고 confidence=HIGH 인 몸통과 완전히 같은 무게로 평균에
+넣었다 — 그 결과 종합 점수가 42~58 사이 16점을 오갔다(같은 사진인데도).
+
+confidence 는 "이 부위가 중요한가"가 아니라 "이 판정을 얼마나 믿을 수
+있는가"이므로, 위 "부위 등가중" 원칙과 충돌하지 않는다. 안 믿긴 판정에
+전체 점수를 흔들 힘을 그만큼 주지 않을 뿐이다.
+
+⚠️ 이걸로 편차가 다 사라지지는 않는다 — 아래쪽 종아리는 confidence=HIGH
+   인데도 62%로 흔들렸다(실측). 이 가중은 완화이지 완전한 해결이 아니다.
 
 같은 진단이면 언제나 같은 점수다. 재현 가능하고, 부위 카드와 모순될 수 없다
 (부위 카드가 곧 입력이므로).
@@ -53,6 +69,10 @@ _STEP = 25  # 100점 척도 ÷ (등급 수 − 1) 이 아니라, 등급당 등�
 #: rationale 에 쓰는 한국어 등급명 (사용자·심사위원에게 그대로 보여도 되는 말)
 _GAP_KO = {"NONE": "일치", "SLIGHT": "근소", "MODERATE": "보통", "SIGNIFICANT": "큰 격차"}
 
+#: confidence → 점수 가중치. 낮은 확신도가 흔든 등급이 전체 평균을 덜 흔들게 한다.
+#: ⚠️ confidence 가 없는(옛 데이터·필드 누락) 행은 1.0 으로 — 모르는 걸 벌점 주지 않는다.
+_CONFIDENCE_WEIGHT: dict[str, float] = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.25}
+
 
 def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
     """판단된 부위 진단들로 유사도 점수를 낸다.
@@ -69,25 +89,36 @@ def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not judged:
         return None
 
+    weights = [_CONFIDENCE_WEIGHT.get(p.get("confidence") or "", 1.0) for p in judged]
     scores = [100 - _STEP * _GAP_ORDINAL[p["gap_level"]] for p in judged]
-    score = round(sum(scores) / len(scores))
+    score = round(sum(s * w for s, w in zip(scores, weights)) / sum(weights))
 
     counts: dict[str, int] = {}
     for p in judged:
         counts[p["gap_level"]] = counts.get(p["gap_level"], 0) + 1
 
+    low_confidence = sum(1 for p in judged if p.get("confidence") in ("MEDIUM", "LOW"))
+
     dist = " · ".join(f"{_GAP_KO[g]} {counts[g]}" for g in _GAP_ORDINAL if g in counts)
-    rationale = f"판단된 {len(judged)}개 부위의 격차 등급을 등간 사상(등급당 25점)한 평균 — {dist}"
+    rationale = f"판단된 {len(judged)}개 부위의 격차 등급을 등간 사상(등급당 25점)한 신뢰도 가중 평균 — {dist}"
+    if low_confidence:
+        rationale += f" (확신도 낮은 부위 {low_confidence}개는 가중치 낮춤)"
 
     return {
         "score": score,
         "rationale": rationale,
         "breakdown": {
-            "formula": "100 - 25*ordinal(gap_level), mean over judged parts",
+            "formula": "100 - 25*ordinal(gap_level), confidence-weighted mean over judged parts",
             "judged": len(judged),
+            "low_confidence_count": low_confidence,
             "counts": counts,
             "per_part": {
-                p["class_name"]: 100 - _STEP * _GAP_ORDINAL[p["gap_level"]] for p in judged
+                p["class_name"]: {
+                    "score": 100 - _STEP * _GAP_ORDINAL[p["gap_level"]],
+                    "confidence": p.get("confidence"),
+                    "weight": _CONFIDENCE_WEIGHT.get(p.get("confidence") or "", 1.0),
+                }
+                for p in judged
             },
         },
     }

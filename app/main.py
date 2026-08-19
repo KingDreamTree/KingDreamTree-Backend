@@ -6,6 +6,7 @@
 """
 
 import logging
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
@@ -16,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings
 from app.errors import ApiError, internal_error
+from app.services.db import get_client
 from app.routes.analysis import router as analysis_router
 from app.routes.body_parts import router as body_parts_router
 from app.routes.coach_chat import router as coach_chat_router
@@ -169,4 +171,41 @@ for _router in (
 
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, object]:
-    return {"status": "ok", "mock": settings.use_mock, "version": app.version}
+    """⚠️ #114 — 예전엔 프로세스 생존만 봤다. Supabase 연결이 끊기거나 워커가
+    전멸해도 200을 그대로 돌려줘서, 배포 실패·의존성 장애를 못 잡았다.
+
+    ⚠️ 워커 무활동은 **status를 안 내린다.** 트래픽이 없으면 정상적으로
+       조용하다 — 그걸 장애로 보고하면 오탐이다(§queue.is_stalled 와 같은
+       교훈). worker_last_seen_sec_ago 는 진단용 정보로만 얹는다.
+    """
+    body: dict[str, object] = {"status": "ok", "mock": settings.use_mock, "version": app.version}
+    try:
+        get_client().table("job").select("job_id").limit(1).execute()
+        body["db"] = "ok"
+    except Exception:  # noqa: BLE001 — 원인이 뭐든 결론은 같다: DB에 못 닿는다
+        log.exception("헬스체크 — Supabase 연결 실패")
+        body["db"] = "unreachable"
+        body["status"] = "degraded"
+
+    try:
+        last = (
+            get_client()
+            .table("job")
+            .select("started_at")
+            .not_.is_("started_at", "null")
+            .order("started_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if last and last[0].get("started_at"):
+            at = datetime.fromisoformat(str(last[0]["started_at"]).replace("Z", "+00:00"))
+            if at.tzinfo is None:
+                at = at.replace(tzinfo=timezone.utc)
+            body["worker_last_seen_sec_ago"] = round((datetime.now(timezone.utc) - at).total_seconds())
+        else:
+            body["worker_last_seen_sec_ago"] = None
+    except Exception:  # noqa: BLE001 — 진단용 부가 정보라 실패해도 헬스체크 자체는 죽이지 않는다
+        body["worker_last_seen_sec_ago"] = "unknown"
+
+    return body

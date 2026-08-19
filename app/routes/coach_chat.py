@@ -94,6 +94,11 @@ def _today_day(days: list[dict[str, Any]], routine: dict[str, Any]) -> dict[str,
     summary="코치 대화 1턴 (운동 후 피드백)",
 )
 async def chat(session: OwnedSession, body: CoachChatRequest) -> CoachChatResponse:
+    # ⚠️ #113 — 지금까지 MAX_TURNS는 프롬프트로만 강제됐다. 모델이 [마지막 턴]
+    #    지시를 무시하면 무한정 이어질 수 있어 여기서 코드로 먼저 끊는다.
+    if coach_chat.turns_exceeded(body.messages):
+        raise invalid_request(f"대화 턴 상한({coach_chat.MAX_TURNS})을 넘었습니다. [적용]으로 마무리해주세요.")
+
     session_id = UUID(str(session["session_id"]))
     routine = _active_routine_or_404(session_id)
     month_routine_id = UUID(str(routine["month_routine_id"]))

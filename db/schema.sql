@@ -565,6 +565,14 @@ CREATE TABLE job (
 CREATE INDEX job_poll_idx    ON job (status, kind, created_at);
 CREATE INDEX job_session_idx ON job (session_id);
 
+-- ⚠️ #110 — 세션당 kind별로 "열린"(PENDING/PROCESSING) 잡은 최대 1개.
+--    라우트의 find_open→enqueue 가드는 read-then-write라 동시 요청(더블클릭,
+--    React StrictMode 이중실행)이면 TOCTOU 창에서 둘 다 통과할 수 있었다.
+--    이게 마지막 방어선 — 진 쪽 INSERT는 23505로 튕기고, app/worker/queue.py
+--    의 enqueue()가 그걸 잡아 기존 잡을 그대로 돌려준다.
+CREATE UNIQUE INDEX job_open_one_per_kind_idx
+    ON job (session_id, kind) WHERE status IN ('PENDING', 'PROCESSING');
+
 COMMENT ON COLUMN job.error IS
     '사용자에게 그대로 노출해도 되는 문구만. 스택 트레이스·모델 경로·API 키 금지.';
 

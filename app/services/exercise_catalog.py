@@ -101,7 +101,24 @@ SINGLE_SIDE_HINTS = ("single", "one arm", "one-arm", "one leg", "lunge", "split"
 #:    "Neck Side Stretch" 등). 그대로 두면 근력 슬롯에 스트레칭이 배정된다.
 #:    D8(초보 부적합 제외)과는 성격이 다르다 — 저건 난이도 판단이고 이건
 #:    명백한 오분류 수정이라 PM 승인 대상이 아니다.
-NON_STRENGTH_NAME_HINTS = ("stretch", "mobility", "foam roll", "warm up", "warm-up")
+#:
+#: ⚠️ 2026-08-19 보강 — "circling"/"flinging"/"articulation"/"toe touching"/
+#:    "child pose" 5개 추가 (#109). "Standing Arms Circling"·"Front Toe
+#:    Touching" 류가 STRENGTH 라벨을 달고 슬롯 후보 6~9위에 섞여 있었다 —
+#:    결정론 폴백은 상위 4개만 써서 안전했지만, LLM이 다양성을 이유로
+#:    하위를 고르면 "어깨 3세트: 스탠딩 암 서클링"이 그대로 나갈 수 있었다.
+NON_STRENGTH_NAME_HINTS = (
+    "stretch",
+    "mobility",
+    "foam roll",
+    "warm up",
+    "warm-up",
+    "circling",
+    "flinging",
+    "articulation",
+    "toe touching",
+    "child pose",
+)
 
 # --------------------------------------------------------------------------- #
 # 초보자 스크리닝 (D8) — 여기가 유일한 판정 지점
@@ -138,6 +155,11 @@ BEGINNER_UNSAFE_TERMS: tuple[str, ...] = (
     "burpee",
     # 고난도 체조·역도 계열
     "pistol",
+    # ⚠️ 2026-08-19 보강 (#107) — "pistol"만으로는 안 걸린다. 같은 동작이
+    #    "Single Leg Squat"(대퇴사두 후보 6위)로도 들어있었다. "sissy squat"은
+    #    무릎 전방전단·슬개건 부하가 커서 별도로 막는다 — 초보 처방 대상 아님.
+    "sissy",
+    "single leg squat",
     "handstand",
     "planche",
     "front lever",

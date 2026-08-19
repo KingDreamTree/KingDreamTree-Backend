@@ -24,7 +24,7 @@
 | **F06** | **부위별 세그멘테이션 + 시각화** | 🟢 구현 | A | `GET /photos/{id}/segmentation` |
 | F07 | 인바디 결과지 인식 | 🟢 구현 | B | `POST /sessions/{id}/inbody` |
 | F08 | 부위별 비교 진단 | 🟢 구현 | B | `POST /sessions/{id}/analysis` |
-| F09 | 종합 진단 (유사도 점수) | 🟢 구현 | B | `GET /sessions/{id}/analysis` |
+| F09 | 종합 진단 (목표 근접도) | 🟢 구현 | B | `GET /sessions/{id}/analysis` |
 | F10 | 4주 루틴 생성 / 운동 일수 조정 | 🟢 구현 | B | `POST /sessions/{id}/routines` |
 | F11 | 오늘의 루틴 | 🟢 구현 | B | `GET /sessions/{id}/routines/today` |
 | F12 | 운동 완료 + 피드백 반영 | 🟢 구현 | B | `POST /sessions/{id}/workout-logs` |
@@ -589,7 +589,7 @@ ctx.putImageData(out, 0, 0);
 
 ---
 
-# F09. 종합 진단 (유사도 점수)
+# F09. 종합 진단 (목표 근접도)
 
 > **화면** — 분석 결과 페이지
 
@@ -879,7 +879,7 @@ workout_log(feedback_text) → ROUTINE_PATCH → 새 month_routine 버전
 | 1 | Sapiens2 실제 클래스명 | F06 `palette` 전체 | seed 9 + OTHER. 워커가 DB에서 읽음 |
 | 2 | OCR 기술 선택 | F07 | 응답 형태 동일, `services/ocr.py` 내부만 교체 |
 | 3 | 인바디 추출 컬럼 | F07 `fields` | 확정 전까지 `raw_ocr`도 함께 반환 |
-| 4 | 유사도 산출 방식 | F09 `score_source` | **`RULE` 고정** — 코드가 규칙으로 합산한다 |
+| 4 | 목표 근접도 산출 방식 | F09 `score_source` | **`RULE` 고정** — 코드가 규칙으로 합산한다 |
 | 5 | 루틴 진행 기준 | F11 `day_source` | `COUNT` |
 | 6 | 루틴 생성 분할 | F10 `status` 전환 | 일괄. 분할하면 4주차까지 끝나야 `DONE` |
 | 7 | ~~VLM 입력 형식~~ | — | ✅ **확정 (2026-08-13): `HIGHLIGHT`** — 아래 참조 |

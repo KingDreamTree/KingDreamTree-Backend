@@ -270,6 +270,17 @@ def _count_user_turns(messages: list[dict[str, Any]]) -> int:
     return sum(1 for m in messages if m.get("role") == "user")
 
 
+def turns_exceeded(messages: list[dict[str, Any]]) -> bool:
+    """MAX_TURNS를 이미 넘겼는가 (#113).
+
+    ⚠️ 지금까지 MAX_TURNS는 프롬프트("[마지막 턴]" 문구)로만 강제됐다 —
+       이 리포의 원칙("반복 위반은 산문이 아니라 코드로 막는다", vlm.py
+       모듈 주석)의 유일한 반례였다. 모델이 지시를 무시하면 무한정 이어질
+       수 있었다. 라우트가 요청을 받자마자 이 함수로 먼저 끊는다.
+    """
+    return _count_user_turns(messages) >= MAX_TURNS
+
+
 def _mock_reply(messages: list[dict[str, Any]], turn: int) -> dict[str, Any]:
     """USE_MOCK — 데모 시나리오("무릎 아팠어")가 실제 흐름대로 돌게 한다."""
     from app.services.routine import _PAIN_TERMS  # 활용형 목록 재사용

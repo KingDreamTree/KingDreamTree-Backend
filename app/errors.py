@@ -96,6 +96,15 @@ def unsupported_media_type(got: str | None, allowed: list[str]) -> ApiError:
     )
 
 
+def too_many_requests(retry_after_sec: int) -> ApiError:
+    return ApiError(
+        429,
+        "TOO_MANY_REQUESTS",
+        "요청이 너무 잦습니다. 잠시 후 다시 시도해주세요.",
+        {"retry_after_sec": retry_after_sec},
+    )
+
+
 def active_session_exists(session_id: str) -> ApiError:
     """⚠️ detail.session_id 로 이어서 진행할 수 있게 알려준다.
 

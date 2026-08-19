@@ -7,12 +7,13 @@
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
+from app.config import settings
 from app.deps import CurrentUser
 from app.errors import ApiError
 from app.schemas.user import UserResponse
-from app.services import db, storage
+from app.services import db, rate_limit, storage
 
 log = logging.getLogger("routes.users")
 
@@ -25,7 +26,16 @@ router = APIRouter(tags=["users"])
     status_code=status.HTTP_201_CREATED,
     summary="사용자 식별자 발급 (헤더 불필요)",
 )
-async def create_user() -> UserResponse:
+async def create_user(request: Request) -> UserResponse:
+    # ⚠️ #115 — 인증이 없는 유일한 쓰기 엔드포인트. 막지 않으면 스크립트로
+    #    반복 호출해 뒤따르는 사진 업로드(동기 Vision 호출)까지 요금이 그대로
+    #    뛴다. IP 기준 분당 상한만 (app/services/rate_limit.py).
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit.check(
+        f"create_user:{client_ip}",
+        settings.user_create_rate_limit,
+        settings.user_create_rate_window_sec,
+    )
     row = db.create_user()
     return UserResponse(**row)
 

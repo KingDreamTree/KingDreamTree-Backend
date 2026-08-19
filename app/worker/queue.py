@@ -9,6 +9,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from uuid import UUID
 
+from postgrest.exceptions import APIError
+
 from app.config import settings
 from app.schemas.enums import JobKind, JobStatus
 from app.services.db import get_client
@@ -35,11 +37,35 @@ def enqueue(
     kind: JobKind,
     payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """잡을 새로 등록한다."""
+    """잡을 새로 등록한다.
+
+    ⚠️ #110 — 호출부의 "진행 중이면 안 만든다" 가드는 SELECT 후 INSERT라
+       그 사이(TOCTOU)에 동시 요청 둘 다 통과할 수 있다(더블클릭, React
+       StrictMode 이중실행). `job_open_one_per_kind_idx`(세션+kind당 열린
+       잡 1개, db/migrations/2026-08-19_job_dedup_index.sql)가 마지막
+       방어선이다 — 두 INSERT 중 하나만 성공하고, 진 쪽은 여기서 잡아
+       **이미 있는 잡을 그대로 돌려준다.** 500을 사용자에게 보이는 대신
+       가드가 원래 의도한 "기존 잡 재사용"으로 떨어진다.
+       ⚠️ 마이그레이션 적용 전에도 안전하다 — 제약이 없으면 23505가 애초에
+          안 나서 이 except가 그냥 안 타고, 지금까지의 동작과 같다.
+    """
     row = {"session_id": str(session_id), "kind": str(kind)}
     if payload is not None:
         row["payload"] = payload
-    return get_client().table("job").insert(row).execute().data[0]
+    try:
+        return get_client().table("job").insert(row).execute().data[0]
+    except APIError as e:
+        if e.code != "23505":
+            raise
+        existing = find_open(session_id, kind)
+        if existing is None:
+            # 유니크 위반인데 열린 잡이 안 보인다 — 방금 끝났거나 좀비로 걸렀다.
+            # 재시도하면 대개 잡힌다. 그래도 없으면 원래 예외를 그대로 낸다.
+            existing = find_open(session_id, kind)
+        if existing is None:
+            raise
+        log.info("중복 INSERT를 기존 잡으로 대체 — session=%s kind=%s job=%s", session_id, kind, existing["job_id"])
+        return existing
 
 
 def is_stale(job: dict[str, Any], older_than_sec: int | None = None) -> bool:

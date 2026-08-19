@@ -18,7 +18,8 @@ VLM 이 잘하는 판단은 남기고, 산수는 회수한다. F10 이 분할(�
 
     part_score  = 100 − 25 × ordinal(gap_level)     # NONE 100 · SLIGHT 75
                                                     # MODERATE 50 · SIGNIFICANT 25
-    similarity  = round(mean(part_scores))          # 판단된 부위만, 등가중
+    similarity  = round(weighted_mean(part_scores, confidence_weight))
+                                                    # 판단된 부위만, 확신도 가중
 
 방어 근거:
   * **등급당 25점** — gap_level 은 4단계 등간 서열 척도다. 100점 척도에
@@ -27,9 +28,17 @@ VLM 이 잘하는 판단은 남기고, 산수는 회수한다. F10 이 분할(�
     유사성의 존재 여부가 아니다. 포즈 정합을 통과한 같은 인체 정면샷이므로
     최하 등급에도 구조적 유사성은 남는다. 0점은 "비교 불능"에게만 가능한데,
     비교 불능 부위는 애초에 점수에 들어오지 않는다.
-  * **부위 등가중** — 부위별 중요도 가중치는 근거 없는 임의 상수다
-    (clothing_ratio > 0.5 를 폐기한 것과 같은 이유). 중요도는 점수가 아니라
-    priority_parts 로 따로 전달된다.
+  * **부위는 등가중, 확신도는 가중** — 부위별 *중요도* 가중치는 근거 없는
+    임의 상수라 안 만든다(clothing_ratio > 0.5 를 폐기한 것과 같은 이유).
+    중요도는 점수가 아니라 priority_parts 로 따로 전달된다. 반면 *확신도*
+    가중은 임의가 아니다 — 모델이 스스로 "덜 확신함"을 신호로 보낸 판정을
+    "확실히 봤다"는 판정과 같은 무게로 평균 내면 안 된다(2026-08-20, #131
+    실측: 같은 사진 8회 반복 호출에서 confidence=MEDIUM 부위만 등급 일치율이
+    62%로 떨어졌고, 그 부위가 등가중 평균의 최대 16점 편차를 만들었다).
+    HIGH=1.0 · MEDIUM=0.5 · LOW=0.25.
+    ⚠️ 완전한 해결은 아니다 — 같은 실측에서 confidence=HIGH인데도 62%로
+    흔들린 부위(종아리)가 있었다. 그런 부위는 가중치가 안 깎여 편차가 남는다.
+    이건 애초에 `_PRIORITY_EXCLUDED`(#132)로 별도 대응한다.
   * **판단 불가는 분모에서 제외** — 모르는 것을 감점하면 옷을 입었다는 이유로
     점수가 깎인다. 대신 coverage 를 rationale 에 명시해 "몇 부위로 낸 점수"인지
     숨기지 않는다.
@@ -53,6 +62,10 @@ _STEP = 25  # 100점 척도 ÷ (등급 수 − 1) 이 아니라, 등급당 등�
 #: rationale 에 쓰는 한국어 등급명 (사용자·심사위원에게 그대로 보여도 되는 말)
 _GAP_KO = {"NONE": "일치", "SLIGHT": "근소", "MODERATE": "보통", "SIGNIFICANT": "큰 격차"}
 
+#: 확신도 → 점수 가중치. 모델이 스스로 "덜 확신함"을 신호로 보낸 판정을
+#: 낮은 비중으로 반영한다 (모듈 docstring §공식, #131 실측 근거).
+_CONFIDENCE_WEIGHT: dict[str, float] = {"HIGH": 1.0, "MEDIUM": 0.5, "LOW": 0.25}
+
 
 def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
     """판단된 부위 진단들로 유사도 점수를 낸다.
@@ -69,23 +82,28 @@ def compute_similarity(parts: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not judged:
         return None
 
+    weights = [_CONFIDENCE_WEIGHT.get(str(p.get("confidence") or "LOW"), 0.25) for p in judged]
     scores = [100 - _STEP * _GAP_ORDINAL[p["gap_level"]] for p in judged]
-    score = round(sum(scores) / len(scores))
+    score = round(sum(s * w for s, w in zip(scores, weights)) / sum(weights))
 
     counts: dict[str, int] = {}
     for p in judged:
         counts[p["gap_level"]] = counts.get(p["gap_level"], 0) + 1
+    low_confidence = sum(1 for p in judged if str(p.get("confidence") or "LOW") != "HIGH")
 
     dist = " · ".join(f"{_GAP_KO[g]} {counts[g]}" for g in _GAP_ORDINAL if g in counts)
-    rationale = f"판단된 {len(judged)}개 부위의 격차 등급을 등간 사상(등급당 25점)한 평균 — {dist}"
+    rationale = f"판단된 {len(judged)}개 부위의 격차 등급을 등간 사상(등급당 25점)한 확신도 가중 평균 — {dist}"
+    if low_confidence:
+        rationale += f" · 확신도 낮은 부위 {low_confidence}개 포함(가중치 축소 반영)"
 
     return {
         "score": score,
         "rationale": rationale,
         "breakdown": {
-            "formula": "100 - 25*ordinal(gap_level), mean over judged parts",
+            "formula": "100 - 25*ordinal(gap_level), confidence-weighted mean over judged parts (HIGH=1.0/MEDIUM=0.5/LOW=0.25)",
             "judged": len(judged),
             "counts": counts,
+            "low_confidence": low_confidence,
             "per_part": {
                 p["class_name"]: 100 - _STEP * _GAP_ORDINAL[p["gap_level"]] for p in judged
             },
@@ -100,7 +118,19 @@ _CONFIDENCE_ORDINAL: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 #: 사진 각도·프레이밍 하나로 격차 판정이 쉽게 뒤집힌다(2026-08-18, 사용자 실측:
 #: "판단이 랜덤 같다"). 개선 헤드라인·루틴 볼륨 가중 대상에서 통째로 뺀다 —
 #: 부위 카드 자체(F08)는 그대로 보여주고, "이걸 우선 보강하라"는 권고만 안 한다.
-_PRIORITY_EXCLUDED = {"Left_Lower_Leg", "Right_Lower_Leg", "Left_Lower_Arm", "Right_Lower_Arm"}
+#: ⚠️ 위쪽 허벅지도 추가(2026-08-20, #132) — 같은 세션 8회 반복 호출 실측에서
+#:    종아리(이미 제외)와 똑같이 등급 일치율 62%로 흔들렸다. "가장 작고 먼
+#:    분절"이라는 원래 기준상 대상이 아니었지만, 이번 촬영 조건(다리 프레이밍)
+#:    에서는 크기와 무관하게 같은 수준으로 불안정했다. N=1세션(8회) 표본이라
+#:    다른 사진 쌍에서도 재현되는지는 추가 확인 권장(#132).
+_PRIORITY_EXCLUDED = {
+    "Left_Lower_Leg",
+    "Right_Lower_Leg",
+    "Left_Lower_Arm",
+    "Right_Lower_Arm",
+    "Left_Upper_Leg",
+    "Right_Upper_Leg",
+}
 
 
 def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str], str]:

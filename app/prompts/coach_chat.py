@@ -21,6 +21,8 @@ MI 의 핵심 근거고, GPTCoach 가 이를 LLM 에서 재현할 수 있음을 
 재검증한다(후보 집합·상한) — LLM 이 규칙 밖 값을 넣어도 적용 단계에서 걸린다.
 """
 
+from app.schemas.enums import ExerciseKind
+
 SYSTEM_PROMPT = """당신은 사용자의 퍼스널 트레이닝 코치입니다. 방금 운동을 끝낸
 사용자와 짧은 대화를 나누고, 필요하면 다음 운동부터 루틴을 조정합니다.
 
@@ -203,7 +205,7 @@ def build_context(
         "",
     ]
     for e in day.get("exercises", []):
-        if e.get("exercise_kind") == "CARDIO" or e.get("kind") == "CARDIO":
+        if e.get("exercise_kind") == ExerciseKind.CARDIO or e.get("kind") == ExerciseKind.CARDIO:
             lines.append(f"- {e['name']} (유산소 {e.get('duration_min', '?')}분)")
         else:
             lines.append(

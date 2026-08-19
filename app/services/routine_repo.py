@@ -28,7 +28,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from app.schemas.enums import DomainStatus, GenerationType
+from app.schemas.enums import DomainStatus, ExerciseKind, GenerationType
 from app.services import exercise_catalog
 from app.services.db import get_client
 
@@ -231,7 +231,7 @@ def replace_days(
                 #    재적용 경로(피드백·코치 대화)는 list_days 가 읽어온 DB 행이라
                 #    "exercise_kind" 다. 하나만 보면 유산소가 STRENGTH 로 저장돼
                 #    routine_day_exercise_kind_chk 에 걸린다 (sets 가 없으므로).
-                "exercise_kind": e.get("kind") or e.get("exercise_kind") or "STRENGTH",
+                "exercise_kind": e.get("kind") or e.get("exercise_kind") or ExerciseKind.STRENGTH,
                 "muscle_group": e.get("muscle_group"),
                 "sets": e.get("sets"),
                 "reps": e.get("reps"),

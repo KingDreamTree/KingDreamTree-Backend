@@ -41,6 +41,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.schemas.enums import ExerciseKind
+
 log = logging.getLogger("services.contraindication")
 
 #: 관절·부위 → 그 관절에 부하가 실리는 근육군.
@@ -220,7 +222,7 @@ def enforce(
         for ex in day.get("exercises", []):
             group = ex.get("muscle_group") or ""
             severity = groups.get(group)
-            is_cardio = (ex.get("exercise_kind") or ex.get("kind")) == "CARDIO"
+            is_cardio = (ex.get("exercise_kind") or ex.get("kind")) == ExerciseKind.CARDIO
 
             if severity is None or is_cardio or (order, ex.get("name")) in touched:
                 kept.append(ex)

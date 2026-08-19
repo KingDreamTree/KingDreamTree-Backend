@@ -38,6 +38,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.schemas.enums import ExerciseKind
 from app.prompts.coach_chat import SYSTEM_PROMPT, TOOLS, build_context
 from app.services import exercise_catalog
 from app.services.routine_templates import slot_sets_cap
@@ -260,7 +261,7 @@ def _candidates_by_group(
         e.get("muscle_group")
         for d in days
         for e in d.get("exercises", [])
-        if e.get("muscle_group") and (e.get("exercise_kind") or e.get("kind")) != "CARDIO"
+        if e.get("muscle_group") and (e.get("exercise_kind") or e.get("kind")) != ExerciseKind.CARDIO
     }
     return {g: exercise_catalog.candidates_for_slot(g, catalog) for g in sorted(groups)}
 

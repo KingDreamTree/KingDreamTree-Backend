@@ -23,6 +23,7 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.schemas.enums import ExerciseKind
 from app.prompts.routine_gen import SYSTEM_PROMPT as SELECTION_SYSTEM
 from app.prompts.routine_gen import build_selection_prompt
 from app.prompts.routine_patch import SYSTEM_PROMPT, TOOLS
@@ -125,7 +126,7 @@ def _mock_patch(
     # ⚠️ 실제 루틴의 Day·운동 이름을 써야 검증(validate_tool_call)을 통과한다.
     #    고정 문자열을 쓰면 mock 경로에서만 조용히 거부돼 적용이 0건이 된다.
     day = (current_routine or {}).get("days", [{}])[0] if current_routine else {}
-    target = next((e for e in day.get("exercises", []) if e.get("exercise_kind") != "CARDIO"), None)
+    target = next((e for e in day.get("exercises", []) if e.get("exercise_kind") != ExerciseKind.CARDIO), None)
     changes: list[dict[str, Any]] = []
     if target:
         changes.append(
@@ -204,7 +205,7 @@ def _collect_candidates(
     out: dict[str, list[dict[str, Any]]] = {}
     for day in days:
         for idx, slot in enumerate(day["slots"]):
-            if slot.get("kind") == "CARDIO":
+            if slot.get("kind") == ExerciseKind.CARDIO:
                 continue
             prefer_single = slot["muscle_group"] in weak_side_by_group
             if prefer_single:
@@ -235,7 +236,7 @@ def _fallback_selections(
     for day in days:
         picked_today: set[str] = set()
         for idx, slot in enumerate(day["slots"]):
-            if slot.get("kind") == "CARDIO":
+            if slot.get("kind") == ExerciseKind.CARDIO:
                 continue
             sid = _slot_id(day, idx)
             pool = candidates.get(sid, [])
@@ -306,7 +307,7 @@ def _sanitize_selections(
     for day in days:
         picked_today: set[str] = set()
         for idx, slot in enumerate(day["slots"]):
-            if slot.get("kind") == "CARDIO":
+            if slot.get("kind") == ExerciseKind.CARDIO:
                 continue
             sid = _slot_id(day, idx)
             pool = candidates.get(sid, [])
@@ -417,7 +418,7 @@ async def build_routine(
         exercises: list[dict[str, Any]] = []
         for idx, slot in enumerate(day["slots"]):
             order = len(exercises) + 1
-            if slot.get("kind") == "CARDIO":
+            if slot.get("kind") == ExerciseKind.CARDIO:
                 if not cardio_pool:
                     continue
                 pick = cardio_pool[cardio_i % len(cardio_pool)]
@@ -428,7 +429,7 @@ async def build_routine(
                         "exercise_ref": pick["exercise_ref"],
                         "name": pick.get("name_ko") or pick["name_en"],
                         "image_url": pick.get("image_url"),
-                        "kind": "CARDIO",
+                        "kind": ExerciseKind.CARDIO,
                         "duration_min": slot.get("duration_min", 15),
                         "note": "대화가 가능한 정도의 숨찬 속도로 하세요.",
                     }
@@ -454,7 +455,7 @@ async def build_routine(
                     "exercise_ref": picked["exercise_ref"],
                     "name": picked.get("name_ko") or picked["name_en"],
                     "image_url": picked.get("image_url"),
-                    "kind": "STRENGTH",
+                    "kind": ExerciseKind.STRENGTH,
                     "muscle_group": slot["muscle_group"],
                     "sets": slot["sets"],
                     "reps": slot["reps"],
@@ -675,7 +676,7 @@ def build_strategy(
     """
     names = part_names or {}
     cardio_days = sum(
-        1 for d in days if any(e.get("exercise_kind") == "CARDIO" for e in d.get("exercises", []))
+        1 for d in days if any(e.get("exercise_kind") == ExerciseKind.CARDIO for e in d.get("exercises", []))
     )
 
     # ── 문단 조립 — 접속으로 이어 붙여 한 편의 말이 되게 한다 ──────────────

@@ -352,6 +352,7 @@ _LIMIT_MESSAGE = {
     "TRUNCATED": "{name}: 화면에서 잘려 전체 형태를 확인할 수 없습니다",
     "NOT_DETECTED": "{name}: 사진에서 부위가 검출되지 않았습니다",
     "NOT_COMPARABLE": "{name}: 비교 대상 부위가 아닙니다",
+    "MOSTLY_CLOTHING": "{name}: 대부분 옷에 가려져 있어 비교에서 뺐습니다",
 }
 
 

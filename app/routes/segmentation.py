@@ -43,6 +43,7 @@ REASON_MESSAGE: dict[str, str] = {
     #    기준을 바꾸게 되면 여기 문구가 그대로 쓰인다.
     InvalidReason.TRUNCATED: "{name}{이가} 화면에서 잘렸습니다. 전신이 나오게 찍어주세요.",
     InvalidReason.NOT_COMPARABLE: "{name}{은는} 비교 대상이 아닙니다.",
+    InvalidReason.MOSTLY_CLOTHING: "{name}{이가} 대부분 옷에 가려져 있어요. 노출을 조금 더 해주시면 좋아요.",
 }
 DEFAULT_MESSAGE = "{name}{을를} 비교할 수 없습니다."
 

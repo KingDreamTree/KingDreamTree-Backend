@@ -112,9 +112,25 @@ async def start_analysis(
             return _start_response(existing, class_names, reused=True)
 
     # ── 가드 ③ — 이미 끝난 분석을 새로고침으로 다시 돌리지 않는다 ─────────
+    #
+    # ⚠️ overall 만 보면 안 된다. **부위 진단이 실제로 남아있는지 같이 본다.**
+    #    part=0 인데 overall=DONE 인 조합이 실제로 났고(2026-08-19, 세션
+    #    277ede4e — clear_diagnoses 가 진행 중이던 VLM_OVERALL 을 못 내려서
+    #    삭제 뒤에 overall 만 되살아났다), 그 상태에서 이 가드가 재실행을
+    #    막아 **영구히 복구되지 않았다.** 화면은 모든 부위가 "진단을 준비하고
+    #    있어요" 였고 사용자가 새로고침해도 그대로였다.
+    #
+    #    근본 원인은 clear_diagnoses 쪽에서 고쳤지만, 그 조합이 다시 생기면
+    #    여기서 스스로 회복해야 한다 — 이미 그 상태로 저장된 세션도 있다.
     overall = diagnosis_repo.get_overall(session_id)
-    if not force and overall is not None and overall["status"] == DomainStatus.DONE:
+    parts_done = diagnosis_repo.count_part_diagnoses(session_id)["total"] > 0
+    if not force and overall is not None and overall["status"] == DomainStatus.DONE and parts_done:
         return _start_response(_latest_job(session_id, JobKind.VLM_PART), class_names, reused=True)
+
+    if overall is not None and not parts_done:
+        # 되살아난 종합만 남은 상태. 새 부위 진단과 섞이지 않게 먼저 지운다.
+        log.warning("부위 진단 없이 종합만 남아 재분석: session_id=%s", session_id)
+        diagnosis_repo.clear_diagnoses(session_id)
 
     if len(parts) < settings.min_comparable_parts:
         raise insufficient_parts(len(parts), context["excluded"])

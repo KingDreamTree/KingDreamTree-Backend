@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from app.config import settings
@@ -217,11 +218,18 @@ def _ensure_range(name: str, value: float, low: float, high: float) -> None:
 
     ⚠️ `not (low <= value <= high)` 로 쓴다. NaN 은 어떤 비교에도 False 라
        이 형태여야 걸린다 (`value < low or value > high` 로 쓰면 NaN 이 빠져나간다).
+
+    ⚠️ **막는 것과 알려주는 것은 별개다 (실측).** 위 비교는 NaN 을 정확히 걸러
+       400 을 만드는데, 그 400 의 detail 에 NaN 을 그대로 담으면 Starlette
+       `JSONResponse.render` 가 `allow_nan=False` 로 직렬화하다가 그 자리에서
+       `ValueError` 를 던져 **500** 이 된다. "막았는데 알려주다가 죽는" 경로라
+       `got` 만 JSON에 그대로 실을 수 있는 값으로 바꿔서 넣는다.
     """
     if not (low <= value <= high):
+        got = value if isinstance(value, (int, float)) and math.isfinite(value) else str(value)
         raise invalid_request(
             f"{name} 는 {low}~{high} 범위여야 합니다.",
-            {"field": name, "got": value, "min": low, "max": high},
+            {"field": name, "got": got, "min": low, "max": high},
         )
 
 

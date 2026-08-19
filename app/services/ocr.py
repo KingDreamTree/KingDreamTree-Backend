@@ -282,6 +282,40 @@ def sanitize_columns(cols: dict[str, Any]) -> tuple[dict[str, Any], list[dict[st
     return out, warns
 
 
+def sanitize_segments(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """PATCH로 들어온 segments 의 lean_mass 를 부위별 정상 범위로 검증한다.
+
+    ⚠️ DB CHECK는 `lean_mass >= 0` 뿐이다(schema.sql inbody_segment 주석 —
+       "부위별 범위 검증은 CHECK가 아니라 애플리케이션에서"). 그래서 -1 은 CHECK
+       위반으로 500이 나고, 500(몸통 근육 500kg)은 그냥 통과했다(실측). 여기서
+       막지 않으면 사용자 입력 경로에만 검증이 없는 상태가 계속된다 — OCR
+       추출값은 이미 _check_segment_ranges 로 같은 범위를 보고 있다.
+
+    Returns:
+        위반 목록(WARN dict). 호출부가 이걸로 400을 낼지 정한다 — sanitize_columns 와
+        같은 자리(라우트)에서 같은 방식으로 판단하도록 값만 돌려준다.
+    """
+    warns: list[dict[str, Any]] = []
+    for s in segments:
+        segment = s.get("segment")
+        lean = s.get("lean_mass")
+        low_high = _SEGMENT_RANGE.get(segment)
+        if lean is None or low_high is None:
+            continue
+        low, high = low_high
+        if not isinstance(lean, (int, float)) or not (low <= lean <= high):
+            warns.append(
+                {
+                    "rule": f"SEGMENT_RANGE_{segment}",
+                    "level": "WARN",
+                    "actual": lean,
+                    "expected_range": [low, high],
+                    "message": f"{segment} 근육량 {lean}kg 이 저장 가능 범위({low}~{high}kg)를 벗어남",
+                }
+            )
+    return warns
+
+
 # ── 프론트 응답용 변환 ────────────────────────────────────────────────────────
 
 #: 검증 rule → 확인 화면의 필드 키 (api-spec F07 응답 형식)

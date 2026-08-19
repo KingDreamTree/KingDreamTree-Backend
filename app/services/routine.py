@@ -675,8 +675,12 @@ def build_strategy(
          "strength_days", "cardio_days"}
     """
     names = part_names or {}
+    # ⚠️ 여기 days는 build_routine()이 방금 조립한 out_days다 — DB 왕복 전이라
+    #    운동 dict가 "exercise_kind"가 아니라 "kind" 키를 쓴다(위 조립부 432·458행).
+    #    "exercise_kind"로 읽으면 cardio_days가 항상 0이라 CUT 전용 설명 문단이
+    #    조건을 못 만족해 안 뜬다 (#108, 실측 2026-08-19).
     cardio_days = sum(
-        1 for d in days if any(e.get("exercise_kind") == ExerciseKind.CARDIO for e in d.get("exercises", []))
+        1 for d in days if any(e.get("kind") == ExerciseKind.CARDIO for e in d.get("exercises", []))
     )
 
     # ── 문단 조립 — 접속으로 이어 붙여 한 편의 말이 되게 한다 ──────────────

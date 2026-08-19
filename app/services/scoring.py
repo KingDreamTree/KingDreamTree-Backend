@@ -131,7 +131,19 @@ _CONFIDENCE_ORDINAL: dict[str, int] = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
 #: 사진 각도·프레이밍 하나로 격차 판정이 쉽게 뒤집힌다(2026-08-18, 사용자 실측:
 #: "판단이 랜덤 같다"). 개선 헤드라인·루틴 볼륨 가중 대상에서 통째로 뺀다 —
 #: 부위 카드 자체(F08)는 그대로 보여주고, "이걸 우선 보강하라"는 권고만 안 한다.
-_PRIORITY_EXCLUDED = {"Left_Lower_Leg", "Right_Lower_Leg", "Left_Lower_Arm", "Right_Lower_Arm"}
+#: ⚠️ 위쪽 허벅지도 추가(2026-08-20, #132) — 같은 세션 8회 반복 호출 실측에서
+#:    종아리(이미 제외)와 똑같이 등급 일치율 62%로 흔들렸다. "가장 작고 먼
+#:    분절"이라는 원래 기준상 대상이 아니었지만, 이번 촬영 조건(다리 프레이밍)
+#:    에서는 크기와 무관하게 같은 수준으로 불안정했다. N=1세션(8회) 표본이라
+#:    다른 사진 쌍에서도 재현되는지는 추가 확인 권장(#132).
+_PRIORITY_EXCLUDED = {
+    "Left_Lower_Leg",
+    "Right_Lower_Leg",
+    "Left_Lower_Arm",
+    "Right_Lower_Arm",
+    "Left_Upper_Leg",
+    "Right_Upper_Leg",
+}
 
 
 def rank_priority(parts: list[dict[str, Any]], limit: int = 3) -> tuple[list[str], str]:

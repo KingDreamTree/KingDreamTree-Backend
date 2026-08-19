@@ -388,6 +388,22 @@ def segment(
     if not settings.seg_merge_clothing:
         valid_raw = sum(1 for p in parts if p.is_valid)
 
+    # ⚠️ clothing_ratio 게이트 — 병합이 **필요 없었던** 부위만 대상이다. 병합
+    #    없이도 이미 유효했는데, 흡수된 옷이 절반을 넘으면 오버레이 색칠은
+    #    그대로 두고 is_valid만 내린다. 병합으로 "살아난" 부위(원래 무효)는
+    #    병합이 곧 존재 이유이므로 건드리지 않는다.
+    if settings.seg_merge_clothing:
+        raw_valid = {p.class_name for p in raw_parts if p.is_valid}
+        for p in parts:
+            if (
+                p.is_valid
+                and p.class_name in raw_valid
+                and p.pixel_count > 0
+                and (p.clothing_pixel_count / p.pixel_count) > settings.seg_clothing_gate_ratio
+            ):
+                p.is_valid = False
+                p.invalid_reason = InvalidReason.MOSTLY_CLOTHING
+
     return SegmentationResult(
         map_png=encode_map_png(labels),
         # ⚠️ stat_labels 는 이미 계산된 병합 배열이다 — 인코딩만 한 번 더 한다.

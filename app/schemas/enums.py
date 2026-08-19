@@ -58,6 +58,7 @@ class InvalidReason(StrEnum):
     TOO_SMALL_RATIO = "TOO_SMALL_RATIO"
     TRUNCATED = "TRUNCATED"
     NOT_COMPARABLE = "NOT_COMPARABLE"
+    MOSTLY_CLOTHING = "MOSTLY_CLOTHING"
 
 
 class DomainStatus(StrEnum):

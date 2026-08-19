@@ -96,7 +96,7 @@ routes/analysis.py  GET /sessions/{id}/analysis  → 결과 조회
 
 2. **LLM 응답은 검증 후 부분 채택한다.** 부위 하나의 enum 이 깨졌다고 9부위를
    다 버리지 않는다 — 못 쓰는 부위만 FAILED, 나머지는 저장
-   (`services/vlm.py`). 점수(유사도)는 LLM 이 보내와도 **버리고** 코드가 규칙으로
+   (`services/vlm.py`). 점수(목표 근접도)는 LLM 이 보내와도 **버리고** 코드가 규칙으로
    계산한다 (`scoring.py`, score_source=RULE).
 
 3. **LLM 은 후보 안에서만 고른다.** 루틴 운동 선택(F10)·교체(F12)는 코드가

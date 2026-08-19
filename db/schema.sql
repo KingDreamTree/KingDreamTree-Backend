@@ -232,7 +232,8 @@ CREATE TABLE body_part_segment (
     is_valid         BOOLEAN       NOT NULL,
     invalid_reason   VARCHAR(30)
                      CHECK (invalid_reason IN ('TOO_SMALL', 'TOO_SMALL_RATIO',
-                                               'TRUNCATED', 'NOT_COMPARABLE')),
+                                               'TRUNCATED', 'NOT_COMPARABLE',
+                                               'MOSTLY_CLOTHING')),
     crop_bucket      VARCHAR(63),
     crop_path        VARCHAR(500),
     created_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),

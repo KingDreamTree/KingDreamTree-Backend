@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from app.schemas.enums import DomainStatus, PhotoKind
+from app.schemas.enums import DomainStatus, JobKind, PhotoKind
 from app.services import part_pairing
 from app.services.db import get_client, get_photo, get_segmentation, list_part_segments
 
@@ -220,7 +220,21 @@ def get_overall(session_id: UUID) -> dict[str, Any] | None:
 
 
 def clear_diagnoses(session_id: UUID) -> None:
-    """재분석 전 초기화. 부위·종합을 함께 지운다."""
+    """재분석 전 초기화. 부위·종합을 함께 지운다.
+
+    ⚠️ **진행 중인 VLM 잡을 먼저 내린다.** 지우기만 하면 이미 돌고 있던 잡이
+       자기 결과를 **삭제 뒤에** 기록해서 되살아난다 (queue.cancel_open_by_kind
+       주석의 사고 기록 참고). 취소를 호출자에게 맡겼더니 photos.py 는 하고
+       inbody.py 는 빠뜨렸다 — 그래서 여기로 옮겨 **잊을 수 없게** 만들었다.
+    """
+    # 순환 import 회피 — queue 는 db 를 쓰고 이 모듈도 db 를 쓴다.
+    from app.worker import queue
+
+    queue.cancel_open_by_kind(
+        session_id,
+        (JobKind.VLM_PART, JobKind.VLM_OVERALL),
+        "진단 입력이 바뀌어 취소되었습니다.",
+    )
     client = get_client()
     client.table("part_diagnosis").delete().eq("session_id", str(session_id)).execute()
     client.table("overall_diagnosis").delete().eq("session_id", str(session_id)).execute()

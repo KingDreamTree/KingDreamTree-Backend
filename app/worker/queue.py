@@ -402,6 +402,44 @@ def fail(job_id: UUID, error: str, retryable: bool = True) -> dict[str, Any] | N
     return _first(updated, job_id, "실패 기록")
 
 
+def cancel_open_by_kind(session_id: UUID, kinds: Iterable[JobKind], reason: str) -> int:
+    """세션의 특정 kind 중 아직 안 끝난 잡을 종결한다. 종결한 개수 반환.
+
+    ⚠️ **진단을 지울 때는 반드시 이걸 먼저 불러야 한다.** 진행 중인 잡은
+       자기 결과를 나중에 기록하므로, 지우기만 하면 **삭제 뒤에 되살아난다.**
+
+       실제로 났던 사고 (2026-08-19, 세션 277ede4e) —
+
+           05:51:52.8  VLM_PART 완료      part_diagnosis 5건 기록
+           05:51:54.5  인바디 업로드      clear_diagnoses()
+                                          part 5건 삭제 / overall 은 아직 없어 삭제 대상 없음
+           05:52:01.0  VLM_OVERALL 기록   overall 을 **삭제 뒤에** 새로 씀
+
+       결과는 part=0 · overall=DONE 이라는 불가능한 조합이었고, 가드③이
+       overall 만 보고 재실행을 건너뛰어 **영구히 복구되지 않았다.**
+       화면에는 모든 부위가 "진단을 준비하고 있어요" 로 남았다.
+
+    ⚠️ PROCESSING 도 같이 내린다. 이미 LLM 을 호출 중이더라도 그 결과는 지금
+       지우는 진단에 대한 것이라 저장되면 안 된다.
+    """
+    client = get_client()
+    kind_values = [str(k) for k in kinds]
+    rows = (
+        client.table("job")
+        .select("job_id")
+        .eq("session_id", str(session_id))
+        .in_("kind", kind_values)
+        .in_("status", list(OPEN_STATUSES))
+        .execute()
+        .data
+    )
+    for row in rows:
+        client.table("job").update(
+            {"status": JobStatus.FAILED, "error": reason, "finished_at": _now()}
+        ).eq("job_id", row["job_id"]).execute()
+    return len(rows)
+
+
 def cancel_open_for_photo(session_id: UUID, photo_id: UUID) -> int:
     """폐기된 사진을 가리키는 아직 안 끝난 잡을 종결한다. 종결한 개수 반환.
 

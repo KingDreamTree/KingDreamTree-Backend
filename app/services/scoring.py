@@ -156,6 +156,64 @@ DIRECTION_MAINTAIN = "MAINTAIN"
 DIRECTION_LIMITED = "LIMITED"
 
 
+def decide_direction_quick(mode_info: dict[str, Any]) -> dict[str, Any]:
+    """퀵 진단(웹캠 — 세그멘테이션 없음)용 개선 방향. **결정론적.**
+
+    decide_direction 을 쓰지 않는 이유: 저 함수는 부위 등급이 없으면 무조건
+    LIMITED("판단된 부위가 없어 방향을 정할 수 없습니다")를 돌려준다. 퀵 모드는
+    부위 등급이 **설계상** 없는 것이지 사진이 나빠서가 아니므로, 그 문구가
+    나가면 사용자에게 "재촬영하라"는 잘못된 신호가 된다.
+
+    퀵에서 방향의 근거는 둘뿐이다:
+        체지방률 규칙(있으면)  → 감량 병행 여부 — 루틴의 decide_mode 와 같은
+                                 규칙을 승계하므로 다음 화면과 어긋나지 않는다
+        전신 사진 관찰         → 문장은 LLM 이 쓰되, 판정은 여기서 끝난다
+
+    ⚠️ 부위별 우선순위는 만들지 않는다. 한 장을 훑어본 인상으로 특정 부위에
+       볼륨을 얹는 것은 "억지로 만든 부위 진단"이다 — 퀵 루틴은 전신 기본
+       볼륨 + 모드만 반영한다 (D10: 진단은 가중치이지 구성 요소가 아니다).
+    """
+    mode = str(mode_info.get("mode") or "BALANCE")
+    basis = str(mode_info.get("basis") or "NO_INBODY")
+    common = {
+        "mode": mode,
+        "mode_basis": basis,
+        "mode_reason": mode_info.get("reason"),
+    }
+
+    if mode == "CUT":
+        return {
+            **common,
+            "priority": DIRECTION_FAT_LOSS,
+            "reason": (
+                f"체지방률 기준({basis})으로 감량 병행이 유리한 상태라, "
+                "체지방 관리를 우선하면서 근력을 유지하는 방향입니다."
+            ),
+        }
+
+    if basis in ("BODY_FAT_MEASURED", "BODY_FAT_DERIVED"):
+        return {
+            **common,
+            "priority": DIRECTION_STRENGTH,
+            "reason": (
+                "체지방률 기준으로 감량이 급한 상태가 아니라, 사진에서 관찰된 "
+                "목표 체형과의 형태 차이를 기준으로 근력·형태 개선을 우선하는 방향입니다."
+            ),
+        }
+
+    # 인바디 없음 — 감량 필요 여부는 **판단하지 않는다** (몸을 잰 적이 없다).
+    # 근력 중심은 초보 전신 루틴의 안전한 기본값이고, 감량 단정과 달리
+    # 체성분 정보 없이 해도 되는 처방이다.
+    return {
+        **common,
+        "priority": DIRECTION_STRENGTH,
+        "reason": (
+            "체성분 정보가 없어 감량 필요 여부는 판단하지 않고, 목표 체형과의 "
+            "형태 차이를 기준으로 근력 중심의 기본 방향을 잡습니다."
+        ),
+    }
+
+
 def decide_direction(
     mode_info: dict[str, Any],
     parts: list[dict[str, Any]],

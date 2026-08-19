@@ -33,9 +33,10 @@ from app.schemas.analysis import (
     PartProgress,
     to_part_dto,
 )
-from app.schemas.enums import DomainStatus, JobKind, JobStatus
+from app.schemas.enums import DomainStatus, JobKind, JobStatus, PhotoKind
 from app.services import db, diagnosis_repo, inbody_repo
 from app.worker import queue
+
 
 def _overall_extra(row: dict[str, Any], key: str) -> Any:
     """F09 가 사진을 보고 낸 추가 판단 (silhouette / key_differences / confidence).
@@ -83,6 +84,63 @@ def _latest_job(session_id: UUID, kind: JobKind) -> dict[str, Any] | None:
 # --------------------------------------------------------------------------- #
 
 
+def _start_quick(session_id: UUID, force: bool) -> AnalysisStartResponse:
+    """퀵 진단 큐잉 — 세그멘테이션을 요구하지 않는다.
+
+    전제 조건은 **사진 2장의 존재**뿐이다. 세그가 없어도(웹캠 경로),
+    세그 잡이 아직 도는 중이어도 시작할 수 있다 — 그게 이 모드의 존재 이유다.
+
+    ⚠️ JobKind 는 VLM_OVERALL 을 재사용한다 (payload.mode="quick").
+       새 kind 는 job.kind 의 DB CHECK 에 걸린다 (핸들러 주석 참고).
+    """
+    for kind in (PhotoKind.REFERENCE, PhotoKind.USER):
+        if db.get_photo(session_id, kind) is None:
+            raise precondition_not_met(
+                "레퍼런스와 사용자 사진이 모두 있어야 진단할 수 있습니다.",
+                {"missing": str(kind)},
+            )
+
+    # 가드 — 어떤 진단이든 진행 중이면 새로 만들지 않는다 (풀·퀵 공용).
+    #   풀 분석이 도는 중에 퀵을 겹쳐 돌리면 overall_diagnosis(세션당 1행)를
+    #   두 작성자가 덮어쓴다. 어느 쪽이 이기든 화면은 반반 섞인 결과를 본다.
+    for kind in (JobKind.VLM_PART, JobKind.VLM_OVERALL):
+        open_job = queue.find_open(session_id, kind)
+        if open_job is not None:
+            return AnalysisStartResponse(
+                part_job_id=None,
+                overall_job_id=open_job["job_id"] if kind == JobKind.VLM_OVERALL else None,
+                part_count=0,
+                class_names=[],
+                part_jobs=[],
+                reused=True,
+            )
+
+    overall = diagnosis_repo.get_overall(session_id)
+    if not force and overall is not None and overall["status"] == DomainStatus.DONE:
+        return AnalysisStartResponse(
+            part_job_id=None,
+            overall_job_id=None,
+            part_count=0,
+            class_names=[],
+            part_jobs=[],
+            reused=True,
+        )
+
+    if force:
+        # 사진 모드의 부위 카드가 남아 있으면 퀵 결과와 섞여 보인다 — 같이 지운다.
+        diagnosis_repo.clear_diagnoses(session_id)
+
+    job = queue.enqueue(session_id, JobKind.VLM_OVERALL, {"mode": "quick"})
+    return AnalysisStartResponse(
+        part_job_id=None,
+        overall_job_id=job["job_id"],
+        part_count=0,
+        class_names=[],
+        part_jobs=[],
+        reused=False,
+    )
+
+
 @router.post(
     "/sessions/{session_id}/analysis",
     response_model=AnalysisStartResponse,
@@ -92,8 +150,23 @@ def _latest_job(session_id: UUID, kind: JobKind) -> dict[str, Any] | None:
 async def start_analysis(
     session: OwnedSession,
     force: Annotated[bool, Query(description="완료된 분석을 무시하고 다시 실행")] = False,
+    mode: Annotated[
+        str,
+        Query(
+            pattern="^(full|quick)$",
+            description=(
+                "full(기본) = 세그멘테이션 기반 부위별+종합. "
+                "quick = 웹캠 경로 — 세그 없이 원본 2장을 전체 형태로만 비교 "
+                "(부위 카드·점수 없음, 방향·루틴은 동일 규칙)"
+            ),
+        ),
+    ] = "full",
 ) -> AnalysisStartResponse:
     session_id = UUID(str(session["session_id"]))
+
+    if mode == "quick":
+        return _start_quick(session_id, force)
+
     context = diagnosis_repo.build_comparison_context(session_id)
 
     if not context["ready"]:
@@ -180,7 +253,13 @@ async def analysis_progress(session: OwnedSession) -> AnalysisProgressResponse:
     part_job = _latest_job(session_id, JobKind.VLM_PART)
     overall_job = _latest_job(session_id, JobKind.VLM_OVERALL)
 
-    part_status = JobStatus(part_job["status"]) if part_job else JobStatus.PENDING
+    # ⚠️ 퀵 모드(웹캠)는 VLM_PART 잡이 아예 없다. 그때 PENDING 을 돌려주면
+    #    프론트가 "부위 진단을 기다리는 중"으로 읽고 영원히 기다린다 —
+    #    부위 단계가 없는 모드이므로 종합 상태를 그대로 비춘다.
+    if part_job is None and overall_job is not None:
+        part_status = JobStatus(overall_job["status"])
+    else:
+        part_status = JobStatus(part_job["status"]) if part_job else JobStatus.PENDING
     overall_status = JobStatus(overall_job["status"]) if overall_job else JobStatus.PENDING
 
     # 종합까지 끝나야 결과 화면으로 넘어간다. 부위 진단이 끝나도 점수·요약이

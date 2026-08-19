@@ -105,8 +105,14 @@ def _store(
     img: Image.Image,
     is_mirrored: bool,
     extra: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """사진을 저장하고 세그 잡을 건다. (photo 행, job 행) 반환."""
+    enqueue_seg: bool = True,
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """사진을 저장하고 (기본) 세그 잡을 건다. (photo 행, job 행 | None) 반환.
+
+    enqueue_seg=False 는 **퀵 파이프라인(웹캠)** 용이다 — 그 경로는 Sapiens2 를
+    쓰지 않으므로 세그 잡을 걸면 GPU 워커가 없는 배포에서 PENDING 이 쌓이고,
+    stalled 힌트("아무도 안 집어감")가 멀쩡한 세션에 뜬다.
+    """
     # ⚠️ 거울 되돌리기를 **여기서** 한다 (예전엔 encode_photo 안에서 했다).
     #    아래 크롭이 랜드마크와 같은 좌표계에서 일어나야 하는데, extra 의
     #    랜드마크는 이미 언미러된 상태라 이미지도 먼저 맞춰야 한다.
@@ -145,8 +151,10 @@ def _store(
                 **extra,
             }
         )
-        job_kind = JobKind.SEG_REFERENCE if kind == PhotoKind.REFERENCE else JobKind.SEG_USER
-        job = queue.enqueue(session_id, job_kind, {"photo_id": photo["photo_id"]})
+        job = None
+        if enqueue_seg:
+            job_kind = JobKind.SEG_REFERENCE if kind == PhotoKind.REFERENCE else JobKind.SEG_USER
+            job = queue.enqueue(session_id, job_kind, {"photo_id": photo["photo_id"]})
     except Exception:
         try:
             if photo is not None:
@@ -203,6 +211,17 @@ async def upload_reference(
     is_mirrored: Annotated[
         bool, Form(description="거울로 촬영했는지. true면 서버가 좌우를 되돌려 저장한다")
     ] = False,
+    pipeline: Annotated[
+        str,
+        Form(
+            pattern="^(full|quick)$",
+            description=(
+                "full(기본) = 세그멘테이션 잡 등록. "
+                "quick = 웹캠 퀵 진단 경로 — Sapiens2 를 쓰지 않으므로 세그 잡을 "
+                "걸지 않는다 (응답 job_id 가 null). 이후 POST /analysis?mode=quick"
+            ),
+        ),
+    ] = "full",
 ) -> ReferencePhotoResponse:
     session_id = UUID(str(session["session_id"]))
 
@@ -224,6 +243,7 @@ async def upload_reference(
             "pose_person_area_ratio": pose_person_area_ratio,
             "multi_person": multi_person,
         },
+        enqueue_seg=(pipeline != "quick"),
     )
 
     url, expires_at = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
@@ -235,7 +255,7 @@ async def upload_reference(
         pose_scale_basis=pose_scale_basis,
         was_mirrored=is_mirrored,
         created_at=str(photo["created_at"]),
-        job_id=str(job["job_id"]),
+        job_id=str(job["job_id"]) if job else None,
         pose_landmarks=landmarks,
         signed_url=url,
         signed_url_expires_at=expires_at.isoformat(),
@@ -324,6 +344,17 @@ async def upload_user_photo(
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
     multi_person: Annotated[bool, Form()] = False,
     is_mirrored: Annotated[bool, Form()] = False,
+    pipeline: Annotated[
+        str,
+        Form(
+            pattern="^(full|quick)$",
+            description=(
+                "full(기본) = 세그멘테이션 잡 등록. "
+                "quick = 웹캠 퀵 진단 경로 — Sapiens2 를 쓰지 않으므로 세그 잡을 "
+                "걸지 않는다 (응답 job_id 가 null). 이후 POST /analysis?mode=quick"
+            ),
+        ),
+    ] = "full",
 ) -> UserPhotoResponse:
     session_id = UUID(str(session["session_id"]))
 
@@ -400,6 +431,7 @@ async def upload_user_photo(
             "pose_person_area_ratio": pose_person_area_ratio,
             "multi_person": multi_person,
         },
+        enqueue_seg=(pipeline != "quick"),
     )
 
     return UserPhotoResponse(
@@ -410,7 +442,7 @@ async def upload_user_photo(
         pose_scale_basis=pose_scale_basis,
         was_mirrored=is_mirrored,
         created_at=str(photo["created_at"]),
-        job_id=str(job["job_id"]),
+        job_id=str(job["job_id"]) if job else None,
         capture_source=capture_source,
         pose_similarity=pose_similarity,
         framing_score=framing_score,

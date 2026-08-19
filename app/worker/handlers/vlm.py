@@ -355,9 +355,7 @@ _LIMIT_MESSAGE = {
 }
 
 
-def _comparison_limitations(
-    rows: list[dict[str, Any]], session_id: UUID
-) -> list[str]:
+def _comparison_limitations(rows: list[dict[str, Any]], session_id: UUID) -> list[str]:
     """이번 비교에서 **무엇을 못 봤는지**를 데이터에서 만든다.
 
     두 종류를 합친다:
@@ -430,7 +428,128 @@ def _body_shares(session_id: UUID) -> dict[str, Any]:
     return out
 
 
+def _photo_jpeg_for_vlm(session_id: UUID, kind: PhotoKind) -> bytes | None:
+    """원본 사진을 VLM 전송 크기로. 없으면 None.
+
+    ⚠️ 세그멘테이션 경로(_load_side)를 쓰지 않는다 — 저긴 segmentation 행과
+       라벨 맵이 필수다. 퀵은 photo 행만으로 산다. 리사이즈는 같은 헬퍼
+       (segmap.fit_for_vlm)를 태워 두 모드가 같은 화질 규칙을 갖게 한다.
+    """
+    photo = db.get_photo(session_id, kind)
+    if photo is None:
+        return None
+    raw = storage.download(photo["storage_bucket"], photo["storage_path"])
+    img = Image.open(io.BytesIO(raw)).convert("RGB")
+    img = segmap.fit_for_vlm(img)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=90)
+    return buf.getvalue()
+
+
+def _diagnose_quick(job: dict[str, Any]) -> dict[str, Any]:
+    """퀵 진단 — 웹캠 경로. 사진 2장 → 전체 형태 비교 1회 → overall_diagnosis.
+
+    사진 모드와의 차이 (전부 의도된 것):
+        부위 카드          없음 — 세그멘테이션이 없으니 만들지 않는다
+        유사도 점수        없음 — 부위 등급이 없어 RULE 합산이 성립하지 않는다.
+                           score_rationale 에 사유를 남긴다 (숨기지 않는다)
+        priority_parts     빈 배열 — 한 장을 훑어본 인상으로 특정 부위에 볼륨을
+                           얹지 않는다. 루틴은 전신 기본 볼륨 + 모드(인바디 규칙)
+        개선 방향          scoring.decide_direction_quick — decide_direction 은
+                           부위가 없으면 LIMITED("재촬영하세요" 신호)를 내는데
+                           퀵은 설계상 부위가 없는 것이라 문구가 틀리다
+
+    같은 것: 저장 테이블(overall_diagnosis)·조회 경로(GET /analysis)·
+    루틴 소비(mode 는 같은 decide_mode 규칙) — 프론트는 모드를 구분하지 않아도 된다.
+    """
+    session_id = UUID(str(job["session_id"]))
+
+    ref_photo = _photo_jpeg_for_vlm(session_id, PhotoKind.REFERENCE)
+    user_photo = _photo_jpeg_for_vlm(session_id, PhotoKind.USER)
+    if ref_photo is None or user_photo is None:
+        # 퀵의 근거는 사진뿐이다. 없으면 재시도해도 같으므로 즉시 종결.
+        raise InputNotUsableError("퀵 진단에는 레퍼런스·사용자 사진이 모두 필요합니다.")
+
+    inbody, inbody_source = _inbody_for(session_id)
+    mode_info = routine_mode.decide_mode(inbody)
+    direction = scoring.decide_direction_quick(mode_info)
+    cut_notice = CUT_NOTICE if str(mode_info.get("mode")) == "CUT" else None
+    log.info(
+        "퀵 진단 시작 — 방향 %s · 모드 %s(%s) · 인바디 %s",
+        direction["priority"],
+        direction["mode"],
+        direction["mode_basis"],
+        inbody_source,
+    )
+
+    result = asyncio.run(
+        vlm.diagnose_quick(
+            reference_photo=ref_photo,
+            user_photo=user_photo,
+            inbody=inbody,
+            direction=direction,
+            cut_notice=cut_notice,
+        )
+    )
+
+    diagnosis_repo.upsert_overall(
+        session_id,
+        {
+            "status": str(DomainStatus.DONE),
+            # ⚠️ 점수 없음은 실패가 아니라 이 모드의 정직한 상태다. NULL + 사유.
+            "similarity_score": None,
+            "score_source": str(ScoreSource.RULE),
+            "score_rationale": "퀵 진단(웹캠) — 부위별 등급이 없어 점수를 계산하지 않습니다.",
+            "summary": result["summary"],
+            "priority_parts": [],
+            "strengths": result["strengths"],
+            "cautions": result["cautions"],
+            "raw_response": {
+                "mode": "QUICK",
+                "llm": result.get("raw_response"),
+                # GET /analysis 의 _overall_extra 가 읽는 키들 — 사진 모드와 동일 배치.
+                "silhouette": result.get("silhouette"),
+                "key_differences": result.get("key_differences") or [],
+                "confidence": result.get("confidence"),
+                "comparison_limitations": [
+                    "웹캠 촬영 1장 기준의 전체 형태 비교입니다. 부위별 정밀 비교는 "
+                    "사진 업로드 분석에서 제공됩니다."
+                ],
+                "user_profile": result.get("user_profile"),
+                "reference_profile": result.get("reference_profile"),
+                "realistic_direction": {
+                    "priority": direction["priority"],
+                    "reason": direction["reason"],
+                    "summary": result.get("direction_summary"),
+                },
+                "exercise_strategy": {
+                    "mode": direction["mode"],
+                    "mode_basis": direction["mode_basis"],
+                    "mode_reason": direction.get("mode_reason"),
+                    "focus": result.get("strategy_focus") or [],
+                    "next_cycle": result.get("next_cycle"),
+                },
+                **_call_meta(result.get("raw_response") or {}),
+            },
+        },
+    )
+
+    return {
+        "mode": "quick",
+        "inbody": inbody_source,
+        "direction": direction["priority"],
+        "photos": "2",
+    }
+
+
 def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
+    # ⚠️ 퀵 모드(웹캠 — 세그멘테이션 없음)는 같은 JobKind 를 쓴다. 새 kind 를
+    #    만들면 job.kind 의 DB CHECK 에 걸린다(실측 23514 — PostgREST 로는 DDL 을
+    #    못 돌린다). payload.mode 로 갈라도 워커 풀·배포 구성·좀비 회수가 전부
+    #    그대로 동작한다 — VLM_OVERALL 을 처리하는 워커가 퀵도 처리한다.
+    if (job.get("payload") or {}).get("mode") == "quick":
+        return _diagnose_quick(job)
+
     session_id = UUID(str(job["session_id"]))
     rows = diagnosis_repo.list_part_diagnoses(session_id)
     if not rows:
@@ -470,7 +589,9 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             ref_photo, _, _ = _load_side(context, PhotoKind.REFERENCE)
             user_photo, _, _ = _load_side(context, PhotoKind.USER)
     except Exception:  # noqa: BLE001
-        log.warning("종합 진단용 사진을 준비하지 못했습니다 — 텍스트 전용으로 진행합니다", exc_info=True)
+        log.warning(
+            "종합 진단용 사진을 준비하지 못했습니다 — 텍스트 전용으로 진행합니다", exc_info=True
+        )
 
     log.info("종합 진단 입력: 사진 %s", "2장" if ref_photo and user_photo else "없음(폴백)")
 

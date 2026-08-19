@@ -388,21 +388,22 @@ def segment(
     if not settings.seg_merge_clothing:
         valid_raw = sum(1 for p in parts if p.is_valid)
 
-    # ⚠️ clothing_ratio 게이트 — 병합이 **필요 없었던** 부위만 대상이다. 병합
-    #    없이도 이미 유효했는데, 흡수된 옷이 절반을 넘으면 오버레이 색칠은
-    #    그대로 두고 is_valid만 내린다. 병합으로 "살아난" 부위(원래 무효)는
-    #    병합이 곧 존재 이유이므로 건드리지 않는다.
-    if settings.seg_merge_clothing:
-        raw_valid = {p.class_name for p in raw_parts if p.is_valid}
-        for p in parts:
-            if (
-                p.is_valid
-                and p.class_name in raw_valid
-                and p.pixel_count > 0
-                and (p.clothing_pixel_count / p.pixel_count) > settings.seg_clothing_gate_ratio
-            ):
-                p.is_valid = False
-                p.invalid_reason = InvalidReason.MOSTLY_CLOTHING
+    # ⚠️ clothing_ratio 게이트 — 2026-08-19에 껐다. DB body_part_segment의
+    #    invalid_reason CHECK 제약이 MOSTLY_CLOTHING을 몰라서 매 세그멘테이션
+    #    잡이 새 값을 쓰려다 23514(제약 위반)로 죽었다 — 프로덕션 장애
+    #    (refit.live 업로드 2건 실패). DB 마이그레이션(db/migrations/)을
+    #    반영한 뒤에만 다시 켤 것. 로직 자체는 segmenter.py git 이력에 남아있다.
+    # if settings.seg_merge_clothing:
+    #     raw_valid = {p.class_name for p in raw_parts if p.is_valid}
+    #     for p in parts:
+    #         if (
+    #             p.is_valid
+    #             and p.class_name in raw_valid
+    #             and p.pixel_count > 0
+    #             and (p.clothing_pixel_count / p.pixel_count) > settings.seg_clothing_gate_ratio
+    #         ):
+    #             p.is_valid = False
+    #             p.invalid_reason = InvalidReason.MOSTLY_CLOTHING
 
     return SegmentationResult(
         map_png=encode_map_png(labels),

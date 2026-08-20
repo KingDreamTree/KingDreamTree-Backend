@@ -148,6 +148,32 @@ def rule_merge() -> None:
     check("이전 배율은 승계된다 (버전이 바뀌어도)", kept == {"ref-x": 0.9})
 
 
+def rule_persistence() -> None:
+    """배율이 **DB 에 남고 버전이 바뀌어도 살아남는가.**
+
+    ⚠️ 이게 이 기능의 진짜 실패 지점이다. 계산이 맞아도 배율이 유실되면
+       사용자는 "무겁다고 말했는데 다음에 또 그 무게"를 보게 된다.
+       raw_response 를 통째로 갈아치우는 곳이 **세 군데**라 각각 확인한다.
+    """
+    print("\n7. 배율이 버전 전환에서 살아남는가 (유실 지점 3곳)")
+    root = Path(__file__).resolve().parent.parent
+
+    coach = (root / "app/routes/coach_chat.py").read_text(encoding="utf-8")
+    check("① 코치챗 apply 가 배율을 병합·저장", '"load_adjust": _merged_load_adjust(' in coach)
+
+    handler = (root / "app/worker/handlers/routine.py").read_text(encoding="utf-8")
+    # ⚠️ 문자열 검사인 이유 — 이 두 곳은 실제 LLM·DB 왕복이라 단위 검사로
+    #    태우기 어렵다. 대신 "승계 줄이 사라지면 잡힌다"만 보장한다.
+    check(
+        "② 수행 피드백 패치(_patch)가 배율을 승계",
+        '"load_adjust": (row.get("raw_response") or {}).get("load_adjust")' in handler,
+    )
+    check("③ 재생성(_generate)이 이전 버전 배율을 물려받음", '"load_adjust": carried_load_adjust' in handler)
+
+    routes = (root / "app/routes/routines.py").read_text(encoding="utf-8")
+    check("조회가 저장된 배율을 실제로 읽음", '.get("load_adjust")' in routes)
+
+
 def main() -> int:
     print("시작 중량 가이드 검증\n")
     rule_no_guess()
@@ -156,6 +182,7 @@ def main() -> int:
     rule_adjust()
     rule_gender()
     rule_merge()
+    rule_persistence()
 
     print()
     if _failures:

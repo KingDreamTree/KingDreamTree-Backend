@@ -160,6 +160,13 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
 
     priority_parts, asymmetric, has_diagnosis = _diagnosis_inputs(session_id)
     inbody_row = inbody_repo.latest_done(session_id)
+    # ⚠️ 시작 중량 배율을 **이전 버전에서 물려받는다** (#106 과 같은 종류의 구멍).
+    #    금기가 그랬듯, _patch 에서만 승계하고 여기를 빠뜨리면 "무겁다고 해서
+    #    낮춤 → 운동 일수 변경(재생성)" 경로에서 무게가 조용히 원복된다.
+    #    ⚠️ activate() 는 이 함수 끝에서 부르므로 지금 get_active 는 아직
+    #       **이전** 루틴을 가리킨다. 첫 생성이면 None → 빈 배율.
+    prev = routine_repo.get_active(session_id)
+    carried_load_adjust = (prev or {}).get("raw_response", {}).get("load_adjust") or {}
 
     log.info(
         "루틴 생성 시작 — %d일 / 우선부위 %s / 인바디 %s",
@@ -211,6 +218,8 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                     # 나중에 읽어도 그때의 근거 그대로다.
                     "strategy": plan["strategy"],
                     "selection": plan["selection"],
+                    # 이전 버전에서 물려받은 무게 배율 (위 carried_load_adjust 주석).
+                    "load_adjust": carried_load_adjust,
                 },
                 "status": str(DomainStatus.DONE),
             },
@@ -374,6 +383,10 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
                     #    (2026-08-18 실측). 피드백 패치는 모드·가중 근거를 다시
                     #    계산하지 않으므로 이전 버전 설명이 여전히 맞는 말이다.
                     "strategy": (row.get("raw_response") or {}).get("strategy"),
+                    # ⚠️ 시작 중량 배율도 같은 이유로 승계한다. 안 옮기면 "무겁다고
+                    #    해서 낮춘 무게"가 다음 피드백 한 번에 조용히 원복된다 —
+                    #    사용자는 자기가 말한 게 무시됐다고 느낀다.
+                    "load_adjust": (row.get("raw_response") or {}).get("load_adjust") or {},
                 },
                 "status": str(DomainStatus.DONE),
             },

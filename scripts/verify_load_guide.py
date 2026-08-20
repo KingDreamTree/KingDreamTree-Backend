@@ -130,7 +130,7 @@ def rule_gender() -> None:
 
 def rule_merge() -> None:
     print("\n6. 배율 병합 — 곱하지 않고 덮어쓴다")
-    from app.routes.coach_chat import _merged_load_adjust
+    from app.services.coach_chat import merge_load_adjust
 
     routine = {"raw_response": {"load_adjust": {"ref-a": 0.8}}}
     applied = [
@@ -139,12 +139,12 @@ def rule_merge() -> None:
         {"function": "adjust_intensity", "args": {"sets_delta": 1}},  # 무게 언급 없음
         {"function": "replace_exercise", "args": {"load_scale": 0.5}},  # 다른 도구
     ]
-    merged = _merged_load_adjust(routine, applied)
+    merged = merge_load_adjust(routine, applied)
     check("같은 운동을 또 낮춰도 0.64 가 되지 않음", merged["ref-a"] == 0.8, str(merged))
     check("새 운동 배율이 추가됨", merged["ref-b"] == 1.2)
     check("무게 언급 없는 조정은 안 들어감", len(merged) == 2, str(merged))
 
-    kept = _merged_load_adjust({"raw_response": {"load_adjust": {"ref-x": 0.9}}}, [])
+    kept = merge_load_adjust({"raw_response": {"load_adjust": {"ref-x": 0.9}}}, [])
     check("이전 배율은 승계된다 (버전이 바뀌어도)", kept == {"ref-x": 0.9})
 
 
@@ -159,16 +159,32 @@ def rule_persistence() -> None:
     root = Path(__file__).resolve().parent.parent
 
     coach = (root / "app/routes/coach_chat.py").read_text(encoding="utf-8")
-    check("① 코치챗 apply 가 배율을 병합·저장", '"load_adjust": _merged_load_adjust(' in coach)
+    check("① 코치챗 apply 가 배율을 병합·저장", "merge_load_adjust(routine, applied)" in coach)
 
     handler = (root / "app/worker/handlers/routine.py").read_text(encoding="utf-8")
     # ⚠️ 문자열 검사인 이유 — 이 두 곳은 실제 LLM·DB 왕복이라 단위 검사로
-    #    태우기 어렵다. 대신 "승계 줄이 사라지면 잡힌다"만 보장한다.
+    #    태우기 어렵다. 대신 "그 줄이 사라지면 잡힌다"만 보장한다.
     check(
-        "② 수행 피드백 패치(_patch)가 배율을 승계",
-        '"load_adjust": (row.get("raw_response") or {}).get("load_adjust")' in handler,
+        "② 한 방 피드백(_patch)이 새 배율을 **병합**한다 (승계만 하면 안 된다)",
+        "merge_load_adjust(row, applied)" in handler,
     )
     check("③ 재생성(_generate)이 이전 버전 배율을 물려받음", '"load_adjust": carried_load_adjust' in handler)
+
+    # ⚠️ 프롬프트가 금지하면 도구가 있어도 LLM 이 안 쓴다 — 실측으로 겪었다.
+    patch_prompt = (root / "app/prompts/routine_patch.py").read_text(encoding="utf-8")
+    check("한 방 피드백 프롬프트가 load_scale 사용을 안내", "load_scale" in patch_prompt)
+    check(
+        "«세트·횟수·휴식으로만» 같은 전면 금지 문구가 남아있지 않음",
+        "휴식으로만 조정한다" not in patch_prompt,
+    )
+    chat_prompt = (root / "app/prompts/coach_chat.py").read_text(encoding="utf-8")
+    check("코치 대화 프롬프트도 load_scale 안내", "load_scale" in chat_prompt)
+
+    # 두 경로가 **같은 도구 객체**를 쓰는가 (복사하면 한쪽만 바뀐다)
+    from app.prompts.routine_patch import TOOLS as PATCH_TOOLS
+
+    adj = next(t for t in PATCH_TOOLS if t["function"]["name"] == "adjust_intensity")
+    check("한 방 피드백 도구에도 load_scale 인자가 있음", "load_scale" in adj["function"]["parameters"]["properties"])
 
     routes = (root / "app/routes/routines.py").read_text(encoding="utf-8")
     check("조회가 저장된 배율을 실제로 읽음", '.get("load_adjust")' in routes)

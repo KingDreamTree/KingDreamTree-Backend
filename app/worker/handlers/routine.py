@@ -383,10 +383,11 @@ def _patch(job: dict[str, Any]) -> dict[str, Any]:
                     #    (2026-08-18 실측). 피드백 패치는 모드·가중 근거를 다시
                     #    계산하지 않으므로 이전 버전 설명이 여전히 맞는 말이다.
                     "strategy": (row.get("raw_response") or {}).get("strategy"),
-                    # ⚠️ 시작 중량 배율도 같은 이유로 승계한다. 안 옮기면 "무겁다고
-                    #    해서 낮춘 무게"가 다음 피드백 한 번에 조용히 원복된다 —
-                    #    사용자는 자기가 말한 게 무시됐다고 느낀다.
-                    "load_adjust": (row.get("raw_response") or {}).get("load_adjust") or {},
+                    # ⚠️ 시작 중량 배율은 **승계 + 이번 피드백 병합**이다 (2026-08-20).
+                    #    승계만 하던 때는 "무거웠어요"라고 써도 배율이 저장되지
+                    #    않아 다음 화면에 그대로 같은 무게가 떴다 — 사용자는 자기가
+                    #    말한 게 무시됐다고 느낀다. 코치 대화와 **같은 함수**를 쓴다.
+                    "load_adjust": coach_chat.merge_load_adjust(row, applied),
                 },
                 "status": str(DomainStatus.DONE),
             },

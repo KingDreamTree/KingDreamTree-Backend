@@ -181,6 +181,34 @@ def validate_tool_call(
 # --------------------------------------------------------------------------- #
 
 
+def merge_load_adjust(
+    routine: dict[str, Any], applied: list[dict[str, Any]]
+) -> dict[str, float]:
+    """이전 배율 + 이번 피드백의 load_scale 을 합친다 (exercise_ref → 배율).
+
+    ⚠️ **두 피드백 경로가 공유한다** — 한 방 피드백(ROUTINE_PATCH)과 코치
+       대화(F12-b). 한쪽에만 두면 다른 쪽에서 무게 피드백이 조용히 버려진다
+       (실측 2026-08-20: 한 방 피드백이 그 상태였다).
+
+    ⚠️ **곱하지 않고 덮어쓴다.** 0.8 을 두 번 받으면 0.64 가 되는데, 사용자는
+       "무겁다"고 두 번 말했을 뿐 절반으로 줄이라고 한 적이 없다. 매번 마지막
+       판단을 쓰고, 폭주는 load_guide 의 _ADJUST_RANGE 가 한 번 더 막는다.
+
+    ⚠️ 키가 exercise_ref 인 이유 — 운동 이름은 교체·번역으로 바뀔 수 있지만
+       ref 는 카탈로그 식별자라 안정적이다. ref 를 못 찾으면 그 항목은 버린다.
+    """
+    merged = dict((routine.get("raw_response") or {}).get("load_adjust") or {})
+    for item in applied:
+        if item.get("function") != "adjust_intensity":
+            continue
+        args = item.get("args") or {}
+        scale, ref = args.get("load_scale"), args.get("exercise_ref")
+        if scale is None or not ref:
+            continue
+        merged[str(ref)] = float(scale)
+    return merged
+
+
 def apply_changes_to_days(
     days: list[dict[str, Any]],
     tool_calls: list[dict[str, Any]],

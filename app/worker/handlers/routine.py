@@ -39,6 +39,7 @@ from app.services import (
     routine_repo,
 )
 from app.services.db import get_client
+from app.services.routine_templates import join_notices
 from app.worker.registry import HANDLERS, register, register_preflight
 
 log = logging.getLogger("worker.routine")
@@ -100,9 +101,13 @@ class RoutineInputError(RuntimeError):
 # --------------------------------------------------------------------------- #
 
 
-#: 진단 없이 만들어진 루틴에 붙이는 안내. build_routine 이 만드는 SEVEN_DAY_NOTICE·
-#: CUT_NOTICE 와 같은 방식으로 notice 문자열에 이어붙인다.
-_NO_DIAGNOSIS_NOTICE = "체형 비교 진단 없이 생성된 기본 루틴입니다. 진단을 완료하면 약점 부위에 맞춰 다시 만들어드려요."
+#: 진단 없이 만들어진 루틴에 붙이는 안내. build_routine 이 만드는 다른 안내들과
+#: 같은 (소제목, 본문) 형식이다 — 화면에서 나눠 그릴 수 있어야 한다.
+_NO_DIAGNOSIS_NOTICE_TITLE = "진단 없이 만든 기본 루틴이에요"
+_NO_DIAGNOSIS_NOTICE = (
+    "체형 비교 진단 없이 생성된 기본 루틴입니다. "
+    "진단을 완료하면 약점 부위에 맞춰 다시 만들어드려요."
+)
 
 
 def _diagnosis_inputs(session_id: UUID) -> tuple[list[str], list[str], bool]:
@@ -195,11 +200,14 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
         plan["days"], _ = contraindication.enforce(plan["days"], existing_cx)
         routine_repo.replace_days(month_routine_id, plan["days"], days_per_week)
 
-        notice = plan["notice"]
+        notices = list(plan.get("notices") or [])
         if not has_diagnosis:
             # 진단이 아예 없어서 개인화 없이 나온 기본 볼륨 루틴이다 — 그렇다는
             # 표시 없이 나가면 "맞춤 루틴"으로 보인다 (실측, 모듈 상단 참고).
-            notice = f"{notice} {_NO_DIAGNOSIS_NOTICE}" if notice else _NO_DIAGNOSIS_NOTICE
+            notices.append(
+                {"title": _NO_DIAGNOSIS_NOTICE_TITLE, "body": _NO_DIAGNOSIS_NOTICE}
+            )
+        notice = join_notices(notices)
 
         routine_repo.update_routine(
             month_routine_id,
@@ -212,6 +220,9 @@ def _generate(job: dict[str, Any]) -> dict[str, Any]:
                     "mode_basis": plan["mode_basis"],
                     "mode_reason": plan["mode_reason"],
                     "notice": notice,
+                    # ⚠️ 구조까지 저장한다. notice 문자열만 두면 화면이 소제목을
+                    #    다시 파싱해야 하고, 파싱 규칙이 어긋나면 조용히 깨진다.
+                    "notices": notices,
                     "boosts": plan["boosts"],
                     "weekly_sets": plan["weekly_sets"],
                     # «4주간 핵심 목표» 상자 본문. 생성 시점의 루틴에서 조립했으므로

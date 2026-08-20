@@ -81,6 +81,10 @@ def _detail(routine: dict) -> RoutineDetailResponse:
             **routine_repo.progress(month_routine_id, routine["exercise_days_per_week"], session_id)
         ),
         notice=(routine.get("raw_response") or {}).get("notice"),
+        # ⚠️ 이 필드 이전에 만들어진 루틴에는 notices 가 없다 — 그때는 빈 목록이고
+        #    화면이 notice(문자열)로 폴백한다. 여기서 문자열을 다시 쪼개지 않는다:
+        #    파싱 규칙이 어긋나면 조용히 깨지고, 옛 루틴엔 소제목 자체가 없다.
+        notices=(routine.get("raw_response") or {}).get("notices") or [],
         # ⚠️ 전용 컬럼이 아니라 raw_response 안에 있다 (생성 시 통째로 저장된다).
         strategy=(routine.get("raw_response") or {}).get("strategy"),
         disclaimer=DISCLAIMER,

@@ -513,50 +513,38 @@ _SIDE_WORDS = ("왼", "오른", "좌측", "우측")
 
 
 def _unify_pairs(results: dict[str, dict[str, Any]]) -> None:
-    """좌우 쌍의 판정·문장을 하나로 맞춘다 (제자리 수정).
+    """좌우 쌍의 **우선순위만** 맞춘다 (제자리 수정). 문장은 손대지 않는다.
 
-    ⚠️ **좌우를 다르게 쓰게 하는 것을 포기한 결과다.** 반복 측정(eval_diagnosis.py,
-       5회)에서 좌우 상완 문장 중복이 4회 나왔다. 프롬프트로 4번 다르게 만들려
-       했지만 실측 좌우 차이가 3% 안쪽이면 **애초에 다르게 쓸 재료가 없다** —
-       없는 차이를 지어내라고 시키고 있었던 셈이다. 같게 쓰는 것이 정직하다.
+    ⚠️ **2026-08-20 개정 — 문장 통일을 걷어냈다.** 종전에는 좌우 쌍의
+       assessment 를 한쪽 문장으로 덮어썼다. 그 규칙 때문에 프롬프트도 «양쪽»을
+       주어로 쓰라고 요구했는데, 부작용이 실측으로 드러났다:
 
-    ⚠️ **한쪽을 가리키는 문장은 복사하지 않는다.** "왼팔 상완이 가늡니다"를
-       오른팔 행에 넣으면 중복이 아니라 **틀린 문장**이 된다. 그건 중복보다 나쁘다.
-       그 경우 그대로 두고 로그만 남긴다 (프롬프트가 «양쪽» 주어를 요구한다).
+         · 오른쪽 위팔 카드가 **왼팔 인바디 수치**("왼팔 근육량이 평균의 …%")를
+           그대로 달고 나갔다. 인바디는 좌우가 다른 값인데 문장만 복사된 것이다.
+         · 사용자는 «왼쪽 위팔» 카드 하나를 눌러 보고 있는데 "양쪽 위팔은…"
+           이라고 하니 지금 무엇을 보고 있는지가 흐려졌다.
 
-    ⚠️ gap_level 이 서로 다르면 손대지 않는다 — 좌우가 실제로 다른 경우이고,
-       그때는 문장도 달라야 한다.
+       좌우를 묶어 부르는 것은 **종합 진단의 몫**이다 (거기서 한 번만 «양쪽»
+       으로 합친다 — 화면 헤드라인도 그 값을 쓴다). 부위 카드는 자기 부위를 말한다.
+
+    ⚠️ priority 는 계속 맞춘다 — 우선순위는 «어느 부위부터 볼까»의 순서라
+       좌우가 같은 부위면 같은 순위인 게 맞고, 루틴 볼륨 가중도 그렇게 읽는다.
+       gap_level 이 서로 다르면(좌우가 실제로 다른 경우) 손대지 않는다.
     """
     for left, part in list(results.items()):
         if not left.startswith("Left_"):
             continue
-        right = "Right_" + left[len("Left_") :]
-        other = results.get(right)
+        other = results.get("Right_" + left[len("Left_") :])
         if other is None:
             continue
-
         if part.get("gap_level") != other.get("gap_level"):
             continue  # 좌우가 실제로 다르게 판정됐다. 그대로 둔다.
 
-        a, b = part.get("assessment"), other.get("assessment")
-        if not a or not b or a == b:
-            continue
-
-        # 기준 문장은 **더 긴 쪽**이다 (짧은 쪽이 대개 정보가 적다).
-        # 길이가 같으면 왼쪽 — 같은 입력이면 같은 결과가 나오도록.
-        # ⚠️ 심각도(gap_level)로 고르지 않는다. 여기까지 온 시점에 좌우
-        #    gap_level 은 이미 같다(위에서 다르면 continue). 심각도 비교는
-        #    할 일이 없어서 _GAP_SEVERITY 상수를 지웠다 (2026-08-17).
-        source = part if len(a) >= len(b) else other
-        text = source["assessment"]
-        if any(w in text for w in _SIDE_WORDS):
-            log.info("%s/%s 좌우 통일 보류 — 문장이 한쪽을 가리킴", left, right)
-            continue
-
-        log.info("%s/%s 좌우 문장 통일", left, right)
-        for target in (part, other):
-            target["assessment"] = text
-            target["priority"] = source.get("priority")
+        # 더 앞선(작은) 순위로 맞춘다 — 한쪽만 뒤로 밀리면 루틴 가중이 갈린다.
+        picks = [x.get("priority") for x in (part, other) if isinstance(x.get("priority"), int)]
+        if picks:
+            best = min(picks)
+            part["priority"] = other["priority"] = best
 
 
 def parse_part_response(

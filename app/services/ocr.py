@@ -163,6 +163,7 @@ def validate_inbody(raw: dict[str, Any]) -> dict[str, Any]:
     checks.append(_check_body_fat_percentage(raw))
     checks.extend(_check_segment_ranges(raw))
     checks.extend(_check_symmetry(raw))
+    checks.extend(_check_percentage_columns(raw))
 
     return {
         "ok": all(c["level"] != "WARN" for c in checks),
@@ -408,6 +409,44 @@ def _check_body_fat_percentage(raw: dict) -> dict[str, Any]:
     if not weight or fat is None or pct is None:
         return _skip("BODY_FAT_PCT", "체중·체지방량·체지방률 중 누락이 있어 건너뜀")
     return _compare("BODY_FAT_PCT", fat / weight * 100, pct, "체지방률")
+
+
+def _check_percentage_columns(raw: dict) -> list[dict[str, Any]]:
+    """근육 표와 체지방 표를 **섞어 읽었는지** 본다.
+
+    ⚠️ 실제로 난 사고다 (2026-08-20). 결과지의 [부위별근육분석]과
+       [부위별체지방분석]은 5행 막대표라 생김새가 같은데, OCR 프롬프트에서
+       규모 힌트(`예: 90.6` / `예: 108.0`)를 빼자 모델이 두 표를 구분하지
+       못하고 **체지방 %를 근육량 % 자리에 넣었다.** 그 값이 그대로 부위
+       진단문에 "근육량이 평균의 112.7%"로 나갔다 — 사용자 실제 값은 87%.
+
+    판별 근거는 «같은 부위에서 두 %가 정확히 같다»는 것 하나다. 근육량 표준
+    대비와 체지방 표준 대비가 소수점까지 일치할 확률은 사실상 없다.
+
+    ⚠️ 값을 고치지 않는다. 어느 쪽이 맞는지 코드는 모른다 — WARN 만 남겨
+       "이 인바디는 믿지 말라"고 표시하고, 사용자가 PATCH 로 고칠 수 있게 둔다
+       (검증 실패가 INSERT 를 막지 않는다는 모듈 원칙).
+    """
+    segments = raw.get("segments") or {}
+    results = []
+    for segment in _SEGMENT_RANGE:
+        seg = segments.get(segment) or {}
+        lean, fat = seg.get("lean_percentage"), seg.get("fat_percentage")
+        if lean is None or fat is None or lean != fat:
+            continue
+        results.append(
+            {
+                "rule": f"percentage_columns_{segment.lower()}",
+                "level": "WARN",
+                "message": (
+                    f"{segment} 의 근육량·체지방 표준 대비가 둘 다 {lean}% 로 같습니다 — "
+                    "결과지의 두 표를 섞어 읽었을 가능성이 큽니다. 값을 확인해주세요."
+                ),
+                "lean_percentage": lean,
+                "fat_percentage": fat,
+            }
+        )
+    return results
 
 
 def _check_segment_ranges(raw: dict) -> list[dict[str, Any]]:

@@ -90,8 +90,14 @@ def _start_quick(session_id: UUID, force: bool) -> AnalysisStartResponse:
     전제 조건은 **사진 2장의 존재**뿐이다. 세그가 없어도(웹캠 경로),
     세그 잡이 아직 도는 중이어도 시작할 수 있다 — 그게 이 모드의 존재 이유다.
 
-    ⚠️ JobKind 는 VLM_OVERALL 을 재사용한다 (payload.mode="quick").
-       새 kind 는 job.kind 의 DB CHECK 에 걸린다 (핸들러 주석 참고).
+    ⚠️ JobKind 는 VLM_PART 를 재사용한다 (payload.mode="quick"). 새 kind 는
+       job.kind 의 DB CHECK 에 걸린다 (핸들러 주석 참고).
+
+    ⚠️ **부위별 진단을 건너뛰지 않는다** (2026-08-20 개정). 종전에는 VLM_OVERALL
+       하나만 걸어 전체 형태만 비교했고, 그 결과 웹캠 사용자는 부위 카드·유사도
+       점수·우선 부위가 전부 없는 화면을 봤다. 지금은 세그 없이도 부위별 비교가
+       되므로(prompts/part_comparison.py) 사진 경로와 같은 2단계를 탄다:
+       VLM_PART(quick) → 부위 진단 저장 → VLM_OVERALL(공통) → 점수·우선순위.
     """
     for kind in (PhotoKind.REFERENCE, PhotoKind.USER):
         if db.get_photo(session_id, kind) is None:
@@ -106,9 +112,10 @@ def _start_quick(session_id: UUID, force: bool) -> AnalysisStartResponse:
     for kind in (JobKind.VLM_PART, JobKind.VLM_OVERALL):
         open_job = queue.find_open(session_id, kind)
         if open_job is not None:
+            job_id = UUID(str(open_job["job_id"]))
             return AnalysisStartResponse(
-                part_job_id=None,
-                overall_job_id=open_job["job_id"] if kind == JobKind.VLM_OVERALL else None,
+                part_job_id=job_id if kind == JobKind.VLM_PART else None,
+                overall_job_id=job_id if kind == JobKind.VLM_OVERALL else None,
                 part_count=0,
                 class_names=[],
                 part_jobs=[],
@@ -130,10 +137,14 @@ def _start_quick(session_id: UUID, force: bool) -> AnalysisStartResponse:
         # 사진 모드의 부위 카드가 남아 있으면 퀵 결과와 섞여 보인다 — 같이 지운다.
         diagnosis_repo.clear_diagnoses(session_id)
 
-    job = queue.enqueue(session_id, JobKind.VLM_OVERALL, {"mode": "quick"})
+    job = queue.enqueue(session_id, JobKind.VLM_PART, {"mode": "quick"})
+    # ⚠️ class_names 를 여기서 확정하지 않는다. 세그 경로는 교집합이 미리 정해지지만
+    #    이 경로는 **어느 부위를 볼 수 있는지를 VLM 이 판단**하므로, 시작 시점에
+    #    목록을 단정하면 화면이 "진단될 것"이라고 약속해 놓고 빠지는 부위가 생긴다.
+    #    진행률(progress)은 실제 저장된 행 수를 세므로 목록 없이도 정확하다.
     return AnalysisStartResponse(
-        part_job_id=None,
-        overall_job_id=job["job_id"],
+        part_job_id=UUID(str(job["job_id"])),
+        overall_job_id=None,
         part_count=0,
         class_names=[],
         part_jobs=[],

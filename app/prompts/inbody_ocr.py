@@ -25,6 +25,15 @@
 "그럴듯한 값을 지어내지 마라"는 이미 있던 규칙이지만, 예문이 그 규칙보다
 강하게 작용한다는 게 이번에도 확인됐다 — 그래서 규칙만 두고 예문은
 아예 없앤다.
+
+━━ 2026-08-21 — 부위별 두 표는 2차 «확대 조각» 호출로 읽는다 ━━
+
+예문을 없애자 진짜 판독력이 드러났다: gpt-4o 는 이미지를 짧은 변 768px 로
+줄여 보기 때문에, 결과지 한 장을 통째로 주면 부위별 표의 작은 숫자가 뭉개져
+**그럴듯한 값을 지어낸다** (실측: 90.6% → 112.7%). 전신 수치는 큰 글씨라
+전체 이미지에서도 정확하다. 그래서 ocr.extract_inbody 가 결과지를 2×2 겹침
+조각으로 잘라 확대한 뒤 SEGMENT_USER_PROMPT 로 한 번 더 호출해 segments 만
+덮어쓴다 (같은 결과지 15개 값 전부 정답 확인 — 전체 1장에서는 15개 중 14개 오답).
 """
 
 SYSTEM_PROMPT = """너는 인바디(InBody) 체성분 결과지에서 수치를 읽어 JSON으로 변환하는 추출기다.
@@ -95,6 +104,31 @@ USER_PROMPT = """이 인바디 결과지에서 아래 항목을 읽어 JSON으�
   "total_body_water": <숫자 또는 null>,
   "protein": <숫자 또는 null>,
   "minerals": <숫자 또는 null>,
+  "segments": {
+    "RIGHT_ARM": {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "LEFT_ARM":  {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "TRUNK":     {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "RIGHT_LEG": {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "LEFT_LEG":  {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>}
+  }
+}"""
+
+#: 2차 호출 — 부위별 두 표 전용. ocr._segment_tiles 가 만든 확대 조각과 함께 쓴다.
+#  ⚠️ 조각에는 다른 표도 걸쳐 보이므로 «제목으로 구분» 규칙은 여기서도 뺄 수 없다.
+SEGMENT_USER_PROMPT = """이 이미지들은 **한 장의 인바디 결과지를 겹치게 조각낸 확대본**입니다.
+조각들 중에서 [부위별근육분석] 표와 [부위별체지방분석] 표를 찾아 읽어주세요.
+같은 표가 여러 조각에 걸쳐 보일 수 있습니다 — 숫자가 가장 선명하게 보이는 조각에서 읽으세요.
+
+🔴 두 표는 생김새가 같습니다 (5행 막대 + kg + %). **제목으로만 구분됩니다.**
+[부위별근육분석] ← 제목에 «근육» → lean_mass(kg), lean_percentage(%)
+[부위별체지방분석] ← 제목에 «체지방» → fat_mass(괄호 안 kg), fat_percentage(막대 우측 %)
+행 순서: 오른팔 → 왼팔 → 몸통 → 오른다리 → 왼다리
+
+못 찾은 표의 값은 null 로 두세요. 한 표의 값을 양쪽에 넣지 마세요 — 같은 부위에서
+lean_percentage 와 fat_percentage 가 똑같으면 표를 잘못 읽은 것입니다.
+
+JSON만 반환 (아래는 자리·타입 골격입니다 — 결과지에서 실제로 읽은 값만 채우세요):
+{
   "segments": {
     "RIGHT_ARM": {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
     "LEFT_ARM":  {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},

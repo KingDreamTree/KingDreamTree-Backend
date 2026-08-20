@@ -13,10 +13,13 @@
 
 import base64
 import json
+from io import BytesIO
 from typing import Any
 
+from PIL import Image
+
 from app.config import settings
-from app.prompts.inbody_ocr import SYSTEM_PROMPT, USER_PROMPT
+from app.prompts.inbody_ocr import SEGMENT_USER_PROMPT, SYSTEM_PROMPT, USER_PROMPT
 
 # ⚠️ openai 는 모듈 최상단에서 import 하지 않는다.
 #    routes/inbody → services/ocr 경로라, 여기서 최상단 import 를 하면
@@ -113,6 +116,13 @@ async def extract_inbody(
     Returns:
         raw_ocr 원본 dict. ⚠️ 사용자 수정 시에도 이 값은 덮어쓰지 않는다.
 
+    두 번 나눠 읽는다 (2026-08-21):
+      1차 — 결과지 전체: 전신 수치. 큰 글씨라 전체 이미지에서도 정확하다.
+      2차 — 2×2 확대 조각: 부위별 두 표. segments 만 이 결과로 덮어쓴다.
+    ⚠️ gpt-4o 는 이미지를 짧은 변 768px 로 줄여 보므로, 결과지 통짜에서는
+       부위별 표의 작은 숫자가 뭉개져 그럴듯한 값을 지어낸다 (실측 90.6→112.7).
+       조각을 확대해 주면 같은 모델이 같은 결과지 15개 값을 전부 정확히 읽는다.
+
     ⚠️ SMI는 추출하지 않는다 — VLM에게 계산을 시키지 않는다는 원칙.
        결과지의 SMI 칸도 비어 있는 경우가 있어, 백엔드가 calc_smi()로 직접 계산한다.
     """
@@ -125,24 +135,77 @@ async def extract_inbody(
     from openai import AsyncOpenAI  # 지연 import — 모듈 상단 주석 참고
 
     client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
-    image_blocks = [
-        {
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:{mime_type};base64,{base64.b64encode(p).decode()}",
-                "detail": "high",
-            },
-        }
-        for p in pages
-    ]
 
+    raw = await _extract(client, [_image_block(p, mime_type) for p in pages], USER_PROMPT)
+
+    # 2차가 실패하면 1차의 segments 를 그대로 둔다 — 전신 수치까지 잃을 이유가
+    # 없고, 섞어 읽은 값은 _check_percentage_columns 가 WARN 으로 표시한다.
+    try:
+        tile_blocks = [
+            _image_block(t, "image/jpeg") for p in pages for t in _segment_tiles(p)
+        ]
+        focused = await _extract(client, tile_blocks, SEGMENT_USER_PROMPT)
+        if isinstance(focused.get("segments"), dict):
+            raw["segments"] = focused["segments"]
+    except Exception:  # noqa: BLE001 — 2차는 보강 호출이라 어떤 실패든 1차로 후퇴
+        pass
+    return raw
+
+
+# ── VLM 호출 조각 ─────────────────────────────────────────────────────────────
+
+#: gpt-4o vision 입력 상한 — 이보다 크면 API가 줄여서 본다. 조각을 미리 이
+#  크기까지 확대해 보내야 부위별 표의 작은 숫자가 살아남는다.
+_VLM_SHORT, _VLM_LONG = 768, 2048
+_TILE_GRID = 2  # 2×2 = 결과지 하나당 4조각 — 실측으로 15/15 정답이라 더 안 쪼갠다
+_TILE_OVERLAP = 0.15  # 표가 조각 경계에 걸려 잘리지 않도록 겹친다
+
+
+def _segment_tiles(image_bytes: bytes) -> list[bytes]:
+    """결과지를 2×2 겹침 조각으로 잘라 gpt-4o 상한까지 확대한다."""
+    img = Image.open(BytesIO(image_bytes)).convert("RGB")
+    w, h = img.size
+    ox = int(w / _TILE_GRID * _TILE_OVERLAP)
+    oy = int(h / _TILE_GRID * _TILE_OVERLAP)
+    tiles = []
+    for r in range(_TILE_GRID):
+        for c in range(_TILE_GRID):
+            box = (
+                max(0, w * c // _TILE_GRID - ox),
+                max(0, h * r // _TILE_GRID - oy),
+                min(w, w * (c + 1) // _TILE_GRID + ox),
+                min(h, h * (r + 1) // _TILE_GRID + oy),
+            )
+            tile = img.crop(box)
+            scale = min(_VLM_SHORT / min(tile.size), _VLM_LONG / max(tile.size))
+            if scale > 1:
+                tile = tile.resize(
+                    (round(tile.width * scale), round(tile.height * scale)), Image.LANCZOS
+                )
+            buf = BytesIO()
+            tile.save(buf, "JPEG", quality=90)
+            tiles.append(buf.getvalue())
+    return tiles
+
+
+def _image_block(data: bytes, mime_type: str) -> dict[str, Any]:
+    return {
+        "type": "image_url",
+        "image_url": {
+            "url": f"data:{mime_type};base64,{base64.b64encode(data).decode()}",
+            "detail": "high",
+        },
+    }
+
+
+async def _extract(client: Any, image_blocks: list[dict], user_prompt: str) -> dict[str, Any]:
     response = await client.chat.completions.create(
         model="gpt-4o",
         response_format={"type": "json_object"},
         temperature=0,  # 수치 추출은 결정론적으로
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": [*image_blocks, {"type": "text", "text": USER_PROMPT}]},
+            {"role": "user", "content": [*image_blocks, {"type": "text", "text": user_prompt}]},
         ],
     )
     return json.loads(response.choices[0].message.content)

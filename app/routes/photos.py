@@ -301,6 +301,45 @@ async def get_reference(session: OwnedSession) -> ReferencePhotoResponse:
     )
 
 
+@router.get(
+    "/sessions/{session_id}/photos/user",
+    response_model=ReferencePhotoResponse,
+    summary="업로드된 사용자 사진 조회 (signed URL)",
+)
+async def get_user_photo(session: OwnedSession) -> ReferencePhotoResponse:
+    """⚠️ 레퍼런스와 **같은 응답 스키마**를 쓴다 — 화면에서 두 사진을 나란히
+    다루므로 필드가 갈리면 소비하는 쪽이 분기해야 한다.
+
+    ⚠️ 이 라우트가 없어서 비교 화면이 사용자 사진을 못 그렸다 (2026-08-20).
+       세그멘테이션 경로는 자기 사진 URL 을 갖고 있지만, 세그를 안 돌리는
+       퀵/웹캠 경로에는 사진에 접근할 길이 아예 없었다 — 화면에는 빈 상자만
+       남았다. 사진은 photo 행만으로 줄 수 있으므로 세그와 무관하게 연다.
+    """
+    session_id = UUID(str(session["session_id"]))
+    photo = db.get_photo(session_id, PhotoKind.USER)
+    if photo is None:
+        raise not_found("사용자 사진")
+
+    photo_id = UUID(str(photo["photo_id"]))
+    jobs = queue.list_jobs(session_id, kind=JobKind.SEG_USER)
+    url, expires_at = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
+
+    return ReferencePhotoResponse(
+        photo_id=str(photo_id),
+        kind=PhotoKind.USER,
+        width=photo["width"],
+        height=photo["height"],
+        pose_scale_basis=photo["pose_scale_basis"],
+        was_mirrored=bool(photo.get("was_mirrored")),
+        created_at=str(photo["created_at"]),
+        job_id=str(jobs[-1]["job_id"]) if jobs else None,
+        pose_landmarks=photo["pose_landmarks"] or [],
+        signed_url=url,
+        signed_url_expires_at=expires_at.isoformat(),
+        segmented=db.get_segmentation(photo_id) is not None,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # F05 — 사용자 사진
 # --------------------------------------------------------------------------- #

@@ -59,6 +59,20 @@ _REST_RANGE = (30, 240)
 _SAFETY_FOOTER = "통증이 계속되면 운동을 중단하고 전문가와 상담하세요."
 
 
+def _append_safety_footer(finalized: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
+    """통증 흐름(flag_contraindication 있었음)이면 안전 문구를 카드에 보강한다.
+
+    ⚠️ 정확히 _SAFETY_FOOTER 문장인지가 아니라 "상담" 언급 자체로 판단한다 —
+       프롬프트로 LLM이 비슷한 문구를 직접 쓰지 말라고 지시해뒀지만, 지시를
+       어겨도 다른 표현으로 이미 안전 안내를 했다면 또 붙이면 안 된다(중복 문구 버그,
+       예: "...상담하세요. 통증이 계속되면 운동을 중단하고 전문가와 상담하세요.").
+    """
+    if "상담" in (finalized.get("summary") or ""):
+        return
+    if any(e["name"] == "flag_contraindication" for e in tool_events):
+        finalized["summary"] = f"{finalized['summary']} {_SAFETY_FOOTER}"
+
+
 # --------------------------------------------------------------------------- #
 # 도구 인자 검증 — LLM 이 뭘 보내와도 여기서 걸러진다
 # --------------------------------------------------------------------------- #
@@ -488,10 +502,8 @@ async def chat_turn(
             if err is None:
                 finalized = ok_args
 
-    if finalized is not None and _SAFETY_FOOTER not in (finalized.get("summary") or ""):
-        # 통증 흐름이면 안전 문구를 카드에 보강한다 (금기 등록이 있었던 경우).
-        if any(e["name"] == "flag_contraindication" for e in tool_events):
-            finalized["summary"] = f"{finalized['summary']} {_SAFETY_FOOTER}"
+    if finalized is not None:
+        _append_safety_footer(finalized, tool_events)
 
     # system 2개를 뗀 나머지가 다음 요청에 그대로 되돌아올 히스토리다.
     new_history = llm_messages[2:]

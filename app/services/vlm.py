@@ -28,10 +28,10 @@ from typing import Any
 from app.config import settings
 from app.prompts.overall_diagnosis import SYSTEM_PROMPT as OVERALL_SYSTEM
 from app.prompts.overall_diagnosis import build_overall_prompt
+from app.prompts.part_comparison import SYSTEM_PROMPT as PART_COMPARISON_SYSTEM
+from app.prompts.part_comparison import build_part_comparison_prompt
 from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SYSTEM
 from app.prompts.part_diagnosis import build_part_prompt
-from app.prompts.quick_diagnosis import SYSTEM_PROMPT as QUICK_SYSTEM
-from app.prompts.quick_diagnosis import build_quick_prompt
 from app.schemas.enums import Confidence, GapLevel
 
 log = logging.getLogger("services.vlm")
@@ -675,67 +675,45 @@ async def diagnose_parts(
     return out
 
 
-def _mock_quick() -> dict[str, Any]:
-    """USE_MOCK 용 퀵 진단 — 결정론. 스모크가 전 구간을 키 없이 돌린다."""
-    return {
-        "summary": (
-            "지금은 목표 체형과 전체 실루엣에서 차이가 보여요. "
-            "특히 상체 폭에서 차이가 커요. "
-            "4주간 전신 루틴으로 형태를 다듬어볼 예정이에요. (mock)"
-        ),
-        "strengths": [],
-        "cautions": ["웹캠 한 장이라 세부 관찰은 제한적입니다 (mock)"],
-        "silhouette": (
-            "목표는 어깨에서 허리로 폭이 좁아지는 반면, 현재는 그 차이가 "
-            "완만하게 보입니다. 전체 윤곽의 굴곡에서 차이가 관찰됩니다. (mock)"
-        ),
-        "key_differences": ["어깨-허리 폭 관계가 목표와 다르게 보입니다 (mock)"],
-        "confidence": 0.6,
-        "user_profile": {
-            "summary": "위아래 폭 차이가 완만한 실루엣 (mock)",
-            "characteristics": ["외곽선 굴곡이 완만함 (mock)"],
-        },
-        "reference_profile": {
-            "summary": "어깨가 넓고 허리로 좁아지는 실루엣 (mock)",
-            "characteristics": ["상체 폭이 뚜렷함 (mock)"],
-        },
-        "direction_summary": "근력 중심으로 전신을 다듬는 방향이에요. (mock)",
-        "strategy_focus": ["전신 기본 볼륨으로 형태 만들기 (mock)"],
-        "next_cycle": "4주 뒤 같은 자세로 다시 비교해요. (mock)",
-        "raw_response": {"mock": True},
-    }
-
-
-async def diagnose_quick(
+async def compare_parts_direct(
     reference_photo: bytes,
     user_photo: bytes,
+    parts: list[dict[str, Any]],
     inbody: dict[str, Any] | None,
-    direction: dict[str, Any],
-    cut_notice: str | None = None,
 ) -> dict[str, Any]:
-    """퀵 진단 — 웹캠 경로. 원본 2장 + 인바디로 전체 형태만 비교한다.
+    """F08-direct — **세그멘테이션 없이** 원본 2장으로 부위별 비교 진단.
 
-    F08(부위별)을 건너뛰므로 부위 카드·부위 등급·유사도 점수가 없다.
-    출력 필드는 F09 와 같아서 **화면·루틴이 두 모드를 구분 없이 소비한다**
-    (parse_overall_response 재사용이 그 보장이다).
+    diagnose_parts 와의 유일한 차이는 **입력**이다:
 
-    ⚠️ 사진이 없으면 호출하지 않는다 — 퀵의 근거는 사진뿐이라, 사진 없는
-       퀵 진단은 재료가 0 이다 (F09 의 텍스트 폴백과 다른 점).
+        diagnose_parts        원본2 + 오버레이2 (4장) + 세그 수치
+        compare_parts_direct  원본2 (2장)
+
+    출력·검증은 완전히 같다 (parse_part_response 재사용). 그래서 저장 경로도,
+    종합 진단(F09)도, 화면도 두 경로를 구분하지 않는다 — 부위 카드가 어떻게
+    만들어졌는지는 화면의 관심사가 아니다.
+
+    Args:
+        parts: body_part 마스터 행. ⚠️ 부위 목록은 DB 가 유일한 출처다.
+
+    Returns:
+        {"results": [...], "missing": [class_name...], "raw_response": {...}}
     """
+    class_names = [p["class_name"] for p in parts]
+
     if settings.use_mock:
-        return _mock_quick()
+        return _mock_parts(class_names)
 
-    text = build_quick_prompt(inbody=inbody, direction=direction, cut_notice=cut_notice)
+    text = build_part_comparison_prompt(parts=parts, inbody=inbody)
 
-    # ⚠️ 이미지 순서가 프롬프트 §사진 의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
-    content: list[dict[str, Any]] = [
+    # ⚠️ 이미지 순서가 프롬프트의 설명 순서와 같아야 한다 (레퍼런스 → 사용자).
+    content = [
         _image_block(reference_photo),
         _image_block(user_photo),
         {"type": "text", "text": text},
     ]
 
-    parsed, raw = await _call_json(QUICK_SYSTEM, content, OVERALL_MAX_TOKENS)
-    out = parse_overall_response(parsed)
+    parsed, raw = await _call_json(PART_COMPARISON_SYSTEM, content, PART_MAX_TOKENS)
+    out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     return out
 

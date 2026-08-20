@@ -185,11 +185,11 @@ class AnalysisResponse(BaseModel):
                 "parts": [
                     {
                         "class_name": "Left_Upper_Arm",
-                        "name_ko": "왼쪽 위팔",
+                        "name_ko": "왼쪽 상완",
                         "part_group": "UPPER",
                         "color_hex": "#F76707",
-                        "differences": ["위팔 둘레가 얇음"],
-                        "assessment": "레퍼런스 대비 위팔 볼륨이 부족합니다.",
+                        "differences": ["상완 둘레가 얇음"],
+                        "assessment": "레퍼런스 대비 상완 볼륨이 부족합니다.",
                         "gap_level": "MODERATE",
                         "priority": 2,
                         "confidence": "HIGH",

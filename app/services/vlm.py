@@ -367,6 +367,33 @@ def _strip_prescription(assessment: str | None) -> str | None:
     return out if out.endswith(".") else out + "."
 
 
+def _differences_from_seen(seen: Any, assessment: str | None) -> list[str]:
+    """seen(현재/목표 관찰)으로 differences 를 만든다 — 퀵 경로 카드 보강용.
+
+    퀵 프롬프트(part_comparison.py)는 부위마다 `seen.user` / `seen.reference` 를
+    25자 이내로 먼저 채우게 한다. 이 두 칸은 **부위마다 실제로 다르게** 들어오는데
+    (실측: "복부가 두드러짐" / "복근이 뚜렷함"), 그동안 파싱조차 하지 않고 버렸다.
+
+    ⚠️ assessment 가 같은 관찰을 되풀이해 differences 가 재진술 필터에 전부
+       걸리는 것이 퀵 경로의 기본 동작이었다(실측 2026-08-20: 9/9). 그 결과
+       화면 카드에는 판정 문장 한 줄만 남았다. 관찰은 있는데 안 보여준 것이다.
+
+    ⚠️ 여기서도 **같은 재진술 기준을 다시 태운다.** seen 이 assessment 를
+       그대로 옮긴 것이면 보여줄 가치가 없다 — 화면에 같은 말이 두 줄 된다.
+
+    ⚠️ 문장을 새로 짓지 않는다. 모델이 관찰한 문구를 «현재/목표» 라벨만 붙여
+       그대로 쓴다. 코드가 진단 문장을 창작하면 근거를 댈 수 없다.
+    """
+    if not isinstance(seen, dict):
+        return []
+    out: list[str] = []
+    for key, label in (("user", "현재"), ("reference", "목표")):
+        value = seen.get(key)
+        if isinstance(value, str) and value.strip():
+            out.append(f"{label} {value.strip().rstrip('.')}")
+    return _drop_restatements(out, assessment)
+
+
 def _coerce_part(
     item: Any, allowed: set[str], inbody_available: bool = True
 ) -> dict[str, Any] | None:
@@ -396,6 +423,15 @@ def _coerce_part(
         assessment = stripped
 
     differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
+    # ⚠️ 재진술 필터에 differences 가 전부 걸리면 카드에 관찰이 하나도 안 남는다
+    #    (실측 2026-08-20, 퀵 경로 9/9). 모델이 assessment 와 differences 에
+    #    **같은 관찰 하나**를 두 번 쓰기 때문인데, 정작 seen 에는 부위마다 서로
+    #    다른 관찰을 제대로 채워 놓고 그동안 그걸 버리고 있었다. 되살린다.
+    #    ⚠️ **blocked 부위에는 쓰지 않는다.** 프롬프트가 seen 에 "안 보이면 왜
+    #       안 보이는지"를 적게 하므로, 그걸 관찰로 옮기면 못 본 부위에 관찰이
+    #       붙고 아래 모순 게이트가 blocked 를 해제해 버린다 (유닛 테스트로 확인).
+    if not differences and blocked is None:
+        differences = _differences_from_seen(item.get("seen"), assessment)
 
     # ⚠️ 자기모순 게이트 (2026-08-15 실측): differences 에 시각 관찰("두께가
     #    두드러집니다")을 적어놓고 blocked_reason("시각 확인 불가")을 함께 보낸

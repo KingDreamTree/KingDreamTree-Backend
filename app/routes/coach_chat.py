@@ -74,9 +74,18 @@ def _merge_contraindications(session_id: UUID, added: list[dict[str, Any]]) -> N
     ).execute()
 
 
-def _today_day(days: list[dict[str, Any]], routine: dict[str, Any]) -> dict[str, Any]:
-    """직전에 완료한 Day — 대화의 주제. 완료 기록이 없으면 Day 1."""
-    done = routine_repo.count_logs(UUID(str(routine["month_routine_id"])))
+def _today_day(days: list[dict[str, Any]], session_id: UUID) -> dict[str, Any]:
+    """직전에 완료한 Day — 대화의 주제. 완료 기록이 없으면 Day 1.
+
+    ⚠️ **버전 무관 카운트**(count_session_logs)로 센다. 피드백 [적용]마다
+       루틴은 새 버전으로 갈리고 이전 수행 기록은 이전 버전에 남으므로,
+       count_logs(month_routine_id) 로 세면 적용 직후 카운트가 리셋돼
+       코치가 항상 Day 1 을 "오늘 한 날"로 짚는다 — 사용자가 방금 끝낸
+       Day 의 운동을 "오늘 하신 운동이 아니에요"라며 거부하던 원인
+       (실측 2026-08-21). 진행도 화면도 2026-08-15 에 같은 리셋 사고로
+       세션 카운트로 바꿨다 (routine_repo.count_session_logs 주석).
+    """
+    done = routine_repo.count_session_logs(session_id)
     n = len(days) or 1
     # 방금 k개째를 끝냈다면 주제는 ((k-1) % n) + 1 번째 Day 다.
     order = ((max(done, 1) - 1) % n) + 1
@@ -109,7 +118,7 @@ async def chat(session: OwnedSession, body: CoachChatRequest) -> CoachChatRespon
 
     result = await coach_chat.chat_turn(
         messages=body.messages,
-        day=_today_day(days, routine),
+        day=_today_day(days, session_id),
         days=days,
         contraindications=_load_contraindications(session_id),
         catalog=exercise_catalog.load_catalog(),

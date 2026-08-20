@@ -52,6 +52,31 @@ def _active_routine_or_404(session_id: UUID) -> dict[str, Any]:
     return row
 
 
+def _merged_load_adjust(
+    routine: dict[str, Any], applied: list[dict[str, Any]]
+) -> dict[str, float]:
+    """이전 배율 + 이번 대화의 load_scale 을 합친다 (exercise_ref → 배율).
+
+    ⚠️ **곱하지 않고 덮어쓴다.** 0.8 을 두 번 받으면 0.64 가 되는데, 사용자는
+       "무겁다"고 두 번 말했을 뿐 절반으로 줄이라고 한 적이 없다. 매번 마지막
+       판단을 쓰고, 폭주는 load_guide 의 _ADJUST_RANGE 가 한 번 더 막는다.
+
+    ⚠️ 키가 exercise_ref 인 이유 — 운동 이름은 교체·번역으로 바뀔 수 있지만
+       ref 는 카탈로그 식별자라 안정적이다. ref 를 못 찾으면 그 항목은 버린다
+       (이름만으로 배율을 붙이면 다른 운동에 잘못 붙을 수 있다).
+    """
+    merged = dict((routine.get("raw_response") or {}).get("load_adjust") or {})
+    for item in applied:
+        if item.get("function") != "adjust_intensity":
+            continue
+        args = item.get("args") or {}
+        scale, ref = args.get("load_scale"), args.get("exercise_ref")
+        if scale is None or not ref:
+            continue
+        merged[str(ref)] = float(scale)
+    return merged
+
+
 def _load_contraindications(session_id: UUID) -> list[dict[str, Any]]:
     rows = (
         get_client()
@@ -207,6 +232,12 @@ async def apply(session: OwnedSession, body: CoachApplyRequest) -> CoachApplyRes
                 "raw_response": {
                     "source": "COACH_CHAT",
                     "base_version": routine["version"],
+                    # ⚠️ 시작 중량 배율도 **승계 + 병합**한다. 아래 strategy 와 같은
+                    #    이유다 — 새 버전이 raw_response 를 통째로 갈아치우므로,
+                    #    안 옮기면 "무겁다고 해서 낮췄는데 다음 피드백에서 원복"이
+                    #    된다. 무게 자체(kg)는 저장하지 않는다: 배율만 남기고 kg 은
+                    #    조회 시점에 현재 체중으로 다시 계산한다 (load_guide 주석).
+                    "load_adjust": _merged_load_adjust(routine, applied),
                     # ⚠️ 승계 안 하면 화면의 «4주간 핵심 목표» 본문이 사라진다 —
                     #    worker/handlers/routine.py 의 _patch 와 같은 이유·같은 처리
                     #    (2026-08-18, #91). 코치 대화도 새 버전을 만드는 동안

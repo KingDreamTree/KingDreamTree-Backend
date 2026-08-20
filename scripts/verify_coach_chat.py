@@ -25,6 +25,8 @@ settings.use_mock = True
 
 from app.services.coach_chat import (  # noqa: E402
     MAX_TURNS,
+    _append_safety_footer,
+    _SAFETY_FOOTER,
     apply_changes_to_days,
     chat_turn,
     collect_tool_calls,
@@ -296,11 +298,37 @@ def rule_mock_conversation() -> None:
     check("턴 카운트", r2["turn"] == 2 and r2["max_turns"] == MAX_TURNS)
 
 
+def rule_safety_footer() -> None:
+    print("\n[안전 문구 중복 방지 — 실제 버그 재현]")
+
+    no_pain = {"summary": "스쿼트 세트를 3→4로 늘렸습니다."}
+    _append_safety_footer(no_pain, [])
+    check("금기 없으면 안 붙는다", no_pain["summary"] == "스쿼트 세트를 3→4로 늘렸습니다.")
+
+    plain = {"summary": "어깨 통증으로 푸시업을 코브라 푸시업으로 교체했습니다."}
+    _append_safety_footer(plain, [{"name": "flag_contraindication", "args": {}}])
+    check("금기 있고 안내 없으면 붙는다", plain["summary"].endswith(_SAFETY_FOOTER))
+    check("한 번만 붙는다", plain["summary"].count("상담") == 1)
+
+    # 실제 리포트된 버그: LLM이 프롬프트 지시를 어기고 비슷한 문구를 이미 썼을 때
+    already = {
+        "summary": "어깨에 살짝 불편함이 있어 푸시업을 코브라 푸시업으로 교체했습니다. "
+        "통증이 계속되면 전문가와 상담하세요."
+    }
+    _append_safety_footer(already, [{"name": "flag_contraindication", "args": {}}])
+    check(
+        "LLM이 이미 비슷한 문구를 썼으면 또 안 붙인다",
+        already["summary"].count("상담") == 1,
+        already["summary"],
+    )
+
+
 def main() -> int:
     rule_validation()
     rule_apply()
     rule_recollect()
     rule_mock_conversation()
+    rule_safety_footer()
 
     print()
     if _failures:

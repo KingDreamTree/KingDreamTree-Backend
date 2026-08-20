@@ -76,7 +76,7 @@ def contract_prompt() -> None:
     # 이 프롬프트의 존재 이유 — 옷/각도로 못 보는 부위를 억지로 판단하지 않는 것
     check("0단계 = 관찰과 판단을 분리", "관찰만** 하세요" in PART_CMP_SYSTEM)
     check("1단계 = 볼 수 있는가 판단", "«볼 수 있는가»를 판단" in PART_CMP_SYSTEM)
-    check("옷이 덮는 범위 표 (반팔=팔뚝 드러남)", "덮지 못하는 곳" in PART_CMP_SYSTEM)
+    check("옷이 덮는 범위 표 (반팔=전완 드러남)", "덮지 못하는 곳" in PART_CMP_SYSTEM)
     check("옷을 비교하지 말라는 명시 규칙", "옷을 비교하지 마세요" in PART_CMP_SYSTEM)
     check("판단 불가 → gap_level null", "gap_level      : null" in PART_CMP_SYSTEM)
     check("한쪽만 보여도 비교 불가", "한쪽 사진에서만 보여도" in PART_CMP_SYSTEM)

@@ -330,6 +330,24 @@ def media_by_ref() -> dict[str, dict[str, str | None]]:
     }
 
 
+@lru_cache(maxsize=1)
+def equipments_by_ref() -> dict[str, list[str]]:
+    """exercise_ref → 장비 목록. 시작 중량 가이드(services/load_guide)가 쓴다.
+
+    ⚠️ media_by_ref 와 같은 이유로 **저장하지 않고 조회 시점에 붙인다** —
+       장비는 카탈로그가 원본이고, routine_day_exercise 에는 컬럼이 없다.
+    """
+    try:
+        catalog = load_catalog()
+    except CatalogNotBuiltError:
+        return {}
+    return {
+        item["exercise_ref"]: list(item.get("equipments") or [])
+        for item in catalog
+        if item.get("exercise_ref")
+    }
+
+
 def _is_compound(item: dict[str, Any]) -> bool:
     """다관절(복합) 운동인가 — ACSM 2009: 초보자에게 다관절 운동 강조."""
     return len(item.get("body_parts") or []) > 1 or len(item.get("secondary_muscles") or []) >= 3

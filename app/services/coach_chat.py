@@ -133,6 +133,17 @@ def validate_tool_call(
         out["reps_delta"] = _clamp(int(args.get("reps_delta") or 0), *_REPS_DELTA_RANGE)
         if args.get("rest_sec_new") is not None:
             out["rest_sec_new"] = _clamp(int(args["rest_sec_new"]), *_REST_RANGE)
+        # ⚠️ 무게는 **배율만** 받는다. kg 을 LLM 이 정하면 D9(1RM 추정 폐기)이
+        #    무너진다 — 실제 kg 은 체중으로 코드가 낸다(services/load_guide).
+        #    범위를 좁게 잡는다: 한 번의 피드백으로 무게가 급변하면 위험하다.
+        if args.get("load_scale") is not None:
+            try:
+                scale = float(args["load_scale"])
+            except (TypeError, ValueError):
+                return None, "load_scale 은 숫자여야 합니다 (예: 0.8, 1.2)."
+            if not 0.5 <= scale <= 1.5:
+                return None, "load_scale 은 0.5~1.5 사이여야 합니다."
+            out["load_scale"] = round(scale, 2)
         return out, None
 
     if name == "replace_exercise":
@@ -204,7 +215,14 @@ def apply_changes_to_days(
                     e["reps"] = _clamp(e["reps"] + args.get("reps_delta", 0), *_REPS_RANGE)
                 if args.get("rest_sec_new") is not None:
                     e["rest_sec"] = args["rest_sec_new"]
-                applied.append({"function": name, "args": args})
+                # ⚠️ 무게 배율은 운동 행에 쓰지 않는다 — routine_day_exercise 에
+                #    무게 컬럼이 없고, 만들지 않기로 했다(D9). 대신 어느 운동에
+                #    대한 배율인지 **ref 로** 적용 기록에 남겨 호출부가 루틴
+                #    단위로 저장한다 (routes/coach_chat._merged_load_adjust).
+                record = dict(args)
+                if args.get("load_scale") is not None and e.get("exercise_ref"):
+                    record["exercise_ref"] = e["exercise_ref"]
+                applied.append({"function": name, "args": record})
                 break
 
         elif name == "replace_exercise":

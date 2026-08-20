@@ -29,7 +29,7 @@ from typing import Any
 from uuid import UUID
 
 from app.schemas.enums import DomainStatus, ExerciseKind, GenerationType
-from app.services import exercise_catalog
+from app.services import exercise_catalog, load_guide
 from app.services.db import get_client
 
 #: 한 루틴이 반복되는 주기 수. 4주 프로그램이라는 뜻.
@@ -247,8 +247,19 @@ def replace_days(
             client.table("routine_day_exercise").insert(exercises).execute()
 
 
-def list_days(month_routine_id: UUID) -> list[dict[str, Any]]:
-    """Day + 운동 전체. day_order·order_index 순으로 정렬해 돌려준다."""
+def list_days(
+    month_routine_id: UUID,
+    inbody: dict[str, Any] | None = None,
+    load_adjust: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
+    """Day + 운동 전체. day_order·order_index 순으로 정렬해 돌려준다.
+
+    Args:
+        inbody: 시작 중량 가이드용 체중·성별. **없으면 가이드를 안 붙인다** —
+            체중 없이 kg 을 지어내지 않는다 (services/load_guide 참고).
+        load_adjust: exercise_ref → 배율. 사용자 피드백("너무 무거웠어요")이
+            반영되는 자리다. 없으면 전부 1.0.
+    """
     client = get_client()
     days = (
         client.table("routine_day")
@@ -277,11 +288,23 @@ def list_days(month_routine_id: UUID) -> list[dict[str, Any]]:
     #    ⚠️ image_url 은 저장값을 우선한다 — 카탈로그가 갱신돼도 그때 그 루틴이
     #       가리키던 그림이 바뀌지 않게. 영상은 저장된 적이 없으니 카탈로그가 원본이다.
     media = exercise_catalog.media_by_ref()
+    # ⚠️ 시작 중량도 **저장값이 아니라 조회 시점 계산**이다 (미디어와 같은 이유 +
+    #    하나 더: 체중이 바뀌면 옛 kg 이 남으면 안 된다. 배율만 저장하고 kg 은
+    #    항상 현재 체중으로 다시 낸다 — services/load_guide 모듈 주석).
+    gear = exercise_catalog.equipments_by_ref()
+    adjust = load_adjust or {}
     by_day: dict[str, list[dict[str, Any]]] = {}
     for e in exercises:
-        m = media.get(e.get("exercise_ref") or "", {})
+        ref = e.get("exercise_ref") or ""
+        m = media.get(ref, {})
         e["image_url"] = e.get("image_url") or m.get("image_url")
         e["video_url"] = m.get("video_url")
+        e["load_guide"] = load_guide.starting_load(
+            muscle_group=e.get("muscle_group"),
+            equipments=gear.get(ref),
+            inbody=inbody,
+            adjust=adjust.get(ref, 1.0),
+        )
         by_day.setdefault(e["routine_day_id"], []).append(e)
 
     for d in days:
@@ -289,8 +312,13 @@ def list_days(month_routine_id: UUID) -> list[dict[str, Any]]:
     return days
 
 
-def get_day(month_routine_id: UUID, day_order: int) -> dict[str, Any] | None:
-    for day in list_days(month_routine_id):
+def get_day(
+    month_routine_id: UUID,
+    day_order: int,
+    inbody: dict[str, Any] | None = None,
+    load_adjust: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
+    for day in list_days(month_routine_id, inbody=inbody, load_adjust=load_adjust):
         if day["day_order"] == day_order:
             return day
     return None

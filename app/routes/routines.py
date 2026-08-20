@@ -30,7 +30,7 @@ from app.schemas.routine import (
     RoutineVersionItem,
     TodayRoutineResponse,
 )
-from app.services import routine_repo
+from app.services import inbody_repo, routine_repo
 from app.services.routine import DISCLAIMER
 from app.worker import queue
 
@@ -46,11 +46,27 @@ def _day_dto(day: dict) -> RoutineDayDto:
     )
 
 
+def _load_context(routine: dict, session_id: UUID) -> tuple[dict | None, dict[str, float]]:
+    """시작 중량 계산에 필요한 것 — 인바디(체중·성별)와 피드백 배율.
+
+    ⚠️ 인바디는 **선택 입력**이다. 없으면 None 이고, 그러면 무게 안내가
+       통째로 빠진다 (체중 없이 kg 을 지어내지 않는다).
+    ⚠️ 배율은 month_routine.raw_response 에 둔다 — 전용 컬럼을 만들려면 DDL 이
+       필요한데 이 코드에서 실행할 경로가 없다(PostgREST 는 CRUD 만).
+       "무게를 저장하지 않고 배율만 저장한다"는 원칙 자체는 컬럼이 생겨도 같다.
+    """
+    row = inbody_repo.latest_done(session_id)
+    inbody = inbody_repo.to_prompt_payload(row) if row else None
+    adjust = (routine.get("raw_response") or {}).get("load_adjust") or {}
+    return inbody, {k: float(v) for k, v in adjust.items() if isinstance(v, (int, float))}
+
+
 def _detail(routine: dict) -> RoutineDetailResponse:
     month_routine_id = UUID(str(routine["month_routine_id"]))
     # 진행도는 세션 전체에서 센다 — 피드백으로 버전이 갈려도 이어져야 한다.
     session_id = UUID(str(routine["session_id"]))
-    days = routine_repo.list_days(month_routine_id)
+    inbody, load_adjust = _load_context(routine, session_id)
+    days = routine_repo.list_days(month_routine_id, inbody=inbody, load_adjust=load_adjust)
     return RoutineDetailResponse(
         month_routine_id=month_routine_id,
         version=routine["version"],
@@ -164,7 +180,10 @@ async def get_today(session: OwnedSession) -> TodayRoutineResponse:
     progress = routine_repo.progress(
         month_routine_id, routine["exercise_days_per_week"], session_id
     )
-    day = routine_repo.get_day(month_routine_id, progress["next_day_order"])
+    inbody, load_adjust = _load_context(routine, session_id)
+    day = routine_repo.get_day(
+        month_routine_id, progress["next_day_order"], inbody=inbody, load_adjust=load_adjust
+    )
     if day is None:
         raise not_found("오늘의 루틴")
 
@@ -202,7 +221,8 @@ async def get_day_detail(
     if routine is None:
         raise not_found("루틴")
 
-    day = routine_repo.get_day(month_routine_id, day_order)
+    inbody, load_adjust = _load_context(routine, UUID(str(routine["session_id"])))
+    day = routine_repo.get_day(month_routine_id, day_order, inbody=inbody, load_adjust=load_adjust)
     if day is None:
         raise not_found("Day")
     return _day_dto(day)

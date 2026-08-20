@@ -64,6 +64,14 @@ class ExerciseDto(BaseModel):
     rest_sec: int | None = None
     #: "N회 남기고 멈추는 무게". ⚠️ 중량(kg)은 추정하지 않는다 (D9).
     rir: int | None = None
+    #: 첫 세트를 몇 kg 으로 집을지 — **처방이 아니라 출발점**이다.
+    #: {"min_kg", "max_kg", "equipment", "basis", "adjust"} 또는 null.
+    #: ⚠️ D9(1RM 추정 폐기)과 충돌하지 않는다. 1RM 을 추정하지 않고, 체중·성별로
+    #:    보수적 시작 범위만 낸다 — 근거·한계는 services/load_guide 모듈 주석.
+    #: ⚠️ null 인 경우가 정상이다: 맨몸 운동 / 인바디 없음(체중 모름) / 근육군 미상.
+    #:    그때는 화면에 무게를 띄우지 않는다 — 지어내지 않는다.
+    #: ⚠️ 저장값이 아니라 **조회 시점 계산**이다 (체중이 바뀌면 같이 바뀐다).
+    load_guide: dict[str, Any] | None = None
     #: 이 운동이 어느 진단 부위 때문에 볼륨을 더 받았는지 (개인화 문구 근거)
     boosted_by: str | None = None
     note: str | None = None

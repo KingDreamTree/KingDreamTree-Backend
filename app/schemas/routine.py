@@ -106,6 +106,17 @@ class RoutineStrategyDto(BaseModel):
     cardio_days: int | None = None
 
 
+class RoutineNoticeDto(BaseModel):
+    """루틴 안내 한 건 — 소제목과 본문.
+
+    ⚠️ 안내는 조건마다 따로 붙는다(감량 대상자 / 주 7일 선택자 / 진단 없음).
+       한 문단으로 이어붙이면 서로 다른 사람 이야기가 섞여 읽히지 않는다.
+    """
+
+    title: str
+    body: str
+
+
 class RoutineDetailResponse(BaseModel):
     month_routine_id: UUID
     version: int
@@ -119,7 +130,14 @@ class RoutineDetailResponse(BaseModel):
 
     days: list[RoutineDayDto] = Field(default_factory=list)
     progress: RoutineProgressDto
+    #: 옛 클라이언트용 한 덩어리 문자열 — 소제목/본문을 빈 줄로 이어 붙인 것.
+    #: ⚠️ 새 화면은 아래 notices 를 쓸 것. 이걸 그대로 그리면 소제목이 본문에
+    #:    섞여 보인다(줄바꿈을 살리지 않으면 특히).
     notice: str | None = None
+    #: 안내를 **조건별로 나눈** 목록 (2026-08-20). 감량 안내와 7일 안내처럼
+    #: 대상이 서로 다른 이야기가 한 문단으로 섞여 읽히지 않던 문제 때문에 나눴다.
+    #: ⚠️ 이 필드 이전에 만들어진 루틴은 빈 목록이다 — 그때는 notice 로 폴백할 것.
+    notices: list[RoutineNoticeDto] = Field(default_factory=list)
     #: 루틴 구성 근거 (2026-08-18). 없으면 null — 이 필드 이전 루틴은 안 갖고 있다.
     strategy: RoutineStrategyDto | None = None
     disclaimer: str

@@ -30,7 +30,10 @@ from app.prompts.routine_patch import SYSTEM_PROMPT, TOOLS
 from app.services import exercise_catalog, routine_mode
 from app.services.routine_templates import (
     CUT_NOTICE,
+    CUT_NOTICE_TITLE,
+    join_notices,
     SEVEN_DAY_NOTICE,
+    SEVEN_DAY_NOTICE_TITLE,
     DayPlan,
     apply_weakness_boost,
     get_template,
@@ -469,9 +472,17 @@ async def build_routine(
             {"day_order": day["day_order"], "title": day["title"], "exercises": exercises}
         )
 
-    notice = SEVEN_DAY_NOTICE if days_per_week == 7 else None
+    # ⚠️ 안내는 **목록**으로 만든다. 공백으로 이어붙이면 조건이 서로 다른 이야기가
+    #    (감량 대상자 이야기 + 7일 선택자 이야기) 한 문단으로 섞여 읽히지 않는다
+    #    (사용자 신고 2026-08-20). 화면에서 나눠 그릴 수 있게 소제목을 함께 준다.
+    #    notice(문자열)는 옛 클라이언트를 위해 계속 채운다 — 소제목/본문을
+    #    빈 줄로 이어 붙인 형태다.
+    notices: list[dict[str, str]] = []
     if mode == "CUT":
-        notice = f"{CUT_NOTICE} {notice}" if notice else CUT_NOTICE
+        notices.append({"title": CUT_NOTICE_TITLE, "body": CUT_NOTICE})
+    if days_per_week == 7:
+        notices.append({"title": SEVEN_DAY_NOTICE_TITLE, "body": SEVEN_DAY_NOTICE})
+    notice = join_notices(notices)
 
     goal = (
         "체지방을 줄이면서 근육을 지키는 4주 전신 루틴"
@@ -500,6 +511,7 @@ async def build_routine(
         "strategy": strategy,
         "focus_areas": list(boosts),
         "notice": notice,
+        "notices": notices,
         "disclaimer": DISCLAIMER,
         "boosts": boosts,
         "weekly_sets": weekly_sets_by_group(days),

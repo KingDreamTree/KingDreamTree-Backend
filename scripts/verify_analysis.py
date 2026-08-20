@@ -703,7 +703,9 @@ def test_baseline_separation() -> None:
         excluded=["Left_Upper_Leg(왼쪽 허벅지)", "Left_Lower_Leg(왼쪽 종아리)"],
     )
     check("확인 불가 부위는 한 문장으로 병합 지시", "전부 묶어 한 문장" in excluded_prompt)
-    check("한글 이름 사용 지시", "괄호 안의 한글 이름" in excluded_prompt)
+    # 2026-08-20 — "괄호 안 이름을 쓰라"는 지시만으로는 영문 코드가 cautions 에
+    # 그대로 나간 실측이 있어, 코드가 한글 이름 목록을 뽑아 직접 준다.
+    check("한글 이름 목록을 코드가 직접 제공", "왼쪽 허벅지" in excluded_prompt and "(한글만)" in excluded_prompt)
 
 
 def main() -> int:

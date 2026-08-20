@@ -439,6 +439,24 @@ def _coerce_part(
         # LOW 는 종합 진단에서 가중치가 낮아지므로 과신 방향의 오류가 없다.
         confidence = str(Confidence.LOW)
 
+    # ⚠️ **등급은 매겼는데 시각적 근거(differences)가 없으면 확신도를 한 단계 내린다**
+    #    (2026-08-20 실측). 프롬프트가 "등급을 매겼으면 근거를 함께 적으세요"를
+    #    요구하는데 모델이 자주 어긴다 — 팔 4부위가 근거 없이 같은 문장 하나로
+    #    등급만 받은 사례가 반복됐다. 근거를 못 댄 판정을 «확실히 봤다»와 같은
+    #    무게로 점수에 넣으면 그 점수의 출처를 되짚을 수 없다.
+    #    ⚠️ 버리지는 않는다 — 판정 자체가 틀렸다는 뜻은 아니고, 검증 가능성이
+    #       낮을 뿐이다. scoring 의 확신도 가중이 알아서 비중을 줄인다.
+    if gap_level is not None and not differences and confidence != str(Confidence.LOW):
+        downgraded = str(Confidence.MEDIUM if confidence == str(Confidence.HIGH) else Confidence.LOW)
+        log.info(
+            "%s: 등급 %s 인데 differences 가 비어 근거 없음 — 확신도 %s → %s",
+            class_name,
+            gap_level,
+            confidence,
+            downgraded,
+        )
+        confidence = downgraded
+
     priority = item.get("priority")
     if not isinstance(priority, int) or isinstance(priority, bool) or not 1 <= priority <= 5:
         priority = None

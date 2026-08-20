@@ -6,6 +6,25 @@
 기준 양식: InBody570 (docs 샘플 = 데스크탑 inbody_ex.jpg).
 단일 양식이 전제이므로 프롬프트에 실제 라벨명을 그대로 박아 추출 정확도를 올린다.
 다른 기종이 올라와도 라벨이 대체로 동일해 동작은 하지만, 없는 항목은 null이 된다.
+
+━━ 2026-08-20 — "반환 형식" 완성 예문 제거 ━━
+
+`USER_PROMPT`에 실제 InBody570 샘플(inbody_ex.jpg)의 완성된 수치를 "반환
+형식" 예시로 박아뒀었다. F08/F09에서 이미 두 번 확인된 것과 같은 실패
+패턴 — 여러 개의 서로 다른 실제 세션에서 사용자가 인바디를 스킵했는데도
+(프론트 버그와 별개로) 부위별 진단이 이 예문과 **글자 그대로 같은 수치**
+(왼팔 89.9% · 오른팔 90.6% 등)를 인용하는 사고가 반복됐다. 결과지 이미지가
+흐리거나 예상 양식과 다르면, 모델이 실제로 읽으려 하는 대신 이 완성된
+예문을 그대로 반환한 것으로 보인다.
+
+이 프롬프트는 특히 위험하다 — F08/F09는 문장을 복사하지만, 여기는
+**완전한 가짜 건강 데이터 한 세트**(체중·체지방률·부위별 근육량)를
+사용자에게 실측값인 것처럼 보여주게 된다.
+
+완성된 숫자를 전부 `<타입|null>` 자리 표시로 바꿨다. SYSTEM_PROMPT 의
+"그럴듯한 값을 지어내지 마라"는 이미 있던 규칙이지만, 예문이 그 규칙보다
+강하게 작용한다는 게 이번에도 확인됐다 — 그래서 규칙만 두고 예문은
+아예 없앤다.
 """
 
 SYSTEM_PROMPT = """너는 인바디(InBody) 체성분 결과지에서 수치를 읽어 JSON으로 변환하는 추출기다.
@@ -43,33 +62,34 @@ USER_PROMPT = """이 인바디 결과지에서 아래 항목을 읽어 JSON으�
 
 [부위별근육분석] — (kg)와 (%) **둘 다** 읽는다
 - segments.<부위>.lean_mass       : (kg) 값
-- segments.<부위>.lean_percentage : (%) 값 — 표준 대비 비율 (예: 90.6)
+- segments.<부위>.lean_percentage : (%) 값 — 표준 대비 비율
   부위 키: RIGHT_ARM(오른팔) LEFT_ARM(왼팔) TRUNK(몸통) RIGHT_LEG(오른다리) LEFT_LEG(왼다리)
 
 [부위별체지방분석] — 괄호 안 (kg)와 우측 (%) 둘 다
 - segments.<부위>.fat_mass       : 괄호 안 (kg) 값
-- segments.<부위>.fat_percentage : 막대 우측 (%) 값 (예: 108.0)
+- segments.<부위>.fat_percentage : 막대 우측 (%) 값
 
-반환 형식:
+반환 형식 (아래는 자리·타입만 보여주는 골격입니다 — **이 숫자를 그대로 쓰지 마세요.**
+결과지에서 실제로 읽은 값만 채우고, 안 보이거나 확실하지 않은 항목은 null 로 두세요):
 {
-  "measured_at": "2025-01-21",
-  "age": 22,
-  "gender": "MALE",
-  "height": 170,
-  "weight": 63.5,
-  "bmi": 22.0,
-  "body_fat_mass": 12.0,
-  "body_fat_percentage": 18.9,
-  "skeletal_muscle_mass": 28.8,
-  "fat_free_mass": 51.5,
-  "total_body_water": 37.7,
-  "protein": 10.3,
-  "minerals": 3.52,
+  "measured_at": "<YYYY-MM-DD 또는 null>",
+  "age": <정수 또는 null>,
+  "gender": "<MALE|FEMALE 또는 null>",
+  "height": <숫자 또는 null>,
+  "weight": <숫자 또는 null>,
+  "bmi": <숫자 또는 null>,
+  "body_fat_mass": <숫자 또는 null>,
+  "body_fat_percentage": <숫자 또는 null>,
+  "skeletal_muscle_mass": <숫자 또는 null>,
+  "fat_free_mass": <숫자 또는 null>,
+  "total_body_water": <숫자 또는 null>,
+  "protein": <숫자 또는 null>,
+  "minerals": <숫자 또는 null>,
   "segments": {
-    "RIGHT_ARM": {"lean_mass": 2.74, "lean_percentage": 90.6, "fat_mass": 0.6, "fat_percentage": 108.0},
-    "LEFT_ARM":  {"lean_mass": 2.72, "lean_percentage": 89.9, "fat_mass": 0.6, "fat_percentage": 112.7},
-    "TRUNK":     {"lean_mass": 22.8, "lean_percentage": 94.5, "fat_mass": 6.0, "fat_percentage": 149.4},
-    "RIGHT_LEG": {"lean_mass": 7.78, "lean_percentage": 92.6, "fat_mass": 1.9, "fat_percentage": 113.1},
-    "LEFT_LEG":  {"lean_mass": 7.78, "lean_percentage": 92.7, "fat_mass": 1.8, "fat_percentage": 111.6}
+    "RIGHT_ARM": {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "LEFT_ARM":  {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "TRUNK":     {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "RIGHT_LEG": {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>},
+    "LEFT_LEG":  {"lean_mass": <숫자|null>, "lean_percentage": <숫자|null>, "fat_mass": <숫자|null>, "fat_percentage": <숫자|null>}
   }
 }"""

@@ -702,8 +702,14 @@ def test_baseline_separation() -> None:
         inbody=None,
         excluded=["Left_Upper_Leg(왼쪽 허벅지)", "Left_Lower_Leg(왼쪽 종아리)"],
     )
-    check("확인 불가 부위는 한 문장으로 병합 지시", "전부 묶어 한 문장" in excluded_prompt)
-    check("한글 이름 사용 지시", "괄호 안의 한글 이름" in excluded_prompt)
+    # ⚠️ ff6175d(2026-08-20)에서 **계약이 뒤집혔다.** 종전에는 "빠진 부위를
+    #    cautions 에 한 문장으로 묶어 쓰라"였는데, 지금은 **cautions 에 아예
+    #    쓰지 말라**로 바뀌었다 — 어느 부위가 왜 빠졌는지는 화면이 excluded
+    #    목록에서 직접 뽑아 보여주므로, cautions 에 또 쓰면 중복으로 뜬다.
+    #    (그래서 «전부 묶어 한 문장»·«괄호 안의 한글 이름» 지시는 사라졌다)
+    check("빠진 부위를 cautions 에 쓰지 말라고 지시", "cautions 에 이 부위들을 언급하지 마세요" in excluded_prompt)
+    check("중복으로 뜨는 이유를 함께 설명", "중복으로 뜹니다" in excluded_prompt)
+    check("빠진 부위 목록 자체는 여전히 전달됨", "왼쪽 허벅지" in excluded_prompt)
 
 
 def main() -> int:

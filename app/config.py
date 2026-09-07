@@ -170,7 +170,11 @@ class Settings(BaseSettings):
     #  뛴다. 해커톤 데모 범위의 최소 방어 — IP당 분당 상한만.
     #  ⚠️ 잠정값 — 정상 사용자가 기기를 바꿔가며 테스트하는 정도는 넉넉히
     #     통과해야 한다. 너무 낮추면 데모 중 심사위원 여러 명이 막힌다.
-    user_create_rate_limit: int = 10
+    #  ⚠️ 10 → 30 (#169). 홈 진입마다 새 user_id 를 받는 방침이라 «시작» 한 번이
+    #     POST /users 한 번이다. 행사장 Wi-Fi 는 여러 사람이 한 IP 를 쓰므로 10 이면
+    #     한 분에 열 번째 사람부터 막힌다. Dockerfile 의 --proxy-headers 가 없으면 이
+    #     상한이 IP당이 아니라 전체 공용이 된다 — 같이 봐야 한다.
+    user_create_rate_limit: int = 30
     user_create_rate_window_sec: int = 60
 
     # ------------------------------------------------------------------ #

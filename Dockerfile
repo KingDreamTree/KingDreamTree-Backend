@@ -27,4 +27,9 @@ COPY scripts scripts
 EXPOSE 8000
 
 # 기본 명령은 API. 워커 컨테이너는 compose 에서 command 로 덮어쓴다.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# ⚠️ --proxy-headers (#169): Caddy(reverse_proxy) 뒤에서 X-Forwarded-For 를 읽어
+#    request.client 를 실제 클라이언트 IP 로 바꾼다. 없으면 모든 요청의 client.host 가
+#    caddy 컨테이너 IP 라, IP당 레이트리밋(#115, POST /users)이 **전체 공용 상한**이 된다 —
+#    홈 진입마다 새 user_id 를 받는 방침에서는 시연 중 열 번째 «시작»부터 429 가 난다.
+#    api 는 포트를 공개하지 않아(compose 참고) caddy 만 붙으므로 allow-ips=* 가 안전하다.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

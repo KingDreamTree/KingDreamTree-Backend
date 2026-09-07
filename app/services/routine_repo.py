@@ -371,18 +371,72 @@ def count_session_logs(session_id: UUID) -> int:
     )
 
 
+def last_session_log(session_id: UUID) -> dict[str, Any] | None:
+    """이 세션의 **마지막 완료 기록** — 어느 Day 를 몇 번째 주기에 했는지.
+
+    ⚠️ 개수로 역산하지 않는다 (#169). 기록에는 실제로 한 Day(routine_day_id)가
+       이미 적혀 있다. 더블클릭으로 기록이 하나 더 생기거나 옛 user_id 를
+       이어받아 개수가 밀려도, 마지막 기록의 Day 는 사용자가 실제로 본 Day 다.
+
+    ⚠️ 버전 무관 — 기록은 옛 버전의 routine_day 를 가리킬 수 있지만 day_order 는
+       남는다. 호출부는 활성 버전에서 같은 day_order 를 찾는다.
+
+    Returns:
+        {"day_order", "cycle_no", "completed_at"} — 기록이 없으면 None.
+    """
+    rows = (
+        get_client()
+        .table("workout_log")
+        .select("cycle_no, completed_at, routine_day(day_order)")
+        .eq("session_id", str(session_id))
+        .order("completed_at", desc=True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows:
+        return None
+    row = rows[0]
+    day = row.get("routine_day") or {}
+    if day.get("day_order") is None:
+        return None
+    return {
+        "day_order": int(day["day_order"]),
+        "cycle_no": int(row["cycle_no"]),
+        "completed_at": row["completed_at"],
+    }
+
+
+def _next_position(last: dict[str, Any] | None, days_per_week: int) -> tuple[int, int]:
+    """마지막 기록 다음에 할 (주기, Day). 기록이 없으면 (1, 1).
+
+    그 주기의 마지막 Day 를 했으면 다음 주기 Day 1 이다. 「운동 일수 조정」으로
+    일수가 줄어 day_order 가 현재 일수를 넘는 기록도 "그 주기는 끝났다"로 본다.
+    """
+    if last is None:
+        return 1, 1
+    n = max(days_per_week, 1)
+    if last["day_order"] >= n:
+        return min(last["cycle_no"] + 1, TOTAL_CYCLES), 1
+    return min(last["cycle_no"], TOTAL_CYCLES), last["day_order"] + 1
+
+
 def progress(
     month_routine_id: UUID,
     days_per_week: int,
     session_id: UUID | None = None,
 ) -> dict[str, Any]:
-    """완료 수행 횟수로 현재 위치를 계산한다 (요일 무관 — 하루 밀려도 안 깨진다).
+    """현재 위치를 계산한다 (요일 무관 — 하루 밀려도 안 깨진다).
 
-    ⚠️ 날짜가 아니라 **수행 횟수** 기준이다. 응답에 day_source 를 실어
-       나중에 날짜 기준으로 바꿔도 프론트가 어느 방식인지 알 수 있게 한다.
+    ⚠️ 위치(주기·다음 Day)는 **마지막 완료 기록**으로 정한다 (#169). 종전엔
+       완료 횟수를 나머지 연산으로 Day 에 대응시켰는데, 더블클릭·옛 user_id
+       승계로 횟수가 밀리면 게이지·오늘의 운동·코치가 동시에 엉뚱한 Day 를
+       가리켰다. 마지막 기록의 Day 는 사용자가 실제로 본 Day 다. 코치의
+       _today_day 도 같은 기준이라 세 화면이 한 Day 를 가리킨다.
 
-    ⚠️ 횟수는 **세션 전체**에서 센다 (count_session_logs 주석 참고).
-       session_id 를 넘기면 조회 한 번을 아낀다.
+    ⚠️ completed_count · percent 는 "얼마나 했나"라 **횟수 그대로**다.
+       횟수는 세션 전체에서 센다 (count_session_logs 주석 참고).
+       응답의 day_source 로 프론트가 계산 방식을 구분할 수 있다.
     """
     if session_id is None:
         row = get_routine(month_routine_id)
@@ -394,26 +448,34 @@ def progress(
                 "next_day_order": 1,
                 "is_completed": False,
                 "percent": 0,
-                "day_source": "COUNT",
+                "day_source": "LAST_LOG",
             }
         session_id = UUID(str(row["session_id"]))
 
     done = count_session_logs(session_id)
     total = days_per_week * TOTAL_CYCLES
-    completed = done >= total
+    last = last_session_log(session_id)
+    # 마지막 주기의 마지막 Day 를 했으면 횟수와 무관하게 끝난 것이다.
+    completed = done >= total or (
+        last is not None and last["cycle_no"] >= TOTAL_CYCLES and last["day_order"] >= days_per_week
+    )
     # ⚠️ 분자는 세션 전체 로그인데 분모는 **현재 버전**의 일수다. 「운동 일수 조정」으로
     #    일수를 줄이면 분모만 작아져 진행률이 100%를 넘는다 (실측: 주7일로 37회 후
     #    주4일 변경 → 37/16 = 231%). 초과분은 "이미 다 했다" 이상의 정보가 없으므로
     #    분모에 맞춰 자른다 — completed 판정은 자르기 전 값으로 이미 끝났다.
     done = min(done, total)
+    cycle_no, next_day_order = _next_position(last, days_per_week)
+    if completed:
+        # 다 했으면 종전과 같이 마지막 주기 · Day 1 에 멈춘다.
+        cycle_no, next_day_order = TOTAL_CYCLES, 1
     return {
         "completed_count": done,
         "total_count": total,
-        "cycle_no": min(done // days_per_week + 1, TOTAL_CYCLES),
-        "next_day_order": (done % days_per_week) + 1,
+        "cycle_no": cycle_no,
+        "next_day_order": next_day_order,
         "is_completed": completed,
         "percent": round(done / total * 100) if total else 0,
-        "day_source": "COUNT",
+        "day_source": "LAST_LOG",
     }
 
 

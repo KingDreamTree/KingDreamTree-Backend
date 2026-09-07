@@ -44,8 +44,10 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 from app.services.coach_chat import (  # noqa: E402
     build_card_changes,
+    requires_load_scale,
     resolve_exercise_name,
     truthful_card,
+    user_texts_since_last_change,
 )
 
 # ── 픽스처 ───────────────────────────────────────────────────────────────────
@@ -501,6 +503,98 @@ def rule_rejected_calls_not_applied() -> None:
     check("ok=true 였던 호출은 그대로", len(calls) == 1)
 
 
+def rule_weight_talk_scope() -> None:
+    print()
+    print("[무게 얘기 감지 범위 — #170 증상 3]")
+
+    def u(text: str) -> dict:
+        return {"role": "user", "content": text}
+
+    def a(text: str) -> dict:
+        return {"role": "assistant", "content": text}
+
+    def call(cid: str, name: str, args: dict) -> dict:
+        c = tc(name, args)
+        c["tool_calls"][0]["id"] = cid
+        return c
+
+    def result(cid: str, ok: bool) -> dict:
+        return {"role": "tool", "tool_call_id": cid, "content": json.dumps({"ok": ok})}
+
+    heavy = ("무거", "무겁", "가벼", "무게", "중량", "kg", "킬로")
+
+    def weight_talk(msgs: list[dict]) -> bool:
+        return any(t in text for text in user_texts_since_last_change(msgs) for t in heavy)
+
+    # "무거웠어요 → 낮출까요? → 네" — 확인이 다음 턴에 와도 잡힌다
+    msgs = [u("벤치프레스 무거웠어요"), a("무게를 낮춰볼까요?"), u("네")]
+    check("확인이 다음 턴에 와도 무게 얘기로 본다", weight_talk(msgs))
+
+    # 벤치프레스 무게 조정이 끝난 뒤 스쿼트 횟수 얘기는 무게 얘기가 아니다
+    adjust = call(
+        "c1",
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "벤치프레스", "load_scale": 0.8, "reason": "x"},
+    )
+    msgs = [
+        u("벤치프레스 무거웠어요"),
+        adjust,
+        result("c1", True),
+        a("낮췄어요"),
+        u("스쿼트는 횟수 좀 줄여주세요"),
+    ]
+    check("조정이 끝난 뒤의 다른 운동 얘기는 구간이 끊긴다", not weight_talk(msgs))
+    check(
+        "구간에 남는 발화는 마지막 것뿐",
+        user_texts_since_last_change(msgs) == ["스쿼트는 횟수 좀 줄여주세요"],
+    )
+
+    # 거부된 호출은 구간을 끊지 않는다 — 아직 조정이 안 됐다
+    rejected = call(
+        "c2",
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "벤치프레스", "reps_delta": -2, "reason": "x"},
+    )
+    msgs = [
+        u("벤치프레스 무거웠어요"),
+        rejected,
+        result("c2", False),
+        a("무게로 낮춰볼게요"),
+        u("네"),
+    ]
+    check("거부된 호출은 구간을 끊지 않는다", weight_talk(msgs))
+
+    check(
+        "무게 얘기가 없으면 False", not weight_talk([u("스쿼트 횟수 줄여줘"), a("네"), u("좋아요")])
+    )
+
+
+def rule_weight_needs_load_scale() -> None:
+    print()
+    print("[무게 얘기면 load_scale — #170 증상 3]")
+    no_scale = {"exercise_name": "벤치프레스", "reps_delta": -2}
+    with_scale = {"exercise_name": "벤치프레스", "load_scale": 0.8}
+    check(
+        "무게 얘기 + 바벨 + load_scale 없음 → 되돌림",
+        requires_load_scale("adjust_intensity", no_scale, True, False),
+    )
+    check(
+        "load_scale 있으면 통과",
+        not requires_load_scale("adjust_intensity", with_scale, True, False),
+    )
+    check(
+        "무게 얘기가 없었으면 통과",
+        not requires_load_scale("adjust_intensity", no_scale, False, False),
+    )
+    check(
+        "맨몸 운동(푸시업)은 세트·횟수 조정 허용",
+        not requires_load_scale("adjust_intensity", no_scale, True, True),
+    )
+    check(
+        "교체 도구엔 적용 안 함", not requires_load_scale("replace_exercise", no_scale, True, False)
+    )
+
+
 def main() -> int:
     rule_validation()
     rule_apply()
@@ -510,6 +604,8 @@ def main() -> int:
     rule_name_matching()
     rule_truthful_card()
     rule_rejected_calls_not_applied()
+    rule_weight_talk_scope()
+    rule_weight_needs_load_scale()
 
     print()
     if _failures:

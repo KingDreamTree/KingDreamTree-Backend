@@ -154,6 +154,55 @@ def _resolve_or_ask(
     )
 
 
+def user_texts_since_last_change(messages: list[dict[str, Any]]) -> list[str]:
+    """마지막으로 조정 도구(adjust/replace)가 **통과한** 뒤의 사용자 발화들 (#170 증상 3).
+
+    "무게 얘기를 했나"를 어디서 볼지의 범위다.
+      - 마지막 발화만 보면 "무거웠어요 → 낮출까요? → 네" 처럼 확인이 다음 턴에 올 때
+        "네" 만 보고 놓친다 (재현 실측).
+      - 대화 전체를 보면 벤치프레스 무게 얘기를 한 뒤 "스쿼트는 횟수 줄여줘" 를
+        무게 얘기로 오인해 횟수 조정을 막는다.
+    지금 다루는 운동의 구간 — 마지막 조정 이후 — 만 보면 둘 다 잡는다.
+
+    ⚠️ 거부된 호출(tool 결과 ok=false)은 구간을 끊지 않는다. 아직 조정이 안 된 것이다.
+    """
+    rejected: set[str] = set()
+    for m in messages:
+        if m.get("role") == "tool" and m.get("tool_call_id"):
+            try:
+                if json.loads(m.get("content") or "{}").get("ok") is False:
+                    rejected.add(str(m["tool_call_id"]))
+            except (TypeError, ValueError, AttributeError):
+                pass
+    texts: list[str] = []
+    for m in messages:
+        role = m.get("role")
+        if role == "user":
+            texts.append(str(m.get("content") or ""))
+        elif role == "assistant" and any(
+            (tc.get("function") or {}).get("name") in ("adjust_intensity", "replace_exercise")
+            and str(tc.get("id")) not in rejected
+            for tc in m.get("tool_calls") or []
+        ):
+            texts = []
+    return texts
+
+
+def requires_load_scale(
+    name: str, args: dict[str, Any], weight_talk: bool, is_bodyweight: bool
+) -> bool:
+    """무게 얘기였는데 adjust_intensity 가 load_scale 없이 왔는가 (#170 증상 3).
+
+    ⚠️ 맨몸 운동(BODY WEIGHT)은 제외한다 — 낮출 무게가 없어 세트·횟수로 줄이는 게 맞다.
+    """
+    return (
+        name == "adjust_intensity"
+        and weight_talk
+        and not is_bodyweight
+        and args.get("load_scale") is None
+    )
+
+
 def build_card_changes(
     tool_events: list[dict[str, Any]], ref_names: dict[str, str]
 ) -> list[dict[str, str]]:
@@ -561,8 +610,16 @@ async def chat_turn(
     }
     # ⚠️ 무게 얘기(#170 증상 3) — 사용자가 무겁다/가볍다고 했는데 adjust_intensity 에
     #    load_scale 이 없으면 되돌린다. 프롬프트 지시만으로는 안 지켜졌다 (실측 8/20: 횟수를 줄였다).
-    last_user = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"), "")
-    weight_talk = any(t in str(last_user or "") for t in _WEIGHT_TERMS)
+    #    범위는 "마지막 조정 이후의 사용자 발화" (user_texts_since_last_change 주석 참고).
+    weight_talk = any(
+        t in text for text in user_texts_since_last_change(messages) for t in _WEIGHT_TERMS
+    )
+    bodyweight_refs = {
+        c["exercise_ref"]
+        for c in catalog
+        if c.get("equipments") and set(c["equipments"]) <= {"BODY WEIGHT"}
+    }
+    ref_by_name = {e["name"]: e.get("exercise_ref") for d in days for e in d.get("exercises", [])}
 
     if settings.use_mock:
         mock = _mock_reply(messages, turn)
@@ -631,11 +688,11 @@ async def chat_turn(
             except ValueError:
                 args = {}
             ok_args, err = validate_tool_call(tc.function.name, args, days, candidates)
-            if (
-                err is None
-                and tc.function.name == "adjust_intensity"
-                and weight_talk
-                and ok_args.get("load_scale") is None
+            if err is None and requires_load_scale(
+                tc.function.name,
+                ok_args,
+                weight_talk,
+                ref_by_name.get(ok_args.get("exercise_name")) in bodyweight_refs,
             ):
                 err = (
                     "사용자가 무게를 말했습니다. 세트·횟수 대신 load_scale 로 넘기세요 "

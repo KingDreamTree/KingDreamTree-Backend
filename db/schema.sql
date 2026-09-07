@@ -662,3 +662,23 @@ INSERT INTO body_part (class_name, name_ko, part_group, is_comparable, display_o
     ('Upper_Teeth',    '윗니',      'OTHER', false, 107),
     ('Lower_Teeth',    '아랫니',    'OTHER', false, 108),
     ('Tongue',         '혀',        'OTHER', false, 109);
+
+
+-- ── 함수 ────────────────────────────────────────────────────────────────────
+-- analysis_session.contraindications 원자적 병합 (#172).
+-- 앱(routes/coach_chat._merge_contraindications)이 RPC 로 부른다. 두 저장이 겹쳐도
+-- UPDATE 한 문장 안에서 병합하므로 부위가 사라지지 않는다. 상세: db/migrations/2026-09-07_*.sql
+
+CREATE OR REPLACE FUNCTION merge_contraindications(p_session_id UUID, p_added JSONB)
+RETURNS JSONB
+LANGUAGE sql
+AS $$
+    UPDATE analysis_session AS s
+    SET contraindications = COALESCE(s.contraindications, '[]'::jsonb) || (
+        SELECT COALESCE(jsonb_agg(a.elem ORDER BY a.ord), '[]'::jsonb)
+        FROM jsonb_array_elements(COALESCE(p_added, '[]'::jsonb)) WITH ORDINALITY AS a(elem, ord)
+        WHERE NOT (COALESCE(s.contraindications, '[]'::jsonb) @> jsonb_build_array(a.elem))
+    )
+    WHERE s.session_id = p_session_id
+    RETURNING s.contraindications;
+$$;

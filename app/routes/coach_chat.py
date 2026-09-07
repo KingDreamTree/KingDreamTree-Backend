@@ -23,6 +23,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from openai import OpenAIError
+from postgrest.exceptions import APIError
 
 from app.deps import OwnedSession
 from app.config import settings
@@ -68,10 +69,37 @@ def _load_contraindications(session_id: UUID) -> list[dict[str, Any]]:
 
 
 def _merge_contraindications(session_id: UUID, added: list[dict[str, Any]]) -> None:
-    if not added:
+    """금기(부상 주의)를 세션에 누적한다 — **DB 안에서 원자적으로** (#172).
+
+    이 함수는 두 곳에서 불린다 — 대화 도중(그 턴의 flag)과 [적용](히스토리 전체 재수집).
+    종전엔 "현재 목록 읽기 → 더하기 → 통째로 UPDATE" 라 두 호출이 겹치면 나중 것이 먼저
+    것을 못 본 채 덮어써 부위가 사라질 수 있었다. merge_contraindications() SQL 함수가
+    UPDATE 한 문장 안에서 병합하므로 겹쳐도 유실이 없다 (db/migrations/2026-09-07_*.sql).
+
+    ⚠️ 함수가 아직 DB 에 없으면(PGRST202) 종전 방식으로 폴백한다 — 마이그레이션과 앱 배포의
+       순서가 어긋나도 500 이 나지 않게. 단 폴백은 겹침에 취약하므로 경고를 남긴다.
+    """
+    # 같은 {body_part, severity} 가 한 호출 안에 두 번 오면 하나로 — DB 함수는 기존 목록과만 대조한다
+    unique: list[dict[str, Any]] = []
+    for a in added:
+        if a not in unique:
+            unique.append(a)
+    if not unique:
         return
+    try:
+        get_client().rpc(
+            "merge_contraindications", {"p_session_id": str(session_id), "p_added": unique}
+        ).execute()
+        return
+    except APIError as e:
+        if e.code not in ("PGRST202", "42883"):
+            raise
+        log.warning(
+            "merge_contraindications() 가 DB 에 없어 읽고-덮어쓰기로 폴백 — 마이그레이션 적용 필요 (%s)",
+            e.code,
+        )
     existing = _load_contraindications(session_id)
-    merged = existing + [a for a in added if a not in existing]
+    merged = existing + [a for a in unique if a not in existing]
     get_client().table("analysis_session").update({"contraindications": merged}).eq(
         "session_id", str(session_id)
     ).execute()

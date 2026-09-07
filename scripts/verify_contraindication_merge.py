@@ -26,6 +26,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from postgrest.exceptions import APIError  # noqa: E402
 
+from supabase import create_client  # noqa: E402
+
+from app.config import settings  # noqa: E402
 from app.services.db import get_client  # noqa: E402
 
 FN = "merge_contraindications"
@@ -60,8 +63,13 @@ def concurrent_merge(session_id: str) -> bool:
 
     parts = [f"시험부위{i}" for i in range(8)]
 
+    def fresh_client():
+        # ⚠️ 스레드마다 새 클라이언트 — 싱글턴(get_client)의 HTTP 연결은 동시 사용에 안전하지 않다
+        #    (실측: 8스레드가 공유하니 "Server disconnected"). 진짜 동시성을 내려면 연결도 따로여야 한다.
+        return create_client(settings.supabase_url, settings.supabase_service_role_key)
+
     def merge_one(part: str) -> None:
-        get_client().rpc(
+        fresh_client().rpc(
             FN, {"p_session_id": session_id, "p_added": [{"body_part": part, "severity": "WARN"}]}
         ).execute()
 
@@ -97,7 +105,8 @@ def concurrent_merge(session_id: str) -> bool:
         )
         return not missing and dup_ok
     finally:
-        client.table("analysis_session").update({"contraindications": original}).eq(
+        # 복원은 새 클라이언트로 — 위에서 공유 연결이 끊겼어도 복원은 돼야 한다
+        fresh_client().table("analysis_session").update({"contraindications": original}).eq(
             "session_id", session_id
         ).execute()
         print("원래 값으로 복원")

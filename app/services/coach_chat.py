@@ -58,6 +58,9 @@ _REST_RANGE = (30, 240)
 
 _SAFETY_FOOTER = "통증이 계속되면 운동을 중단하고 전문가와 상담하세요."
 
+#: 사용자 발화에 이게 있으면 "무게 얘기"다 — adjust_intensity 에 load_scale 이 있어야 한다 (#170).
+_WEIGHT_TERMS = ("무거", "무겁", "가벼", "무게", "중량", "kg", "킬로")
+
 
 def _append_safety_footer(finalized: dict[str, Any], tool_events: list[dict[str, Any]]) -> None:
     """통증 흐름(flag_contraindication 있었음)이면 안전 문구를 카드에 보강한다.
@@ -80,6 +83,136 @@ def _append_safety_footer(finalized: dict[str, Any], tool_events: list[dict[str,
 
 def _clamp(value: int, lo: int, hi: int) -> int:
     return max(lo, min(hi, value))
+
+
+def _norm(text: str) -> str:
+    return "".join(str(text).split()).lower()
+
+
+def resolve_exercise_name(target: str | None, names: list[str]) -> tuple[str | None, list[str]]:
+    """사용자·LLM 이 부른 운동 이름을 Day 의 실제 운동 하나로 특정한다 (#170).
+
+    Returns:
+        (특정된 이름, 되물을 후보). 특정되면 후보는 빈 목록. 특정 못 하면 None 과 후보 —
+        후보마저 비어 있으면 목록에 아예 없는 이름이다.
+
+    규칙:
+      1. 공백 제거·소문자로 완전 일치 → 그 이름 ("레그 프레스" → "레그프레스")
+      2. **단어 경계** 일치가 딱 하나 → 그 이름 ("벤치" → "벤치프레스": 단어가 그 말로 시작)
+      3. 단어 경계 일치가 여럿이거나, 부분 문자열 일치만 있으면 **특정하지 않는다.**
+         후보를 돌려줘 코치가 되묻게 한다 — "프레스" 는 벤치프레스·숄더프레스 둘 다고,
+         "컬" 을 "스컬 크러셔" 에 자동으로 붙이면 엉뚱한 운동이 조정된다 (실측 8/20:
+         목록에 없는 벤치프레스를 말했는데 코치가 푸시업을 조정하고 벤치프레스를 조정했다고 적었다).
+
+    ⚠️ 후보는 **오늘 Day 의 운동**에서만 찾는다. 카탈로그 전체에서 찾으면 "프레스" 가 9개,
+       "푸시업" 이 17개다.
+    """
+    q = _norm(target or "")
+    if len(q) < 2:
+        return None, []
+    exact = [n for n in names if _norm(n) == q]
+    if len(exact) == 1:
+        return exact[0], []
+    boundary = [
+        n
+        for n in names
+        if any(t == q or t.startswith(q) for t in (_norm(t) for t in str(n).split()))
+        or _norm(n).startswith(q)
+    ]
+    if len(boundary) == 1:
+        return boundary[0], []
+    if boundary:
+        return None, boundary
+    return None, [n for n in names if q in _norm(n)]
+
+
+def _resolve_or_ask(
+    target: str | None, names: list[str], day_order: int
+) -> tuple[str | None, str | None]:
+    """(특정된 이름, None) 또는 (None, LLM 에게 돌려줄 지시).
+
+    ⚠️ 거부 문구에 "없습니다" 만 적지 않는다 — 그 문장이 그대로 "고객님은 그 운동 안 하셨어요"
+       로 번역돼 나갔다 (#170 증상 1). 무엇을 해야 하는지(되묻기·대체 금지)를 같이 적는다.
+    """
+    resolved, cands = resolve_exercise_name(target, names)
+    if resolved:
+        return resolved, None
+    if len(cands) == 1:
+        return None, (
+            f"'{target}' 은 정확한 이름이 아닙니다. '{cands[0]}' 을 말한 것인지 "
+            "사용자에게 확인한 뒤, 맞으면 그 이름으로 다시 호출하세요. 임의로 고르지 마세요."
+        )
+    if cands:
+        return None, (
+            f"'{target}' 은 여러 운동에 해당합니다: {', '.join(cands)}. "
+            "임의로 고르지 말고, 어느 운동인지 사용자에게 되물으세요."
+        )
+    return None, (
+        f"'{target}' 은 오늘 Day {day_order} 목록에서 찾지 못했습니다. 목록: {', '.join(names)}. "
+        "다른 운동으로 대체하지 말고, 목록을 보여주며 어느 운동을 말하는지 되물으세요. "
+        "사용자가 틀렸다고 말하지 마세요."
+    )
+
+
+def build_card_changes(
+    tool_events: list[dict[str, Any]], ref_names: dict[str, str]
+) -> list[dict[str, str]]:
+    """검증을 통과한 도구 호출만으로 카드의 변경 목록을 만든다 (#170).
+
+    ⚠️ LLM 이 finalize_revision 에 써 보낸 changes 는 쓰지 않는다. 실측(2026-08-20)에서
+       코치가 푸시업을 조정하고 카드엔 "벤치프레스의 강도를 조정했습니다" 라고 적었다 —
+       사용자는 눈치챌 방법이 없다. 카드는 **실제로 실행된 것**만 보여준다.
+    """
+    out: list[dict[str, str]] = []
+    for event in tool_events:
+        name, a = event["name"], event["args"]
+        why = str(a.get("reason") or "")
+        if name == "adjust_intensity":
+            parts: list[str] = []
+            if a.get("sets_delta"):
+                parts.append(f"세트 {int(a['sets_delta']):+d}")
+            if a.get("reps_delta"):
+                parts.append(f"횟수 {int(a['reps_delta']):+d}회")
+            if a.get("rest_sec_new") is not None:
+                parts.append(f"휴식 {a['rest_sec_new']}초")
+            if a.get("load_scale") is not None:
+                scale = float(a["load_scale"])
+                parts.append(
+                    "무게 낮춤" if scale < 1 else "무게 올림" if scale > 1 else "무게 유지"
+                )
+            what = f"{a.get('exercise_name')} {', '.join(parts) if parts else '조정'}"
+        elif name == "replace_exercise":
+            ref = a.get("new_exercise_ref")
+            what = f"{a.get('old_exercise_name')} → {ref_names.get(ref, ref)}"
+        elif name == "flag_contraindication":
+            what = f"{a.get('body_part')} → 주의 부위 등록 ({a.get('severity')})"
+        else:
+            continue
+        out.append({"what": what, "why": why})
+    return out
+
+
+def truthful_card(
+    finalized: dict[str, Any], tool_events: list[dict[str, Any]], ref_names: dict[str, str]
+) -> dict[str, Any]:
+    """finalize 카드를 실제 실행 내역에 맞춘다 — changes 는 항상 코드가, summary 는 어긋날 때만.
+
+    summary 는 LLM 의 문장을 두되, **실제로 바꾼 운동을 하나도 언급하지 않으면** 실행 내역으로
+    다시 쓴다 — "벤치프레스를 조정했습니다"(실제는 푸시업) 같은 요약이 카드 위에 남지 않게.
+    """
+    card = dict(finalized)
+    card["changes"] = build_card_changes(tool_events, ref_names)
+    touched = [
+        e["args"].get("exercise_name") or e["args"].get("old_exercise_name")
+        for e in tool_events
+        if e["name"] in ("adjust_intensity", "replace_exercise")
+    ]
+    summary = str(card.get("summary") or "")
+    if touched and not any(t and t in summary for t in touched):
+        card["summary"] = "다음 운동부터 이렇게 바뀌어요: " + "; ".join(
+            c["what"] for c in card["changes"]
+        )
+    return card
 
 
 def validate_tool_call(
@@ -119,16 +252,16 @@ def validate_tool_call(
     if day is None:
         return None, f"Day {args.get('day_order')} 는 이 루틴에 없습니다."
 
-    names = {e["name"] for e in day.get("exercises", [])}
+    names = [e["name"] for e in day.get("exercises", [])]
 
     if name == "adjust_intensity":
-        target = args.get("exercise_name")
-        if target not in names:
-            return (
-                None,
-                f"'{target}' 은 Day {day['day_order']} 에 없습니다. 있는 운동: {sorted(names)}",
-            )
+        # ⚠️ 완전 일치만 받던 것을 특정 규칙으로 바꿨다 (#170). 통과하면 인자의 이름을
+        #    루틴의 실제 이름으로 바꿔 돌려준다 — 적용(apply_changes_to_days)이 이름으로 찾는다.
+        target, err = _resolve_or_ask(args.get("exercise_name"), names, day["day_order"])
+        if err is not None:
+            return None, err
         out = dict(args)
+        out["exercise_name"] = target
         out["sets_delta"] = _clamp(int(args.get("sets_delta") or 0), *_SETS_DELTA_RANGE)
         out["reps_delta"] = _clamp(int(args.get("reps_delta") or 0), *_REPS_DELTA_RANGE)
         if args.get("rest_sec_new") is not None:
@@ -147,9 +280,10 @@ def validate_tool_call(
         return out, None
 
     if name == "replace_exercise":
-        target = args.get("old_exercise_name")
-        if target not in names:
-            return None, f"'{target}' 은 Day {day['day_order']} 에 없습니다."
+        target, err = _resolve_or_ask(args.get("old_exercise_name"), names, day["day_order"])
+        if err is not None:
+            return None, err
+        args = {**args, "old_exercise_name": target}
         ref = args.get("new_exercise_ref")
 
         # ⚠️ **교체는 같은 근육군 후보 안에서만** 허용한다.
@@ -288,8 +422,22 @@ def collect_tool_calls(
     calls: list[dict[str, Any]] = []
     finalized: dict[str, Any] | None = None
 
+    # ⚠️ 대화 때 거부된 호출(tool 결과 ok=false)은 재검증을 통과하더라도 적용하지 않는다 (#170).
+    #    무게 확인처럼 validate_tool_call 밖에서 거부한 사유는 여기서 재현되지 않기 때문이다 —
+    #    거부됐던 "횟수 -2" 가 [적용] 때 슬그머니 반영되는 경로를 막는다.
+    rejected: set[str] = set()
+    for msg in messages:
+        if msg.get("role") == "tool" and msg.get("tool_call_id"):
+            try:
+                if json.loads(msg.get("content") or "{}").get("ok") is False:
+                    rejected.add(str(msg["tool_call_id"]))
+            except (TypeError, ValueError, AttributeError):
+                pass
+
     for msg in messages:
         for tc in msg.get("tool_calls") or []:
+            if str(tc.get("id")) in rejected:
+                continue
             fn = tc.get("function") or {}
             name = fn.get("name", "")
             try:
@@ -406,6 +554,15 @@ async def chat_turn(
     """
     turn = _count_user_turns(messages)
     candidates = _candidates_by_group(days, catalog)
+    ref_names = {
+        c["exercise_ref"]: (c.get("name_ko") or c.get("name_en") or c["exercise_ref"])
+        for group in candidates.values()
+        for c in group
+    }
+    # ⚠️ 무게 얘기(#170 증상 3) — 사용자가 무겁다/가볍다고 했는데 adjust_intensity 에
+    #    load_scale 이 없으면 되돌린다. 프롬프트 지시만으로는 안 지켜졌다 (실측 8/20: 횟수를 줄였다).
+    last_user = next((m.get("content") for m in reversed(messages) if m.get("role") == "user"), "")
+    weight_talk = any(t in str(last_user or "") for t in _WEIGHT_TERMS)
 
     if settings.use_mock:
         mock = _mock_reply(messages, turn)
@@ -474,6 +631,16 @@ async def chat_turn(
             except ValueError:
                 args = {}
             ok_args, err = validate_tool_call(tc.function.name, args, days, candidates)
+            if (
+                err is None
+                and tc.function.name == "adjust_intensity"
+                and weight_talk
+                and ok_args.get("load_scale") is None
+            ):
+                err = (
+                    "사용자가 무게를 말했습니다. 세트·횟수 대신 load_scale 로 넘기세요 "
+                    "(0.8=낮춤 / 1.2=올림). kg 은 적지 마세요."
+                )
             if err is not None:
                 # 거부 사유를 돌려줘 LLM 이 같은 턴에서 고치게 한다.
                 result = {"ok": False, "error": err}
@@ -549,6 +716,8 @@ async def chat_turn(
                 finalized = ok_args
 
     if finalized is not None:
+        # 카드의 변경 목록은 실제 실행된 도구로 다시 만든다 — LLM 이 적은 것은 쓰지 않는다 (#170).
+        finalized = truthful_card(finalized, tool_events, ref_names)
         _append_safety_footer(finalized, tool_events)
 
     # system 2개를 뗀 나머지가 다음 요청에 그대로 되돌아올 히스토리다.

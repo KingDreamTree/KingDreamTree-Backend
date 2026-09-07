@@ -43,10 +43,13 @@ def check(label: str, ok: bool, detail: str = "") -> None:
 
 
 from app.services.coach_chat import (  # noqa: E402
+    MAX_TURNS,
+    adjust_is_noop,
     build_card_changes,
     requires_load_scale,
     resolve_exercise_name,
     truthful_card,
+    turns_exceeded,
     user_texts_since_last_change,
 )
 
@@ -595,6 +598,131 @@ def rule_weight_needs_load_scale() -> None:
     )
 
 
+def rule_turn_boundary() -> None:
+    print()
+    print("[8턴 경계 — #171 증상 1]")
+    user = {"role": "user", "content": "x"}
+    check("8번째 발화는 처리된다 (마지막 턴)", not turns_exceeded([user] * MAX_TURNS))
+    check("9번째 발화부터 차단", turns_exceeded([user] * (MAX_TURNS + 1)))
+    check("7번째까지는 당연히 통과", not turns_exceeded([user] * (MAX_TURNS - 1)))
+
+
+def rule_last_call_wins() -> None:
+    print()
+    print("[같은 운동은 마지막 호출만 — #171 증상 2 (취소)]")
+
+    def call(cid: str, name: str, args: dict) -> dict:
+        c = tc(name, args)
+        c["tool_calls"][0]["id"] = cid
+        return c
+
+    def ok(cid: str) -> dict:
+        return {"role": "tool", "tool_call_id": cid, "content": json.dumps({"ok": True})}
+
+    first = call(
+        "c1",
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "레그프레스", "sets_delta": -1, "reason": "힘듦"},
+    )
+    cancel = call(
+        "c2",
+        "adjust_intensity",
+        {
+            "day_order": 1,
+            "exercise_name": "레그프레스",
+            "sets_delta": 0,
+            "reps_delta": 0,
+            "reason": "취소",
+        },
+    )
+    other = call(
+        "c3",
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "레그컬", "reps_delta": -2, "reason": "x"},
+    )
+    fin = call("c4", "finalize_revision", {"summary": "s", "changes": []})
+
+    msgs = [first, ok("c1"), other, ok("c3"), cancel, ok("c2"), fin, ok("c4")]
+    calls, finalized = collect_tool_calls(msgs, DAYS, CANDIDATES)
+    names = [(c["name"], c["args"]["exercise_name"], c["args"].get("sets_delta", 0)) for c in calls]
+    check(
+        "레그프레스는 마지막(취소) 호출만, 레그컬은 그대로",
+        names == [("adjust_intensity", "레그컬", 0), ("adjust_intensity", "레그프레스", 0)],
+        str(names),
+    )
+    check("취소 호출은 무효 adjust 로 판정", adjust_is_noop(calls[-1]["args"]))
+
+    days_after, applied = apply_changes_to_days(DAYS, calls, CATALOG_BY_REF)
+    legpress = next(e for e in days_after[0]["exercises"] if e["name"] == "레그프레스")
+    check(
+        "취소된 조정은 적용되지 않는다 (세트 4 그대로)",
+        legpress["sets"] == 4,
+        str(legpress["sets"]),
+    )
+    check(
+        "적용 기록에도 취소 호출은 남지 않는다",
+        [a["args"]["exercise_name"] for a in applied] == ["레그컬"],
+        str(applied),
+    )
+
+    card = build_card_changes(calls, {})
+    check(
+        "카드에도 취소된 조정은 없다", [c["what"] for c in card] == ["레그컬 횟수 -2회"], str(card)
+    )
+
+    # 카드는 대화 전체 기준 — 2턴에 조정, 3턴에 finalize 여도 변경이 실린다
+    check("finalize 는 살아있다", finalized is not None)
+
+
+def rule_replace_back() -> None:
+    print()
+    print("[교체 취소 = 원래 운동으로 되돌리기 — #171]")
+    day = {
+        "day_order": 1,
+        "title": "t",
+        "exercises": [
+            {
+                "name": "레그프레스",
+                "exercise_ref": "ref-legpress",
+                "muscle_group": "대퇴사두",
+                "sets": 4,
+                "reps": 10,
+            }
+        ],
+    }
+    ok_args, err = validate_tool_call(
+        "replace_exercise",
+        {
+            "day_order": 1,
+            "old_exercise_name": "레그프레스",
+            "new_exercise_ref": "ref-legpress",
+            "reason": "취소",
+        },
+        [day],
+        CANDIDATES,
+    )
+    check("원래 운동 ref 로의 교체는 후보 밖이어도 통과", err is None, err or "")
+    catalog = {
+        **CATALOG_BY_REF,
+        "ref-legpress": {
+            "exercise_ref": "ref-legpress",
+            "name_ko": "레그프레스",
+            "name_en": "leg press",
+        },
+    }
+    days_after, applied = apply_changes_to_days(
+        [day], [{"name": "replace_exercise", "args": ok_args}], catalog
+    )
+    check(
+        "적용해도 운동이 그대로고 기록도 없다",
+        days_after[0]["exercises"][0]["name"] == "레그프레스" and applied == [],
+    )
+    card = build_card_changes(
+        [{"name": "replace_exercise", "args": ok_args}], {"ref-legpress": "레그프레스"}
+    )
+    check("카드에도 실리지 않는다", card == [])
+
+
 def main() -> int:
     rule_validation()
     rule_apply()
@@ -606,6 +734,9 @@ def main() -> int:
     rule_rejected_calls_not_applied()
     rule_weight_talk_scope()
     rule_weight_needs_load_scale()
+    rule_turn_boundary()
+    rule_last_call_wins()
+    rule_replace_back()
 
     print()
     if _failures:

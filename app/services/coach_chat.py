@@ -203,6 +203,30 @@ def requires_load_scale(
     )
 
 
+def adjust_is_noop(args: dict[str, Any]) -> bool:
+    """세트·횟수·휴식·무게 아무것도 안 바꾸는 adjust — "아 그냥 두세요" 의 표현 (#171).
+
+    취소 도구가 따로 없다. 같은 운동에 대한 호출은 마지막 것만 적용되므로(collect_tool_calls),
+    코치가 0 변화로 다시 부르면 이전 조정이 무효가 된다. 이 호출 자체는 적용·카드에 남기지 않는다.
+    """
+    return (
+        not args.get("sets_delta")
+        and not args.get("reps_delta")
+        and args.get("rest_sec_new") is None
+        and args.get("load_scale") is None
+    )
+
+
+def _call_key(call: dict[str, Any]) -> tuple[Any, ...] | None:
+    """같은 운동을 가리키는 호출끼리 묶는 키. 금기·finalize 는 묶지 않는다."""
+    name, a = call["name"], call["args"]
+    if name == "adjust_intensity":
+        return ("adjust", a.get("day_order"), a.get("exercise_name"))
+    if name == "replace_exercise":
+        return ("replace", a.get("day_order"), a.get("old_exercise_name"))
+    return None
+
+
 def build_card_changes(
     tool_events: list[dict[str, Any]], ref_names: dict[str, str]
 ) -> list[dict[str, str]]:
@@ -217,6 +241,8 @@ def build_card_changes(
         name, a = event["name"], event["args"]
         why = str(a.get("reason") or "")
         if name == "adjust_intensity":
+            if adjust_is_noop(a):
+                continue
             parts: list[str] = []
             if a.get("sets_delta"):
                 parts.append(f"세트 {int(a['sets_delta']):+d}")
@@ -232,6 +258,8 @@ def build_card_changes(
             what = f"{a.get('exercise_name')} {', '.join(parts) if parts else '조정'}"
         elif name == "replace_exercise":
             ref = a.get("new_exercise_ref")
+            if ref_names.get(ref) == a.get("old_exercise_name"):
+                continue  # 원래 운동으로 되돌린 것 — 변경이 아니다
             what = f"{a.get('old_exercise_name')} → {ref_names.get(ref, ref)}"
         elif name == "flag_contraindication":
             what = f"{a.get('body_part')} → 주의 부위 등록 ({a.get('severity')})"
@@ -342,6 +370,8 @@ def validate_tool_call(
         #    **주간 볼륨 집계와 화면 라벨이 조용히 어긋난다.**
         #    슬롯의 세트·횟수도 그 근육군 기준으로 정해진 값이라 함께 무의미해진다.
         slot = next((e for e in day.get("exercises", []) if e["name"] == target), None)
+        if slot is not None and ref and ref == slot.get("exercise_ref"):
+            return args, None  # 원래 운동으로 되돌리기 — 교체 취소. 후보 밖이어도 허용 (#171)
         group = (slot or {}).get("muscle_group")
         same_group = candidates.get(group) if group else None
         if same_group is None:
@@ -414,7 +444,7 @@ def apply_changes_to_days(
 
         if name == "adjust_intensity":
             day = by_order.get(args["day_order"])
-            if day is None:
+            if day is None or adjust_is_noop(args):
                 continue
             for e in day.get("exercises", []):
                 if e["name"] != args["exercise_name"]:
@@ -444,6 +474,8 @@ def apply_changes_to_days(
             for e in day.get("exercises", []):
                 if e["name"] != args["old_exercise_name"]:
                     continue
+                if e.get("exercise_ref") == new["exercise_ref"]:
+                    break  # 원래 운동으로 되돌리기 — 변경 없음
                 # 세트·횟수·휴식(코드가 정한 처방)은 유지하고 운동만 바꾼다.
                 e["exercise_ref"] = new["exercise_ref"]
                 e["name"] = new.get("name_ko") or new["name_en"]
@@ -502,7 +534,20 @@ def collect_tool_calls(
             else:
                 calls.append({"name": name, "args": ok_args})
 
-    return calls, finalized
+    # ⚠️ 같은 운동에 대한 조정·교체는 **마지막 호출만** 적용한다 (#171 철회).
+    #    취소 도구가 없으므로 "아 그냥 두세요" 는 같은 운동을 0 변화로(또는 원래 운동으로)
+    #    다시 부르는 것으로 표현한다 — 이전 호출이 남아 있으면 취소가 불가능하다.
+    #    누적이 아니라 최종값이다 (프롬프트에도 그렇게 지시).
+    seen: set[tuple[Any, ...]] = set()
+    kept: list[dict[str, Any]] = []
+    for call in reversed(calls):
+        key = _call_key(call)
+        if key is not None:
+            if key in seen:
+                continue
+            seen.add(key)
+        kept.append(call)
+    return list(reversed(kept)), finalized
 
 
 # --------------------------------------------------------------------------- #
@@ -535,7 +580,10 @@ def turns_exceeded(messages: list[dict[str, Any]]) -> bool:
        모듈 주석)의 유일한 반례였다. 모델이 지시를 무시하면 무한정 이어질
        수 있었다. 라우트가 요청을 받자마자 이 함수로 먼저 끊는다.
     """
-    return _count_user_turns(messages) >= MAX_TURNS
+    # ⚠️ ">" 다 (#171). ">=" 였을 때 8번째 발화가 [마지막 턴] 신호를 받기 전에 차단돼
+    #    finalize 강제가 한 번도 실행되지 못했다 — 변경 없이 7턴을 쓰면 대화도 [적용]도
+    #    막히는 막다른 길. 8번째는 처리하고 카드를 만들고, 9번째부터 끊는다.
+    return _count_user_turns(messages) > MAX_TURNS
 
 
 def _mock_reply(messages: list[dict[str, Any]], turn: int) -> dict[str, Any]:
@@ -608,6 +656,15 @@ async def chat_turn(
         for group in candidates.values()
         for c in group
     }
+    # Day 의 운동 자체도 넣는다 — 원래 운동으로 되돌린 교체를 카드가 "변경 아님"으로 알아보게.
+    ref_names.update(
+        {
+            e["exercise_ref"]: e["name"]
+            for d in days
+            for e in d.get("exercises", [])
+            if e.get("exercise_ref")
+        }
+    )
     # ⚠️ 무게 얘기(#170 증상 3) — 사용자가 무겁다/가볍다고 했는데 adjust_intensity 에
     #    load_scale 이 없으면 되돌린다. 프롬프트 지시만으로는 안 지켜졌다 (실측 8/20: 횟수를 줄였다).
     #    범위는 "마지막 조정 이후의 사용자 발화" (user_texts_since_last_change 주석 참고).
@@ -723,11 +780,17 @@ async def chat_turn(
     # finalize_revision 을 부르지 않아 요약 카드가 안 나왔다. 프롬프트 권고는
     # 이런 걸 보장하지 못한다 — **변경이 실행됐으면 카드는 규칙이다.**
     # tool_choice 로 finalize 를 강제해 결정론적으로 닫는다.
-    if finalized is None and tool_events:
+    # ⚠️ 마지막 턴(turn == MAX_TURNS)도 강제한다 (#171) — 프롬프트의 [마지막 턴] 지시를
+    #    모델이 무시하면 카드가 없어 [적용]이 막힌다. 카드 없이 상한에 닿는 길을 없앤다.
+    if finalized is None and (tool_events or turn >= MAX_TURNS):
         llm_messages.append(
             {
                 "role": "system",
-                "content": "변경이 실행되었습니다. finalize_revision 으로 지금까지의 변경을 요약해 마무리하세요.",
+                "content": (
+                    "변경이 실행되었습니다. finalize_revision 으로 지금까지의 변경을 요약해 마무리하세요."
+                    if tool_events
+                    else "대화 상한입니다. finalize_revision 으로 마무리하세요 — 변경이 없으면 changes 는 빈 배열입니다."
+                ),
             }
         )
         response = await client.chat.completions.create(
@@ -774,8 +837,12 @@ async def chat_turn(
 
     if finalized is not None:
         # 카드의 변경 목록은 실제 실행된 도구로 다시 만든다 — LLM 이 적은 것은 쓰지 않는다 (#170).
-        finalized = truthful_card(finalized, tool_events, ref_names)
-        _append_safety_footer(finalized, tool_events)
+        # ⚠️ 이번 턴의 tool_events 가 아니라 **대화 전체**에서 재수집한다 (#171). 2턴에 조정하고
+        #    3턴에 finalize 하면 이번 턴엔 이벤트가 없어 카드가 비었다. 재수집은 [적용]과 같은
+        #    함수(collect_tool_calls)라 카드와 실제 적용이 항상 같다 — 마지막 호출만 반영·취소 포함.
+        effective, _ = collect_tool_calls(llm_messages[2:], days, candidates)
+        finalized = truthful_card(finalized, effective, ref_names)
+        _append_safety_footer(finalized, effective)
 
     # system 2개를 뗀 나머지가 다음 요청에 그대로 되돌아올 히스토리다.
     new_history = llm_messages[2:]

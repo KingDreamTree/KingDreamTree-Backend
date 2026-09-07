@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     #: ⚠️ 넘기면 503 "잠시 후 다시 시도" (fail-closed, 2026-08-16 — 종전 fail-open).
     #  판정 없이 통과시키면 헐렁한 옷처럼 사후 검증이 못 잡는 게 그대로 들어간다.
     photo_screening_timeout_sec: float = 10.0
+    #: 코치 대화 한 턴의 전체 상한 (#171). 한 턴에 OpenAI 를 최대 4회 부르고 호출당
+    #  timeout 이 60초라, 상한이 없으면 최악의 경우 몇 분을 기다린다. 넘기면 503
+    #  COACH_UNAVAILABLE — "코치가 응답하지 못했어요, 다시 시도" 로 안내한다.
+    coach_chat_timeout_sec: float = 90.0
     #: 판정에 보낼 이미지의 긴 변 상한. 저장용 원본을 그대로 보내면 토큰이 낭비된다 —
     #  옷 밀착도·촬영 거리·잘림은 작은 이미지로도 판별되고, 두 장을 보내므로 두 배다.
     photo_screening_max_side: int = 768

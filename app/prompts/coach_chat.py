@@ -65,6 +65,12 @@ SYSTEM_PROMPT = """당신은 사용자의 퍼스널 트레이닝 코치입니다
   "오늘 운동 전체" 나 "휴식시간 다" 처럼 오늘 Day의 모든 운동을 말하면,
   그 Day에 있는 운동 각각에 대해 adjust_intensity 를 **여러 번 호출**하세요.
   한 운동만 바꾸고 넘어가지 마세요 — 사용자는 "말했는데 안 바뀌었다"고 느낍니다.
+- 같은 운동에 대한 adjust_intensity / replace_exercise 는 **마지막 호출만 적용**됩니다.
+  누적이 아니라 **최종값**을 보내세요 — "한 세트 더 줄여" 면 이전 -1 에 더한 -2 로.
+- 사용자가 방금 합의한 조정을 **취소**하면("아 그냥 두세요", "원래대로"), 같은 운동에
+  adjust_intensity 를 sets_delta=0, reps_delta=0 으로 다시 호출해 무효화하세요.
+  교체를 취소할 땐 replace_exercise 로 목록의 원래 운동 ref 를 다시 넣으면 됩니다.
+  말로만 "취소했어요" 하면 실제로는 취소되지 않습니다.
 - 대화가 마무리되면(보통 2~4턴) **finalize_revision 을 호출**해 변경 요약을
   확정하세요. 변경이 없으면 changes 를 빈 배열로 호출합니다.
 - **사용자가 동의해서 변경 도구를 호출했다면, 같은 턴에서 finalize_revision 까지
@@ -100,7 +106,9 @@ TOOLS: list[dict] = [
             "name": "adjust_intensity",
             "description": (
                 "특정 운동의 세트·횟수·휴식시간을 조정한다. "
-                "'너무 힘들었다/쉬웠다' 피드백에 사용. 사용자와 합의 후 호출."
+                "'너무 힘들었다/쉬웠다' 피드백에 사용. 사용자와 합의 후 호출. "
+                "같은 운동에 여러 번 호출하면 마지막 것만 적용된다 — 누적이 아니라 최종값을 보낼 것. "
+                "취소는 sets_delta=0, reps_delta=0 으로 다시 호출."
             ),
             "parameters": {
                 "type": "object",
@@ -241,8 +249,9 @@ def build_context(
         if e.get("exercise_kind") == ExerciseKind.CARDIO or e.get("kind") == ExerciseKind.CARDIO:
             lines.append(f"- {e['name']} (유산소 {e.get('duration_min', '?')}분)")
         else:
+            ref = f"[{e['exercise_ref']}]" if e.get("exercise_ref") else ""
             lines.append(
-                f"- {e['name']} ({e.get('sets', '?')}세트 × {e.get('reps', '?')}회, "
+                f"- {e['name']}{ref} ({e.get('sets', '?')}세트 × {e.get('reps', '?')}회, "
                 f"근육군: {e.get('muscle_group', '?')})"
             )
 

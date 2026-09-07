@@ -16,14 +16,17 @@
    세션에 누적한다 — 안전은 [적용] 버튼 뒤에 두지 않는다.
 """
 
+import asyncio
 import logging
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter
+from openai import OpenAIError
 
 from app.deps import OwnedSession
-from app.errors import invalid_request, not_found
+from app.config import settings
+from app.errors import coach_unavailable, invalid_request, not_found
 from app.schemas.coach import (
     CoachApplyRequest,
     CoachApplyResponse,
@@ -117,13 +120,28 @@ async def chat(session: OwnedSession, body: CoachChatRequest) -> CoachChatRespon
     if not days:
         raise not_found("루틴 Day")
 
-    result = await coach_chat.chat_turn(
-        messages=body.messages,
-        day=_today_day(days, session_id),
-        days=days,
-        contraindications=_load_contraindications(session_id),
-        catalog=exercise_catalog.load_catalog(),
-    )
+    # ⚠️ 한 턴 전체에 상한을 건다 (#171). 안에서 OpenAI 를 최대 4회 부르고 호출당 60초라
+    #    상한이 없으면 최악의 경우 몇 분을 기다린 끝에 일반 500 이 떴다. 넘기거나 OpenAI 가
+    #    실패하면 503 COACH_UNAVAILABLE — 사용자에게는 "잠시 후 다시 시도" 로 보인다.
+    try:
+        result = await asyncio.wait_for(
+            coach_chat.chat_turn(
+                messages=body.messages,
+                day=_today_day(days, session_id),
+                days=days,
+                contraindications=_load_contraindications(session_id),
+                catalog=exercise_catalog.load_catalog(),
+            ),
+            timeout=settings.coach_chat_timeout_sec,
+        )
+    except asyncio.TimeoutError:
+        log.warning(
+            "코치 대화 타임아웃 (%.0fs, session=%s)", settings.coach_chat_timeout_sec, session_id
+        )
+        raise coach_unavailable() from None
+    except OpenAIError as e:
+        log.warning("코치 대화 OpenAI 오류: %s (session=%s)", type(e).__name__, session_id)
+        raise coach_unavailable() from None
 
     # 안전은 [적용]을 기다리지 않는다 — 금기는 대화 중 즉시 누적.
     flags = [e["args"] for e in result["tool_events"] if e["name"] == "flag_contraindication"]

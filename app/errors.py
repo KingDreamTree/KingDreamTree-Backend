@@ -160,6 +160,20 @@ def unsuitable_photo(message: str, detail: dict[str, Any] | None = None) -> ApiE
     return ApiError(422, "UNSUITABLE_PHOTO", message, detail)
 
 
+def coach_unavailable() -> ApiError:
+    """코치 대화가 타임아웃·OpenAI 장애로 **답을 못 만든** 경우 (#171).
+
+    ⚠️ 일반 500(internal_error) 이 아니다. 500 은 "알 수 없는 오류" 로 보여 사용자가
+       뭘 해야 할지 모른다. 이건 잠시 후 **같은 말을 다시 보내면** 되는 상황이다.
+       screening_unavailable 과 같은 이유로 503 을 쓴다.
+    """
+    return ApiError(
+        503,
+        "COACH_UNAVAILABLE",
+        "코치가 지금 응답하지 못했어요. 잠시 후 다시 시도해주세요.",
+    )
+
+
 def screening_unavailable() -> ApiError:
     """2차 검사가 장애·타임아웃으로 **판정 자체를 못 한** 경우. 사진 저장 안 함.
 

@@ -77,18 +77,19 @@ def _merge_contraindications(session_id: UUID, added: list[dict[str, Any]]) -> N
 def _today_day(days: list[dict[str, Any]], session_id: UUID) -> dict[str, Any]:
     """직전에 완료한 Day — 대화의 주제. 완료 기록이 없으면 Day 1.
 
-    ⚠️ **버전 무관 카운트**(count_session_logs)로 센다. 피드백 [적용]마다
-       루틴은 새 버전으로 갈리고 이전 수행 기록은 이전 버전에 남으므로,
-       count_logs(month_routine_id) 로 세면 적용 직후 카운트가 리셋돼
-       코치가 항상 Day 1 을 "오늘 한 날"로 짚는다 — 사용자가 방금 끝낸
-       Day 의 운동을 "오늘 하신 운동이 아니에요"라며 거부하던 원인
-       (실측 2026-08-21). 진행도 화면도 2026-08-15 에 같은 리셋 사고로
-       세션 카운트로 바꿨다 (routine_repo.count_session_logs 주석).
+    ⚠️ **개수로 역산하지 않는다** (#169). 종전엔 count_session_logs 로 센 횟수를
+       나머지 연산으로 Day 에 대응시켰는데, 더블클릭으로 기록이 하나 더 생기거나
+       옛 user_id 를 이어받아 횟수가 밀리면 코치가 **다음 Day** 를 "오늘"로 알았다 —
+       "오늘 벤치프레스는 포함되지 않았어요"의 원인 (실측 2026-08-24). 기록에는
+       실제로 한 Day 가 적혀 있으므로(routine_day_id) 마지막 기록을 읽는다.
+       진행도(routine_repo.progress)도 같은 기준이라 세 화면이 한 Day 를 가리킨다.
+
+    ⚠️ 버전 무관은 유지한다 — 기록은 옛 버전의 routine_day 를 가리킬 수 있지만
+       day_order 는 남으므로 활성 버전의 같은 day_order 를 찾는다. 피드백 [적용]마다
+       버전이 갈려도 리셋되지 않는다 (#160 의 사고 재발 방지).
     """
-    done = routine_repo.count_session_logs(session_id)
-    n = len(days) or 1
-    # 방금 k개째를 끝냈다면 주제는 ((k-1) % n) + 1 번째 Day 다.
-    order = ((max(done, 1) - 1) % n) + 1
+    last = routine_repo.last_session_log(session_id)
+    order = last["day_order"] if last else 1
     return next((d for d in days if d["day_order"] == order), days[0])
 
 

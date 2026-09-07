@@ -91,8 +91,9 @@ class RoutineProgressDto(BaseModel):
     next_day_order: int
     is_completed: bool
     percent: int
-    #: 진행 계산 방식. 나중에 날짜 기준으로 바꿔도 프론트가 구분할 수 있게.
-    day_source: str = "COUNT"
+    #: 진행 계산 방식. LAST_LOG = 마지막 완료 기록의 Day 기준 (#169, 종전 COUNT 는
+    #: 완료 횟수 역산). 나중에 날짜 기준으로 바꿔도 프론트가 구분할 수 있게.
+    day_source: str = "LAST_LOG"
 
 
 class RoutineStrategyDto(BaseModel):

@@ -52,6 +52,15 @@ SYSTEM_PROMPT = """당신은 사용자의 퍼스널 트레이닝 코치입니다
 - replace_exercise 의 새 운동은 반드시 제공된 후보 목록에서 고르세요.
   목록 밖 운동은 시스템이 거부합니다.
 - 조정할 것이 없으면 도구 없이 대화만 해도 됩니다. 억지로 바꾸지 마세요.
+- 운동 이름은 사용자가 말한 대로 적어도 됩니다 ("벤치" 처럼). 시스템이 오늘 목록과
+  대조해 하나로 특정되면 통과시키고, 애매하면 후보를 돌려줍니다.
+- 시스템이 "찾지 못했다" 거나 "여러 운동에 해당한다" 고 돌려주면, **다른 운동으로
+  대체하지 말고** 목록을 보여주며 어느 운동을 말하는지 되물으세요. 사용자가 틀렸다고
+  말하지 마세요 — "오늘은 벤치프레스가 없었고 푸시업이 있었는데, 혹시 푸시업이었을까요?"
+  처럼 확인합니다.
+- finalize_revision 의 summary 에는 **실제로 도구를 호출한 운동만** 언급하세요.
+  changes 목록은 시스템이 실제 실행된 도구로 다시 만듭니다 — 하지 않은 변경을
+  적어도 카드에 실리지 않습니다.
 - adjust_intensity 는 **운동 하나씩만** 바꿉니다. 사용자가 특정 운동이 아니라
   "오늘 운동 전체" 나 "휴식시간 다" 처럼 오늘 Day의 모든 운동을 말하면,
   그 Day에 있는 운동 각각에 대해 adjust_intensity 를 **여러 번 호출**하세요.
@@ -77,7 +86,9 @@ SYSTEM_PROMPT = """당신은 사용자의 퍼스널 트레이닝 코치입니다
   ⚠️ 무게가 무겁다/가볍다는 피드백이면 kg 을 말하지 말고 adjust_intensity 의
      load_scale 로 넘기세요 (0.8=낮춤 / 1.2=올림). 실제 kg 은 사용자 체중으로
      코드가 계산합니다 — 당신이 숫자를 정하는 게 아닙니다.
-- 오늘 하지 않은 운동, 루틴에 없는 Day 에 대한 변경 금지."""
+     무게 얘기인데 load_scale 없이 세트·횟수만 바꾸면 시스템이 되돌립니다.
+- 루틴에 없는 Day 에 대한 변경 금지. 오늘 목록에 없는 운동을 말하면 부정하지 말고
+  위 규칙대로 되물으세요."""
 
 
 #: 대화 중 코치가 쓸 수 있는 도구. 기존 routine_patch 3종 + finalize.
@@ -97,7 +108,10 @@ TOOLS: list[dict] = [
                     "day_order": {"type": "integer", "minimum": 1, "maximum": 7},
                     "exercise_name": {
                         "type": "string",
-                        "description": "조정할 운동 이름(현재 루틴과 일치)",
+                        "description": (
+                            "조정할 운동 이름. 사용자가 말한 대로 적어도 된다 — "
+                            "시스템이 오늘 목록과 대조해 특정한다"
+                        ),
                     },
                     "sets_delta": {"type": "integer", "description": "세트 증감 (-2~+2). 없으면 0"},
                     "reps_delta": {"type": "integer", "description": "횟수 증감 (-4~+4). 없으면 0"},
@@ -131,7 +145,10 @@ TOOLS: list[dict] = [
                 "type": "object",
                 "properties": {
                     "day_order": {"type": "integer", "minimum": 1, "maximum": 7},
-                    "old_exercise_name": {"type": "string"},
+                    "old_exercise_name": {
+                        "type": "string",
+                        "description": "바꿀 운동 이름. 사용자가 말한 대로 적어도 된다",
+                    },
                     "new_exercise_ref": {
                         "type": "string",
                         "description": "후보 목록의 exercise_ref. 목록 밖은 거부됨",
@@ -182,7 +199,10 @@ TOOLS: list[dict] = [
                     },
                     "changes": {
                         "type": "array",
-                        "description": "이번 대화에서 합의된 변경의 짧은 설명 목록",
+                        "description": (
+                            "이번 대화에서 실제로 도구를 호출한 변경의 짧은 설명. "
+                            "시스템이 실제 실행 내역으로 다시 만든다"
+                        ),
                         "items": {
                             "type": "object",
                             "properties": {

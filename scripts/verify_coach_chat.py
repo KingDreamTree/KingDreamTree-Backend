@@ -42,6 +42,12 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         _failures.append(label)
 
 
+from app.services.coach_chat import (  # noqa: E402
+    build_card_changes,
+    resolve_exercise_name,
+    truthful_card,
+)
+
 # ── 픽스처 ───────────────────────────────────────────────────────────────────
 
 DAYS = [
@@ -323,12 +329,187 @@ def rule_safety_footer() -> None:
     )
 
 
+def rule_name_matching() -> None:
+    print("\n[운동 이름 특정 — #170]")
+    names = ["레그프레스", "레그컬"]
+    r, c = resolve_exercise_name("레그 프레스", names)
+    check("공백 차이는 완전 일치로 특정", r == "레그프레스")
+    r, c = resolve_exercise_name("레그컬", names)
+    check("완전 일치", r == "레그컬")
+    r, c = resolve_exercise_name("프레스", names)
+    check(
+        "'프레스' 는 자동 특정하지 않고 되묻기 (부분 일치)",
+        r is None and c == ["레그프레스"],
+        str(c),
+    )
+    r, c = resolve_exercise_name("레그", names)
+    check("'레그' 는 둘 다 걸려 되묻기", r is None and set(c) == set(names), str(c))
+    r, c = resolve_exercise_name("벤치프레스", names)
+    check("목록에 없음 → 후보도 없음", r is None and c == [])
+    r, c = resolve_exercise_name("컬", ["덤벨 라잉 플로어 스컬 크러셔", "레그프레스"])
+    check("'컬' 이 '스컬 크러셔' 에 자동으로 붙지 않음", r is None, str(c))
+    r, c = resolve_exercise_name("벤치", ["벤치프레스", "스쿼트", "플랭크"])
+    check("'벤치' → 벤치프레스 (단어 경계 유일)", r == "벤치프레스")
+    r, c = resolve_exercise_name("벤치", ["벤치프레스", "벤치 딥 온 플로어"])
+    check("'벤치' 가 둘이면 되묻기", r is None and len(c) == 2, str(c))
+
+    ok_args, err = validate_tool_call(
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "레그 프레스", "reps_delta": -2, "reason": "x"},
+        DAYS,
+        CANDIDATES,
+    )
+    check(
+        "통과 시 인자 이름이 루틴 이름으로 정규화",
+        err is None and ok_args["exercise_name"] == "레그프레스",
+    )
+    _, err = validate_tool_call(
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "벤치프레스", "reason": "x"},
+        DAYS,
+        CANDIDATES,
+    )
+    check(
+        "목록에 없는 이름 → 되물으라는 지시 ('없습니다' 프레임 아님)",
+        err is not None and "되물" in err and "없습니다" not in err,
+        err or "",
+    )
+    _, err = validate_tool_call(
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "레그", "reason": "x"},
+        DAYS,
+        CANDIDATES,
+    )
+    check(
+        "애매한 이름 → 후보와 함께 되물으라는 지시",
+        err is not None and "여러 운동" in err,
+        err or "",
+    )
+    ok_args, err = validate_tool_call(
+        "replace_exercise",
+        {
+            "day_order": 1,
+            "old_exercise_name": "레그 프레스",
+            "new_exercise_ref": "ref-legext",
+            "reason": "x",
+        },
+        DAYS,
+        CANDIDATES,
+    )
+    check("교체도 이름 정규화", err is None and ok_args["old_exercise_name"] == "레그프레스")
+
+
+def rule_truthful_card() -> None:
+    print("\n[카드는 코드가 그린다 — #170]")
+    events = [
+        {
+            "name": "adjust_intensity",
+            "args": {
+                "day_order": 1,
+                "exercise_name": "레그컬",
+                "sets_delta": 0,
+                "reps_delta": -2,
+                "reason": "무거웠음",
+            },
+        },
+        {
+            "name": "replace_exercise",
+            "args": {
+                "day_order": 1,
+                "old_exercise_name": "레그프레스",
+                "new_exercise_ref": "ref-legext",
+                "reason": "무릎",
+            },
+        },
+        {
+            "name": "flag_contraindication",
+            "args": {"body_part": "무릎", "severity": "WARN", "reason": "통증"},
+        },
+    ]
+    ref_names = {"ref-legext": "레그 익스텐션"}
+    whats = [c["what"] for c in build_card_changes(events, ref_names)]
+    check(
+        "변경 목록이 실행된 도구 3건 그대로",
+        whats == ["레그컬 횟수 -2회", "레그프레스 → 레그 익스텐션", "무릎 → 주의 부위 등록 (WARN)"],
+        str(whats),
+    )
+
+    # 실측 2026-08-20 — 요약은 벤치프레스를 조정했다는데 실제 실행은 다른 운동
+    lie = {
+        "summary": "벤치프레스의 강도를 조정했습니다.",
+        "changes": [{"what": "벤치프레스 횟수 감소", "why": "x"}],
+    }
+    card = truthful_card(lie, events[:1], ref_names)
+    check(
+        "LLM 이 적은 changes 를 버리고 실행 내역으로 교체",
+        card["changes"] == [{"what": "레그컬 횟수 -2회", "why": "무거웠음"}],
+    )
+    check(
+        "실제 바꾼 운동을 언급 안 한 요약은 실행 내역으로 재작성",
+        "레그컬" in card["summary"] and "벤치프레스" not in card["summary"],
+        card["summary"],
+    )
+    honest = {"summary": "레그컬 횟수를 2회 줄였어요.", "changes": []}
+    check(
+        "실제 운동을 언급한 요약은 그대로",
+        truthful_card(honest, events[:1], ref_names)["summary"] == honest["summary"],
+    )
+    card = truthful_card(
+        {"summary": "바꿀 건 없었어요.", "changes": [{"what": "가짜", "why": "x"}]}, [], ref_names
+    )
+    check(
+        "실행된 도구가 없으면 changes 는 빈 목록",
+        card["changes"] == [] and card["summary"] == "바꿀 건 없었어요.",
+    )
+
+
+def rule_rejected_calls_not_applied() -> None:
+    print("\n[대화 때 거부된 호출은 적용에서 제외 — #170]")
+
+    def call(cid: str, name: str, args: dict) -> dict:
+        c = tc(name, args)
+        c["tool_calls"][0]["id"] = cid
+        return c
+
+    adjust = call(
+        "c1",
+        "adjust_intensity",
+        {"day_order": 1, "exercise_name": "레그프레스", "reps_delta": -2, "reason": "x"},
+    )
+    fin = call("c2", "finalize_revision", {"summary": "s", "changes": []})
+    rejected = [
+        adjust,
+        {
+            "role": "tool",
+            "tool_call_id": "c1",
+            "content": json.dumps({"ok": False, "error": "무게"}),
+        },
+        fin,
+    ]
+    calls, finalized = collect_tool_calls(rejected, DAYS, CANDIDATES)
+    check(
+        "ok=false 였던 호출은 재수집에서 빠짐 (finalize 는 살아있음)",
+        calls == [] and finalized is not None,
+        str(calls),
+    )
+    accepted = [
+        adjust,
+        {"role": "tool", "tool_call_id": "c1", "content": json.dumps({"ok": True})},
+        fin,
+    ]
+    calls, _ = collect_tool_calls(accepted, DAYS, CANDIDATES)
+    check("ok=true 였던 호출은 그대로", len(calls) == 1)
+
+
 def main() -> int:
     rule_validation()
     rule_apply()
     rule_recollect()
     rule_mock_conversation()
     rule_safety_footer()
+    rule_name_matching()
+    rule_truthful_card()
+    rule_rejected_calls_not_applied()
 
     print()
     if _failures:

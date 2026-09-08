@@ -42,6 +42,13 @@ app = FastAPI(
 
 log = logging.getLogger("app")
 
+# ⚠️ pod 모드 기동 점검 — 팟(app/pod/main.py)에는 있는데 API 에는 없어서, 비밀이 비면
+#    첫 upload-token 호출이 500 으로 터졌다 (2026-09-09 검사). 여기서 바로 죽는다.
+if settings.photo_pipeline == "pod" and not settings.pod_upload_secret:
+    raise RuntimeError(
+        "PHOTO_PIPELINE=pod 인데 POD_UPLOAD_SECRET 이 비어 있습니다 — 팟과 같은 값을 .env 에 넣으세요."
+    )
+
 
 # --------------------------------------------------------------------------- #
 # CORS — 프론트가 다른 오리진에서 붙는다
@@ -139,7 +146,9 @@ async def health() -> dict[str, object]:
             at = datetime.fromisoformat(str(last[0]["started_at"]).replace("Z", "+00:00"))
             if at.tzinfo is None:
                 at = at.replace(tzinfo=timezone.utc)
-            body["worker_last_seen_sec_ago"] = round((datetime.now(timezone.utc) - at).total_seconds())
+            body["worker_last_seen_sec_ago"] = round(
+                (datetime.now(timezone.utc) - at).total_seconds()
+            )
         else:
             body["worker_last_seen_sec_ago"] = None
     except Exception:  # noqa: BLE001 — 진단용 부가 정보라 실패해도 헬스체크 자체는 죽이지 않는다

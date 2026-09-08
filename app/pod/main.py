@@ -70,6 +70,9 @@ def main() -> int:
 
     # ⚠️ proxy_headers — RunPod 프록시 뒤에서 client.host 를 실제 IP 로. 없으면 IP당
     #    속도 제한이 프록시 IP 하나로 합쳐져 전체 공용 상한이 된다 (API 의 #169 와 같은 함정).
+    # ⚠️ forwarded_allow_ips="*" 는 **RunPod 프록시가 유일한 입구**라는 전제다. 팟 포트를
+    #    프록시 밖(TCP 공개 포트)으로 열면 X-Forwarded-For 를 위조해 IP 속도 제한을 피할 수
+    #    있다 — 템플릿에서 HTTP 8080 만 노출한다 (docs/pod-pipeline.md).
     uvicorn.run(
         app,
         host="0.0.0.0",

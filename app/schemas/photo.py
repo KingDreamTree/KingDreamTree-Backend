@@ -66,6 +66,8 @@ class UploadTokenResponse(BaseModel):
     """POST /sessions/{id}/upload-token — 팟 업로드용 일회용 토큰.
 
     ⚠️ 팟 주소는 여기 없다. 프론트 빌드에 고정한다 (services/upload_token.py 주석).
+    ⚠️ 토큰은 팟이 **검증하는 순간** 소모된다 — 그 뒤 응답이 422(재촬영)·503·409 여도
+       같은 토큰은 401 이다. 프론트는 어떤 응답이든 재시도 전에 여기서 새로 받는다.
     """
 
     token: str

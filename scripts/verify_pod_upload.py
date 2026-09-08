@@ -285,7 +285,11 @@ def fake_open_processing(session_id, kind, payload=None):
 queue.open_processing = fake_open_processing
 queue.cancel_open_by_kind = lambda session_id, kinds, reason: 0
 queue.fail = lambda job_id, error, retryable=True: FAILED_JOBS.append(str(job_id))
-pipeline._worker = None  # 처리 스레드는 띄우지 않는다 — 대기열에 쌓이기만 한다
+import types  # noqa: E402
+
+# 처리 스레드는 띄우지 않는다 — 대기열에 쌓이기만 한다. 다만 submit 이 "스레드 살아있나"를
+# 보므로(죽었으면 503) 살아 있는 척하는 가짜를 둔다. 죽은 경우는 아래서 따로 검사한다.
+pipeline._worker = types.SimpleNamespace(is_alive=lambda: True)
 
 from app.services import photo_source  # noqa: E402
 
@@ -353,7 +357,11 @@ check(
 )
 
 
+SCREENED = [0]
+
+
 async def screen_pass(user_image, reference_image):
+    SCREENED[0] += 1
     return photo_screening.ScreenResult(suitable=True)
 
 
@@ -448,10 +456,12 @@ if vlm_copy and seg_copy:
         vlm_img.getpixel((out_x, out_y)) == seg_img.getpixel((out_x, out_y)),
     )
     check("  두 벌 크기 같음", vlm_img.size == seg_img.size, f"{vlm_img.size} vs {seg_img.size}")
+photo_source.put("storage-sess", "USER", b"plain")  # 가린 복사본 없이 등록 (종전 경로 상황)
 check(
     "  storage 경로(가린 복사본 없음)는 for_vlm 도 가공본을 줌",
-    photo_source.get("no-such", "USER", for_vlm=True) is None,
+    photo_source.get("storage-sess", "USER", for_vlm=True) == b"plain",
 )
+photo_source.clear("storage-sess")
 # 얼굴 점이 전부 안 보이면 가리지 않는다 (뒷모습)
 hidden = [
     {"index": i, "x": 0.5, "y": 0.2 + i * 0.02, "z": 0.0, "visibility": 0.1 if i < 11 else 0.95}
@@ -460,8 +470,88 @@ hidden = [
 check("  얼굴 점 visibility 낮음 → 박스 없음", face_mask.face_box(hidden, (600, 800)) is None)
 check("  랜드마크 없음 → 박스 없음", face_mask.face_box(None, (600, 800)) is None)
 
+check(
+    "  잡 payload 에 팟 id (재시작 정리가 자기 것만 건드리게)",
+    all(j["payload"].get("pod") == pipeline.INSTANCE_ID for j in OPENED),
+    str(OPENED[0]["payload"]),
+)
+check(
+    "  DB 의 pose_landmarks 는 원본 기준 그대로 (재정규화 값으로 덮지 않음)",
+    PHOTOS["USER"]["pose_landmarks"] == json.loads(landmarks_json()),
+    str(PHOTOS["USER"]["pose_landmarks"][0]),
+)
+from starlette.formparsers import MultiPartParser  # noqa: E402
+
+check(
+    "  multipart 를 디스크에 스풀하지 않음 (spool_max_size ≥ 본문 상한)",
+    MultiPartParser.spool_max_size > pod_server._MAX_BODY,
+    str(MultiPartParser.spool_max_size),
+)
+
 r = pod.post("/upload", files=files(), headers={"X-Upload-Token": tok})
 check("같은 토큰 재사용 → 401", r.status_code == 401, str(r.status_code))
+
+# 같은 세션 연타 — 대기 중인데 또 올리면 본문·스크리닝 전에 409
+before = SCREENED[0]
+r = pod.post("/upload", files=files(), headers={"X-Upload-Token": fresh_token()})
+check(
+    "같은 세션 진행 중 재업로드 → 409 ANALYSIS_IN_PROGRESS",
+    r.status_code == 409 and r.json()["error"]["code"] == "ANALYSIS_IN_PROGRESS",
+    r.text[:200],
+)
+check("  이때 스크리닝(GPT) 호출 없음", SCREENED[0] == before)
+check(
+    "  이때 메모리 사진은 앞 요청 것 그대로 (held 2)",
+    photo_source.held() == 2,
+    str(photo_source.held()),
+)
+
+# 파일 하나 빠짐 → 400 (관문은 통과했으니 토큰은 소모된다 — 결정 2)
+pipeline._active.clear()  # 아래 검사는 "다른 세션"인 셈 — 진행 중 표시를 지운다
+r = pod.post(
+    "/upload",
+    files={"reference": ("r.jpg", jpeg(), "image/jpeg")},
+    headers={"X-Upload-Token": fresh_token()},
+)
+check(
+    "user 파일 없음 → 400 INVALID_REQUEST",
+    r.status_code == 400 and r.json()["error"]["code"] == "INVALID_REQUEST",
+    r.text[:200],
+)
+check(
+    "  파일 없음 실패 뒤 메모리 사진 증가 없음", photo_source.held() == 2, str(photo_source.held())
+)
+
+# 행 갱신 실패 → 500 이지만 사진은 메모리에 남지 않는다 (2026-09-09 검사 C3)
+_orig_update = db.update_photo
+
+
+def update_fails(photo_id, patch):
+    raise RuntimeError("column photo.crop_box does not exist")
+
+
+db.update_photo = update_fails
+r = pod.post("/upload", files=files(), headers={"X-Upload-Token": fresh_token()})
+check("행 갱신 실패 → 500", r.status_code == 500, str(r.status_code))
+# (검증은 세션 id 하나를 재사용하므로 앞 요청의 같은 세션 사진도 같이 지워진다 — 실제로는 409 로 못 겹친다)
+check(
+    "  실패한 세션의 사진은 메모리에 남지 않음 (held 0)",
+    photo_source.held() == 0,
+    str(photo_source.held()),
+)
+check("  실패한 세션은 진행 중 표시에서 빠짐", not pipeline.is_active(SESSION_ID))
+db.update_photo = _orig_update
+
+# 처리 스레드가 죽었으면 받지 않는다
+pipeline._worker = types.SimpleNamespace(is_alive=lambda: False)
+r = pod.post("/upload", files=files(), headers={"X-Upload-Token": fresh_token()})
+check(
+    "처리 스레드 없음 → 503 POD_BUSY",
+    r.status_code == 503 and r.json()["error"]["code"] == "POD_BUSY",
+    str(r.status_code),
+)
+check("  이때 잡을 만들지 않음", len(OPENED) == 3, str(len(OPENED)))
+pipeline._worker = types.SimpleNamespace(is_alive=lambda: True)
 
 r = pod.post(
     "/upload", files=files(), data={"pipeline": "quick"}, headers={"X-Upload-Token": fresh_token()}
@@ -476,6 +566,7 @@ check(
 )
 
 # 대기열 상한 2 — 위 두 건이 차 있다 (처리 스레드 없음) → 세 번째는 잡을 만들지 않고 503
+pipeline._active.clear()  # 다른 세션인 셈
 r = pod.post("/upload", files=files(), headers={"X-Upload-Token": fresh_token()})
 check(
     "대기열 초과 → 503 POD_BUSY",
@@ -485,6 +576,7 @@ check(
 check("  초과 시 잡을 만들지 않음", len(OPENED) == 4, str(len(OPENED)))
 
 PHOTOS.pop("USER")
+pipeline._active.clear()
 r = pod.post("/upload", files=files(), headers={"X-Upload-Token": fresh_token()})
 check("사용자 사진 행 없음 → 409", r.status_code == 409, str(r.status_code))
 
@@ -494,6 +586,39 @@ check("IP 속도 제한 → 51번째 429", codes[-1] == 429 and codes[0] == 401,
 
 r = pod.get("/health")
 check("GET /health 응답", r.status_code == 200 and "pipeline" in r.json(), r.text[:200])
+h = r.json().get("pipeline", {})
+check(
+    "  running 은 세션 id 가 아니라 참/거짓",
+    isinstance(h.get("running"), bool),
+    str(h.get("running")),
+)
+check("  팟 id 표시", bool(h.get("instance")), str(h.get("instance")))
+
+# 얼굴 점이 코·입만 남아도(눈·귀 안 보임) 어깨 폭 기준으로 넓게 가린다 (2026-09-09 검사 M2)
+few = [
+    {
+        "index": i,
+        "x": 0.5 + (0.12 if i == 11 else -0.12 if i == 12 else 0),
+        "y": 0.2 + i * 0.02,
+        "z": 0.0,
+        "visibility": 0.95 if i in (0, 9, 10, 11, 12) else 0.1,
+    }
+    for i in range(33)
+]
+narrow = face_mask.face_box(few, (600, 800))
+full_box = face_mask.face_box(json.loads(landmarks_json()), (600, 800))
+check(
+    "  얼굴 점 3개(코·입)만 → 어깨 폭 기준 보수 박스",
+    narrow is not None and (narrow[2] - narrow[0]) >= 0.35 * 0.24 * 600 * 0.9,
+    str(narrow),
+)
+check(
+    "  보수 박스가 정상 박스보다 좁지 않음",
+    narrow is not None
+    and full_box is not None
+    and (narrow[2] - narrow[0]) >= (full_box[2] - full_box[0]) * 0.8,
+    f"{narrow} vs {full_box}",
+)
 
 print()
 if FAILS:

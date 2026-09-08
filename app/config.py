@@ -77,11 +77,14 @@ class Settings(BaseSettings):
     pod_queue_max: int = 8
     #: 팟 프로세스가 붙는 포트 (RunPod 프록시가 이 포트를 HTTPS 로 감싼다).
     pod_port: int = 8080
-    #: OpenAI 로 보내는 사진의 얼굴을 팟이 단색으로 덮는다 (services/face_mask).
+    #: OpenAI 로 보내는 사진의 얼굴을 팟이 가린다 (services/face_mask — 기본 타원 블러).
     #  false 는 **실측 전용**(원본 vs 가림 진단 비교) — 운영에서 끄면 얼굴이 OpenAI 로 나간다.
     pod_face_mask: bool = True
     #: 가리는 방식 — blur(강한 블러, 기본) | fill(회색 사각형). services/face_mask.apply 참고
     pod_face_mask_style: str = "blur"
+    #: 이 팟의 식별자. 재시작 정리(fail_orphans)가 자기 잡만 건드리게 한다. 비우면
+    #  RUNPOD_POD_ID → 호스트명 순으로 잡는다 (app/pod/pipeline.INSTANCE_ID).
+    pod_instance_id: str = ""
 
     # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값
@@ -328,6 +331,8 @@ def _warn_unknown_env_keys() -> None:
         return
 
     known = set(Settings.model_fields)
+    # compose 가 읽는 키 — 앱 설정이 아니지만 같은 .env 에 산다 (docker-compose.yml WORKER_KINDS)
+    known |= {"worker_kinds"}
     unknown = [
         m.group(1)
         for line in path.read_text(encoding="utf-8").splitlines()

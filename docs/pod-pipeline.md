@@ -52,9 +52,11 @@ SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY
 OPENAI_API_KEY
 MODEL_DIR=/workspace/models        HF_HOME=/workspace/.cache/huggingface
 SAPIENS_SIZE=1b  SAPIENS_DEVICE=cuda  SAPIENS_DTYPE=float16
-CORS_ORIGINS=https://www.refit.live  (브라우저가 팟에 직접 붙는다 — 비우면 화면에서만 실패)
-POD_PORT=8080  POD_QUEUE_MAX=8  POD_UPLOAD_RATE_LIMIT=10
+CORS_ORIGINS=https://www.refit.live  (브라우저가 팟에 직접 붙는다. ⚠️ 비우면 "*" = 전면 허용 — 운영에선 반드시 지정)
+POD_PORT=8080  POD_QUEUE_MAX=8  POD_UPLOAD_RATE_LIMIT=10  POD_UPLOAD_RATE_WINDOW_SEC=60  POD_UPLOAD_TOKEN_TTL_SEC=120
 POD_FACE_MASK=true   (false 는 실측 전용 — 운영에서 끄면 OpenAI 에 얼굴이 나간다)
+POD_FACE_MASK_STYLE=blur   (blur = 얼굴 타원 안 강한 블러(기본) | fill = 회색 사각형)
+POD_INSTANCE_ID=   (비우면 RUNPOD_POD_ID → 호스트명. 재시작 정리가 자기 잡만 건드리는 열쇠 — 스테이징 팟은 자동으로 다른 값)
 ```
 
 API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의 `WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH` (EC2 워커가 VLM 잡을 집지 않게).
@@ -81,11 +83,15 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 ## 운영
 
 - **로그**: RunPod 대시보드 컨테이너 로그(stdout). 기동 점검 실패도 여기 첫 줄에 나온다. 사진 바이트·토큰은 찍지 않는다
-- **헬스**: `GET /health` → `pipeline.queued`(대기), `held_photos`(메모리 사진 수 — 대기 상태면 0), `worker_alive`
-- **재시작**: 메모리 사진이 사라지므로 처리 중이던 잡은 기동 직후 `FAILED` + "다시 올려주세요" 로 정리된다 (`queue.fail_orphans`, payload.source=pod 만)
+- **헬스**: `GET /health` → `pipeline.queued`(대기), `running`(참/거짓), `held_photos`(메모리 사진 수 — 대기 상태면 0), `worker_alive`, `instance`(팟 id). 세션 id 는 내지 않는다
+- **재시작**: 메모리 사진이 사라지므로 처리 중이던 잡은 기동 직후 `FAILED` + "다시 올려주세요" 로 정리된다 (`queue.fail_orphans`, payload 의 source=pod **와 pod=<이 팟 id>** 가 모두 일치하는 것만). 다른 팟(스테이징)의 잡은 건드리지 않는다
+- **본문은 메모리에만**: Starlette 는 1MB 넘는 multipart 파트를 임시 파일로 스풀하는데, 팟 서버는 그 상한을 본문 상한 위로 올려 디스크를 안 거친다 (`app/pod/server.py` MultiPartParser.spool_max_size). 관문(속도 제한·크기·토큰)은 본문을 읽기 **전에** 돈다 — 핸들러가 File/Form 매개변수를 선언하지 않고 `request.form()` 을 직접 읽기 때문이다
 - **마이그레이션 전**: 폴백이 없다. `storage_path` NOT NULL 은 API 의 랜드마크 등록을, `crop_box` 없음은 팟의 행 갱신(업로드 500)을 막는다 — **pod 모드는 마이그레이션 적용이 전제**다. (crop_box 없이 조용히 저장하는 폴백은 2026-09-09 결정으로 뺐다: 업로드는 성공처럼 보이는데 화면만 어긋나는 게 더 찾기 어렵다)
-- **대기열 초과**: 업로드가 503 `POD_BUSY` — 프론트는 "잠시 후 다시"
-- **디버깅**: 문 없는 팟에는 들어갈 수 없다. 같은 이미지에 SSH 템플릿을 얹은 **스테이징 팟**을 따로 만들어 거기서 본다. 프로덕션 팟은 재배포만
+- **대기열 초과 · 처리 스레드 없음**: 업로드가 503 `POD_BUSY` — 프론트는 "잠시 후 다시"
+- **같은 세션 연타**: 대기·처리 중인 세션에 또 올리면 본문을 읽기 전에 409 `ANALYSIS_IN_PROGRESS` — 프론트는 진행률 폴링으로 간다
+- **토큰은 검증 시 소모**: 그 뒤 응답이 422(재촬영)·503·409·404 여도 같은 토큰은 401. 프론트는 어떤 응답이든 재시도 전에 `upload-token` 을 새로 받는다 (결정 2, 2026-09-09)
+- **인바디는 사진 업로드 전에**: 인바디 업로드·삭제는 진단(part/overall)을 지우는데, pod 모드에서는 `POST /analysis` 가 409 라 **재분석 진입점이 "두 장을 팟에 다시 올리기" 뿐**이다. 프론트 흐름은 인바디 → 사진 순서로 고정하고, 사진 뒤에 인바디를 바꾸면 재업로드를 안내한다. (팟 메모리에 사진이 없어 VLM 만 다시 걸 수 없다 — 후속 이슈 후보)
+- **디버깅**: 문 없는 팟에는 들어갈 수 없다. 같은 이미지에 SSH 템플릿을 얹은 **스테이징 팟**을 따로 만들어 거기서 본다. 프로덕션 팟은 재배포만. 스테이징 팟이 같은 Supabase 를 봐도 `RUNPOD_POD_ID` 가 달라 프로덕션 잡을 정리하지 않는다 (위 재시작 항목)
 - **잔여 확인**: `scripts/check_pod_no_photo_residue.py` (스테이징 팟·로컬), `scripts/audit_photo_privacy.py --session <id>` (DB·Storage 감사)
 
 ## 얼굴 가림 (이슈 3) — 팟이 OpenAI 행 복사본만 가린다 (2026-09-09 결정)

@@ -64,7 +64,12 @@ def enqueue(
             existing = find_open(session_id, kind)
         if existing is None:
             raise
-        log.info("중복 INSERT를 기존 잡으로 대체 — session=%s kind=%s job=%s", session_id, kind, existing["job_id"])
+        log.info(
+            "중복 INSERT를 기존 잡으로 대체 — session=%s kind=%s job=%s",
+            session_id,
+            kind,
+            existing["job_id"],
+        )
         return existing
 
 
@@ -285,12 +290,28 @@ def claim_job(job_id: UUID, payload: dict[str, Any] | None = None) -> dict[str, 
     return updated[0] if updated else None
 
 
+def mark_started(job_id: UUID) -> None:
+    """PROCESSING 인 잡의 started_at 을 지금으로 갱신한다 — 팟 대기열용.
+
+    팟은 잡을 접수 시각에 PROCESSING 으로 만들고(open_processing) 대기열에서 기다린다.
+    그 시각이 started_at 으로 남으면 오래 기다린 잡이 시작도 전에 job_stale_after_sec 을
+    넘겨 is_stalled=true → 화면이 "아무도 안 집어감"이라고 거짓말한다. 처리 직전에 갱신한다.
+    """
+    get_client().table("job").update({"started_at": _now()}).eq("job_id", str(job_id)).eq(
+        "status", JobStatus.PROCESSING
+    ).execute()
+
+
 def fail_orphans(kinds: Iterable[JobKind], payload_match: dict[str, Any], error: str) -> int:
     """PROCESSING 인 채 남은 잡을 **즉시** FAILED 로 종결한다. 종결 개수 반환.
 
     팟이 재시작하면 메모리의 사진이 사라져 그 잡은 어디서도 이어갈 수 없다.
     좀비 회수(15분)를 기다리게 두면 사용자는 그동안 로딩 화면에 갇힌다 —
-    기동 직후 payload 로 자기 것(source=pod)만 골라 바로 실패 처리한다.
+    기동 직후 payload 로 자기 것만 골라 바로 실패 처리한다.
+
+    ⚠️ payload_match 에는 source=pod 뿐 아니라 **팟 id(pod=...)** 도 들어온다. source 만으로
+       거르면 같은 DB 를 보는 다른 팟(스테이징)이 기동하는 순간 프로덕션 팟의 처리 중
+       잡을 전부 죽인다 (2026-09-09 검사). 키 전부가 일치해야 대상이다.
     """
     client = get_client()
     rows = (

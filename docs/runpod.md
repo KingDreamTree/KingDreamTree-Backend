@@ -1,5 +1,10 @@
 # RunPod GPU 워커 운영
 
+> ⚠️ **2026-09-09 — 사진 직접 업로드 경로(PHOTO_PIPELINE=pod)가 추가됐다.** 그 경로에서는
+> 팟이 "잡 큐를 폴링하는 워커"가 아니라 **사진을 받는 서버**(`app/pod`)이고, 아래의
+> SSH·nohup 운영은 쓰지 않는다 (문 없는 이미지 `Dockerfile.pod`). 운영 방법은
+> `docs/pod-pipeline.md`. 이 문서는 종전 경로(PHOTO_PIPELINE=storage)의 세그 워커 운영이다.
+
 | | |
 |---|---|
 | **최종 수정일** | 2026-08-17 |

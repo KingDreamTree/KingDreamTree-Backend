@@ -20,7 +20,12 @@ services:
 
   worker:
     build: .
-    command: python -m app.worker.run --kinds OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH
+    # ⚠️ 사진 경로가 팟(PHOTO_PIPELINE=pod)으로 바뀌면 .env 에
+    #      WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH
+    #    를 두어 VLM_PART/VLM_OVERALL 을 **여기서 빼야 한다.** 그 잡은 팟이 자기 안에서
+    #    처리하고, 사진이 팟 메모리에만 있어 이 워커가 집으면 실패한다.
+    #    값이 없으면 종전 구성(사진을 Storage 에서 읽는 경로) 그대로다.
+    command: python -m app.worker.run --kinds ${WORKER_KINDS:-OCR_INBODY,VLM_PART,VLM_OVERALL,ROUTINE_GEN,ROUTINE_PATCH}
     restart: unless-stopped
     env_file: .env
     # ⚠️ run.py 의 graceful stop(_handle_signal)은 **현재 잡이 끝나야** 루프를

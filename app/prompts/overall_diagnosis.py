@@ -34,6 +34,9 @@ SYSTEM_PROMPT = """당신은 두 체형 사진을 나란히 놓고 전체를 비
 
 # 사진에서 볼 것
 
+얼굴은 개인정보 보호를 위해 일부러 가려져(흐리게 처리되어) 있습니다. 두 사진 모두
+그렇습니다. 가려진 얼굴은 어디에도 쓰지 말고 목부터 아래만 보세요.
+
 - 전체 실루엣의 차이 — 두 몸의 윤곽이 어떻게 다른가
 - 상체와 하체의 상대적인 볼륨, 그 균형
 - 어깨 · 허리 · 골반 폭의 관계 (절대 크기가 아니라 서로의 비율)
@@ -570,9 +573,7 @@ def _tie_note(parts: list[dict[str, Any]], priority_parts: list[str]) -> list[st
         return []
     top_gap = top["gap_level"]
     tied = [
-        name
-        for name in priority_parts
-        if (by_name.get(name) or {}).get("gap_level") == top_gap
+        name for name in priority_parts if (by_name.get(name) or {}).get("gap_level") == top_gap
     ]
     if len(tied) < 2:
         return []
@@ -750,11 +751,15 @@ def build_overall_prompt(
         band = (
             "목표에 거의 근접한 상태 — 남은 차이는 «미세 보완»으로 서술"
             if score >= 90
-            else "목표에 가까운 편 — 남은 차이를 문제로 부풀리지 말 것"
-            if score >= 70
-            else "차이가 분명한 상태 — 무엇이 다른지 구체적으로"
-            if score >= 40
-            else "차이가 큰 상태 — 얼버무리지 말되, 개선 폭이 크다는 관점으로"
+            else (
+                "목표에 가까운 편 — 남은 차이를 문제로 부풀리지 말 것"
+                if score >= 70
+                else (
+                    "차이가 분명한 상태 — 무엇이 다른지 구체적으로"
+                    if score >= 40
+                    else "차이가 큰 상태 — 얼버무리지 말되, 개선 폭이 크다는 관점으로"
+                )
+            )
         )
         sections += [
             "",

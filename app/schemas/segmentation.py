@@ -61,9 +61,16 @@ class SegmentationResponse(BaseModel):
     map_width: int
     map_height: int
 
-    photo_url: str
+    #: ⚠️ 팟 경로(PHOTO_PIPELINE=pod)에서는 null — 서버에 사진이 없다. 화면은
+    #  기기 원본을 was_mirrored 면 좌우 반전하고 crop_box 로 잘라, 그 위에 맵을 얹는다.
+    photo_url: str | None = None
     photo_width: int | None = None
     photo_height: int | None = None
+    was_mirrored: bool = False
+    crop_box: dict | None = Field(
+        default=None,
+        description="{x, y, w, h, source_width, source_height, flipped} — 비반전 원본 픽셀 좌표",
+    )
 
     model: ModelInfo
     person_area_ratio: float

@@ -141,6 +141,34 @@ MODEL_ASPECT = 768 / 1024  # 0.75 (가로/세로)
 _ASPECT_TOL = 0.02
 
 
+def model_aspect_box(
+    img: Image.Image,
+    landmarks: list[dict[str, Any]] | None = None,
+) -> tuple[int, int, int, int] | None:
+    """fit_to_model_aspect 가 자를 박스 (left, top, right, bottom). 안 자르면 None.
+
+    ⚠️ fit_to_model_aspect 와 **같은 계산**이어야 한다 — 팟 경로가 이 박스를
+       photo.crop_box 에 남기고 프론트가 기기 원본을 같은 박스로 잘라 맵을 얹는다.
+       둘이 어긋나면 맵이 몸에서 밀린다. 그래서 fit_to_model_aspect 가 이 함수를 쓴다.
+    """
+    w, h = img.size
+    if w <= 0 or h <= 0:
+        return None
+    if abs(w / h - MODEL_ASPECT) <= _ASPECT_TOL:
+        return None  # 이미 3:4 — 손대지 않는다
+
+    if w / h > MODEL_ASPECT:  # 가로가 넓다 → 좌우를 자른다
+        cw, ch = round(h * MODEL_ASPECT), h
+    else:  # 세로가 길다 → 위아래를 자른다
+        cw, ch = w, round(w / MODEL_ASPECT)
+    cw, ch = max(1, min(cw, w)), max(1, min(ch, h))
+
+    cx, cy = _focus(landmarks, w, h)
+    left = _clamp(round(cx - cw / 2), 0, w - cw)
+    top = _clamp(round(cy - ch / 2), 0, h - ch)
+    return (left, top, left + cw, top + ch)
+
+
 def fit_to_model_aspect(
     img: Image.Image,
     landmarks: list[dict[str, Any]] | None = None,
@@ -168,24 +196,10 @@ def fit_to_model_aspect(
     Returns:
         (크롭된 이미지, 재정규화된 랜드마크). 이미 규격이면 입력을 그대로 돌려준다.
     """
-    w, h = img.size
-    if w <= 0 or h <= 0:
-        return img, landmarks
-    if abs(w / h - MODEL_ASPECT) <= _ASPECT_TOL:
-        return img, landmarks  # 이미 3:4 — 손대지 않는다
-
-    if w / h > MODEL_ASPECT:  # 가로가 넓다 → 좌우를 자른다
-        cw, ch = round(h * MODEL_ASPECT), h
-    else:  # 세로가 길다 → 위아래를 자른다
-        cw, ch = w, round(w / MODEL_ASPECT)
-    cw, ch = max(1, min(cw, w)), max(1, min(ch, h))
-
-    cx, cy = _focus(landmarks, w, h)
-    left = _clamp(round(cx - cw / 2), 0, w - cw)
-    top = _clamp(round(cy - ch / 2), 0, h - ch)
-    box = (left, top, left + cw, top + ch)
-
-    return img.crop(box), _recenter_landmarks(landmarks, box, (w, h))
+    box = model_aspect_box(img, landmarks)
+    if box is None:
+        return img, landmarks  # 이미 3:4 이거나 크기가 0 — 손대지 않는다
+    return img.crop(box), _recenter_landmarks(landmarks, box, img.size)
 
 
 def _clamp(v: int, lo: int, hi: int) -> int:

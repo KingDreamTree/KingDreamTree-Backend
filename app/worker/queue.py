@@ -64,7 +64,12 @@ def enqueue(
             existing = find_open(session_id, kind)
         if existing is None:
             raise
-        log.info("중복 INSERT를 기존 잡으로 대체 — session=%s kind=%s job=%s", session_id, kind, existing["job_id"])
+        log.info(
+            "중복 INSERT를 기존 잡으로 대체 — session=%s kind=%s job=%s",
+            session_id,
+            kind,
+            existing["job_id"],
+        )
         return existing
 
 
@@ -227,6 +232,106 @@ def enqueue_once(
     if existing is not None:
         return existing, False
     return enqueue(session_id, kind, payload), True
+
+
+def open_processing(
+    session_id: UUID,
+    kind: JobKind,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """잡을 **처음부터 PROCESSING 으로** 만든다 — 팟이 자기 안에서 바로 처리할 때.
+
+    ⚠️ PENDING 으로 만들면 다른 워커(EC2 LLM 워커, 로컬 워커)가 claim() 으로
+       집어간다. 팟 경로의 사진은 팟 메모리에만 있어 그 워커는 사진을 못 읽고
+       실패한다. 그래서 큐를 거치지 않고 소유권을 팟에 박아 넣는다.
+
+    ⚠️ 같은 세션·kind 의 열린 잡이 있으면 먼저 종결한다 (job_open_one_per_kind_idx).
+       재업로드로 만든 새 흐름이 옛 잡을 이어받아서는 안 된다.
+    """
+    cancel_open_by_kind(session_id, (kind,), "새 업로드로 대체되었습니다.")
+    row: dict[str, Any] = {
+        "session_id": str(session_id),
+        "kind": str(kind),
+        "status": JobStatus.PROCESSING,
+        "attempts": 1,
+        "started_at": _now(),
+    }
+    if payload is not None:
+        row["payload"] = payload
+    return get_client().table("job").insert(row).execute().data[0]
+
+
+def claim_job(job_id: UUID, payload: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """특정 잡 하나를 PENDING → PROCESSING 으로 선점한다 (CAS). 뺏겼으면 None.
+
+    팟이 VLM_PART 핸들러가 등록한 VLM_OVERALL 잡을 **다른 워커보다 먼저** 가져갈 때
+    쓴다. 뺏겼다면(None) 그 워커가 처리한다 — 사진이 없어 실패하겠지만 여기서
+    두 번 돌리지는 않는다. payload 를 주면 선점하면서 같이 기록한다 (팟 표식용).
+    """
+    rows = get_client().table("job").select("attempts").eq("job_id", str(job_id)).execute().data
+    if not rows:
+        return None
+    patch: dict[str, Any] = {
+        "status": JobStatus.PROCESSING,
+        "attempts": rows[0]["attempts"] + 1,
+        "started_at": _now(),
+    }
+    if payload is not None:
+        patch["payload"] = payload
+    updated = (
+        get_client()
+        .table("job")
+        .update(patch)
+        .eq("job_id", str(job_id))
+        .eq("status", JobStatus.PENDING)
+        .execute()
+        .data
+    )
+    return updated[0] if updated else None
+
+
+def mark_started(job_id: UUID) -> None:
+    """PROCESSING 인 잡의 started_at 을 지금으로 갱신한다 — 팟 대기열용.
+
+    팟은 잡을 접수 시각에 PROCESSING 으로 만들고(open_processing) 대기열에서 기다린다.
+    그 시각이 started_at 으로 남으면 오래 기다린 잡이 시작도 전에 job_stale_after_sec 을
+    넘겨 is_stalled=true → 화면이 "아무도 안 집어감"이라고 거짓말한다. 처리 직전에 갱신한다.
+    """
+    get_client().table("job").update({"started_at": _now()}).eq("job_id", str(job_id)).eq(
+        "status", JobStatus.PROCESSING
+    ).execute()
+
+
+def fail_orphans(kinds: Iterable[JobKind], payload_match: dict[str, Any], error: str) -> int:
+    """PROCESSING 인 채 남은 잡을 **즉시** FAILED 로 종결한다. 종결 개수 반환.
+
+    팟이 재시작하면 메모리의 사진이 사라져 그 잡은 어디서도 이어갈 수 없다.
+    좀비 회수(15분)를 기다리게 두면 사용자는 그동안 로딩 화면에 갇힌다 —
+    기동 직후 payload 로 자기 것만 골라 바로 실패 처리한다.
+
+    ⚠️ payload_match 에는 source=pod 뿐 아니라 **팟 id(pod=...)** 도 들어온다. source 만으로
+       거르면 같은 DB 를 보는 다른 팟(스테이징)이 기동하는 순간 프로덕션 팟의 처리 중
+       잡을 전부 죽인다 (2026-09-09 검사). 키 전부가 일치해야 대상이다.
+    """
+    client = get_client()
+    rows = (
+        client.table("job")
+        .select("job_id,payload")
+        .in_("kind", [str(k) for k in kinds])
+        .eq("status", JobStatus.PROCESSING)
+        .execute()
+        .data
+    ) or []
+    targets = [
+        r["job_id"]
+        for r in rows
+        if all((r.get("payload") or {}).get(k) == v for k, v in payload_match.items())
+    ]
+    for job_id in targets:
+        client.table("job").update(
+            {"status": JobStatus.FAILED, "error": error, "finished_at": _now()}
+        ).eq("job_id", job_id).eq("status", JobStatus.PROCESSING).execute()
+    return len(targets)
 
 
 # --------------------------------------------------------------------------- #

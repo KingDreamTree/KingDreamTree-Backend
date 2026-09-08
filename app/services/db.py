@@ -143,6 +143,15 @@ def delete_photo(photo_id: UUID) -> None:
     get_client().table("photo").delete().eq("photo_id", str(photo_id)).execute()
 
 
+def update_photo(photo_id: UUID, patch: dict[str, Any]) -> dict[str, Any] | None:
+    """사진 행 부분 갱신. 팟 경로가 세그 직전에 크기·크롭 박스·재정규화 랜드마크를 채운다.
+
+    ⚠️ 종전 경로는 이 함수를 쓰지 않는다 — 저장 시점에 이미 다 안다.
+    """
+    rows = get_client().table("photo").update(patch).eq("photo_id", str(photo_id)).execute().data
+    return rows[0] if rows else None
+
+
 def rows_for_session(table: str, session_id: UUID, columns: str = "*") -> list[dict[str, Any]]:
     """세션에 딸린 행들을 그대로 가져온다.
 

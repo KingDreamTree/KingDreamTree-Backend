@@ -115,7 +115,11 @@ def _build(
     map_url, expires_at = storage.signed_url(
         segmentation["storage_bucket"], segmentation["map_path"]
     )
-    photo_url, _ = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
+    # ⚠️ 팟 경로 행은 storage_path 가 NULL 이다 — 사진이 서버에 없다. 프론트는
+    #    photo_url 대신 기기 원본 + crop_box 로 그린다.
+    photo_url = None
+    if photo.get("storage_path"):
+        photo_url, _ = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
 
     # ⚠️ 병합 맵은 **있으면 준다.** 이 필드가 생기기 전에 만들어진 세션에는 파일이
     #    없으므로 서명 URL 생성이 실패할 수 있다 — 그때는 null 로 두고 프론트가
@@ -140,6 +144,8 @@ def _build(
         photo_url=photo_url,
         photo_width=photo["width"],
         photo_height=photo["height"],
+        was_mirrored=bool(photo.get("was_mirrored")),
+        crop_box=photo.get("crop_box"),
         model=ModelInfo(name=segmentation["model_name"], version=segmentation["model_version"]),
         person_area_ratio=segmentation["person_area_ratio"],
         palette=palette,

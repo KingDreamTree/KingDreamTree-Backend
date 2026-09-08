@@ -52,6 +52,41 @@ class Settings(BaseSettings):
     inbody_max_files: int = 5
 
     # ------------------------------------------------------------------ #
+    # 사진 경로 — storage(지금) | pod(팟 직접 업로드, 저장 없음)
+    # ------------------------------------------------------------------ #
+    #: storage : 기기 → API → Storage 저장 → 워커가 내려받아 처리 (종전)
+    #: pod     : 기기 → RunPod 팟에 직접 업로드, 팟이 메모리에서 스크리닝·세그·진단을
+    #            한 흐름으로 처리하고 맵·진단문·수치·크롭 박스만 저장. API 는 사진을
+    #            만지지 않는다 (토큰 발급·랜드마크 저장·잡 조회만).
+    #  ⚠️ pod 로 켜려면 db/migrations/2026-09-09_photo_pod_pipeline.sql 이 먼저
+    #     적용돼 있어야 한다 (photo.storage_path NULL 허용 + crop_box).
+    #  ⚠️ 프론트(업로드 주소)·API·팟이 맞물린다 — 셋을 같은 날 전환한다.
+    photo_pipeline: str = "storage"
+
+    #: API 와 팟이 공유하는 업로드 토큰 서명 비밀. **둘 다 같은 값**이어야 한다.
+    #  ⚠️ 새면 누구나 토큰을 만들어 팟에 사진을 올리고 스크리닝 GPT 요금을 태울 수
+    #     있다. 환경 변수로만 주입하고, 유출이 의심되면 양쪽을 동시에 교체한다.
+    pod_upload_secret: str = ""
+    #: 토큰 수명. 발급 직후 바로 올리는 흐름이라 짧게 둔다.
+    pod_upload_token_ttl_sec: int = 120
+    #: 팟 업로드 IP당 속도 제한 — 토큰 없는 요청도 여기서 먼저 걸린다.
+    pod_upload_rate_limit: int = 10
+    pod_upload_rate_window_sec: int = 60
+    #: 팟 안 대기열 상한. 넘치면 즉시 503 "잠시 후 다시" — 프록시 100초를 넘겨
+    #  524 로 끊기는 것보다 낫다. 세그(GPU)는 한 번에 하나라 처리 스레드는 1개다.
+    pod_queue_max: int = 8
+    #: 팟 프로세스가 붙는 포트 (RunPod 프록시가 이 포트를 HTTPS 로 감싼다).
+    pod_port: int = 8080
+    #: OpenAI 로 보내는 사진의 얼굴을 팟이 가린다 (services/face_mask — 기본 타원 블러).
+    #  false 는 **실측 전용**(원본 vs 가림 진단 비교) — 운영에서 끄면 얼굴이 OpenAI 로 나간다.
+    pod_face_mask: bool = True
+    #: 가리는 방식 — blur(강한 블러, 기본) | fill(회색 사각형). services/face_mask.apply 참고
+    pod_face_mask_style: str = "blur"
+    #: 이 팟의 식별자. 재시작 정리(fail_orphans)가 자기 잡만 건드리게 한다. 비우면
+    #  RUNPOD_POD_ID → 호스트명 순으로 잡는다 (app/pod/pipeline.INSTANCE_ID).
+    pod_instance_id: str = ""
+
+    # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값
     # ------------------------------------------------------------------ #
     # ⚠️ 산식과 각 값의 근거는 docs/pose-scoring.md 에 있다. 숫자만 보고 바꾸지 말 것.
@@ -296,6 +331,8 @@ def _warn_unknown_env_keys() -> None:
         return
 
     known = set(Settings.model_fields)
+    # compose 가 읽는 키 — 앱 설정이 아니지만 같은 .env 에 산다 (docker-compose.yml WORKER_KINDS)
+    known |= {"worker_kinds"}
     unknown = [
         m.group(1)
         for line in path.read_text(encoding="utf-8").splitlines()

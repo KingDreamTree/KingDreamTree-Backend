@@ -22,10 +22,12 @@ router = APIRouter(tags=["storage"])
 #     경로가 job.payload 안에만 있어 DB로 실재 여부를 확인할 수 없다.
 ALLOWED_BUCKETS: frozenset[str] = frozenset(
     {
-        settings.bucket_photos,
         settings.bucket_segmentations,
         settings.bucket_body_parts,
     }
+    # ⚠️ 팟 경로(PHOTO_PIPELINE=pod)에서는 사진 버킷을 아예 열지 않는다 — 발급할
+    #    파일이 없다. 종전 경로에서만 사진 서명 URL 재발급을 허용한다.
+    | ({settings.bucket_photos} if settings.photo_pipeline != "pod" else set())
 )
 
 

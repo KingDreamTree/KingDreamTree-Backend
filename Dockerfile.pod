@@ -1,0 +1,53 @@
+# GPU 팟 이미지 — 사진을 받아 메모리에서 처리하는 서버 (app/pod). **문이 없다.**
+#
+#   docker build -f Dockerfile.pod -t kingdreamtree-pod:latest .
+#
+# 종전 운영(공식 템플릿 + SSH 로 들어가 nohup 으로 워커 기동)과 다른 점
+#   · sshd·Jupyter·웹터미널이 없다. 들어갈 방법이 없고, 코드 변경은 이미지 재배포로만.
+#   · 부팅하면 python -m app.pod.main 이 바로 뜬다 (점검 실패 시 종료 → RunPod 로그로 확인).
+#   · 로그는 stdout — RunPod 컨테이너 로그(대시보드)로 밖에서 본다. 디스크에 안 쓴다.
+#   · 사진은 파일로 쓰지 않는다. 컨테이너 디스크에 남는 건 pip 설치분뿐이다.
+#
+# ⚠️ 가중치는 이미지에 넣지 않는다. Network Volume 을 /workspace 에 붙이고
+#    MODEL_DIR=/workspace/models (docs/runpod.md "가중치는 반드시 볼륨에").
+# ⚠️ 시크릿(SUPABASE_SERVICE_ROLE_KEY, OPENAI_API_KEY, POD_UPLOAD_SECRET)은 이미지에
+#    굽지 않는다 — 팟 환경변수로 주입한다.
+# ⚠️ 베이스 태그는 requirements-ml.txt 의 torch 2.11.0+cu128 과 맞춘 것이다. 다른 태그를
+#    쓰면 torch 를 다시 깔게 되고 CUDA 조합이 어긋날 수 있다 (scripts/install_runpod.sh 주석).
+
+FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PHOTO_PIPELINE=pod \
+    MODEL_DIR=/workspace/models \
+    HF_HOME=/workspace/.cache/huggingface \
+    POD_PORT=8080
+
+WORKDIR /srv
+
+# 의존성 먼저 — 코드만 바뀐 재빌드에서 이 레이어가 캐시로 넘어간다.
+COPY requirements.txt .
+RUN pip install -r requirements.txt \
+ && pip install \
+      "transformers==5.15.0" \
+      "safetensors==0.8.0" \
+      "huggingface-hub==1.27.0" \
+      "accelerate==1.14.0"
+
+# ⚠️ torchvision — 없으면 AutoImageProcessor 가 ImportError 로 죽는다 (install_runpod.sh 주석).
+RUN python -c "import torchvision" 2>/dev/null \
+ || pip install "torchvision==0.26.0" --index-url https://download.pytorch.org/whl/cu128
+
+COPY app app
+COPY data data
+COPY scripts scripts
+
+EXPOSE 8080
+
+# 헬스 — RunPod 이 살아 있는지 볼 때. 대기열·메모리 사진 수도 같이 나온다.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=180s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=4).status == 200 else 1)"
+
+# ⚠️ 셸 엔트리포인트를 두지 않는다. 프로세스는 이것 하나다.
+CMD ["python", "-m", "app.pod.main"]

@@ -174,6 +174,48 @@ def coach_unavailable() -> ApiError:
     )
 
 
+def pod_upload_required() -> ApiError:
+    """PHOTO_PIPELINE=pod 인데 옛 경로(API 로 사진 업로드 / POST /analysis)를 불렀다.
+
+    사진은 API 를 거치지 않는다 — 분석 시작 시 두 장을 GPU 팟에 직접 올린다.
+    ⚠️ 409 인 이유: 요청 자체가 틀린 게 아니라(400) 지금 구성에서 이 경로가 닫힌
+       것이라, 프론트가 "업로드 주소가 바뀌었다"로 읽고 팟 경로로 가야 한다.
+    """
+    return ApiError(
+        409,
+        "PHOTO_PIPELINE_POD",
+        "사진은 서버에 저장하지 않습니다. 분석 시작 시 GPU 팟에 직접 올려주세요.",
+    )
+
+
+def analysis_in_progress() -> ApiError:
+    """같은 세션의 분석이 팟에서 이미 대기·처리 중이다 (연타·이중 전송).
+
+    사진은 세션당 한 벌만 메모리에 두므로 두 번째 업로드를 받으면 첫 번째와 서로 지운다.
+    409 — 요청이 틀린 게 아니라 지금은 받을 수 없는 상태. 프론트는 진행률 폴링으로 간다.
+    """
+    return ApiError(
+        409,
+        "ANALYSIS_IN_PROGRESS",
+        "이 세션의 분석이 이미 진행 중입니다. 잠시 후 결과를 확인해주세요.",
+    )
+
+
+def invalid_upload_token(message: str) -> ApiError:
+    """팟 업로드 토큰 서명·만료·재사용 오류. 프론트는 토큰을 다시 발급받는다."""
+    return ApiError(401, "INVALID_UPLOAD_TOKEN", message)
+
+
+def pod_busy(queued: int) -> ApiError:
+    """팟 대기열이 가득 찼다. 지금 받아도 프록시 100초 안에 못 끝낸다 — 바로 돌려보낸다."""
+    return ApiError(
+        503,
+        "POD_BUSY",
+        "지금은 분석 요청이 많아요. 잠시 후 다시 시도해주세요.",
+        {"queued": queued},
+    )
+
+
 def screening_unavailable() -> ApiError:
     """2차 검사가 장애·타임아웃으로 **판정 자체를 못 한** 경우. 사진 저장 안 함.
 

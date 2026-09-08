@@ -208,11 +208,15 @@ def main() -> int:
         jobs = body["jobs"]
         check("  crop_box 두 장", set(body.get("crop_box", {})) == {"REFERENCE", "USER"})
         masked = body.get("face_masked") or {}
-        print(f"    face_masked: {masked}  (팟 POD_FACE_MASK 가 false 면 둘 다 false 가 정상)")
+        print(
+            f"    face_masked: {masked}  (팟 POD_FACE_MASK 가 false 면 둘 다 false 가 정상. "
+            "머리가 잘린 사진은 가릴 얼굴이 없어 false 가 정상)"
+        )
         if h["pipeline"].get("face_mask", True):
+            # 기준 사진은 얼굴이 있는 것을 쓴다는 전제. 사용자 사진은 머리 잘림이 허용되므로 강제하지 않는다
             check(
-                "  얼굴 가림 두 장 (face_masked)",
-                masked == {"REFERENCE": True, "USER": True},
+                "  기준 사진 얼굴 가림 (face_masked.REFERENCE)",
+                masked.get("REFERENCE") is True,
                 str(masked),
             )
 

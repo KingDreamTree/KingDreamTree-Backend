@@ -61,7 +61,8 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 
 ## RunPod 설정 (미실행 — 팟을 올릴 때)
 
-- **Secure Cloud** 로 만든다 (Community Cloud 아님). 이미지: `kingdreamtree-pod:<tag>` (레지스트리에 푸시한 것)
+- 이미지: `kingdreamtree-pod:<tag>` (레지스트리에 푸시한 것)
+- **Community Cloud 그대로** (2026-09-09 결정). Secure Cloud 는 GPU 주인이 메모리를 볼 수 있다는 구조적 위험 때문에 고려 대상이었지만, 지금 단계에서는 하지 않는다. 이슈 표에 후순위로 남긴다
 - Network Volume → `/workspace` (가중치). 리전은 볼륨 리전(EU-RO-1)
 - **Expose HTTP Ports: 8080**. SSH/TCP 포트는 열지 않는다. 템플릿의 start command 는 비운다 (이미지 CMD 사용)
 - 환경 변수는 위 목록을 팟 템플릿에 넣는다 (시크릿 포함)

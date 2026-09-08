@@ -20,7 +20,7 @@ from fastapi import APIRouter, Query, status
 
 from app.config import settings
 from app.deps import OwnedSession
-from app.errors import ApiError, precondition_not_met
+from app.errors import ApiError, pod_upload_required, precondition_not_met
 from app.schemas.analysis import (
     DISCLAIMER,
     AnalysisProgressResponse,
@@ -174,6 +174,11 @@ async def start_analysis(
     ] = "full",
 ) -> AnalysisStartResponse:
     session_id = UUID(str(session["session_id"]))
+
+    # ⚠️ 팟 경로에서는 잡을 **팟이** 만든다 — 분석 시작 = 두 장을 팟에 올리는 것이다.
+    #    여기서 잡을 만들면 사진 없는 워커가 집어 실패한다. 진행률·결과 조회는 그대로.
+    if settings.photo_pipeline == "pod":
+        raise pod_upload_required()
 
     if mode == "quick":
         return _start_quick(session_id, force)

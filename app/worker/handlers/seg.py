@@ -20,7 +20,7 @@ from uuid import UUID
 
 from app.config import settings
 from app.schemas.enums import JobKind
-from app.services import db, sapiens_labels, segmenter, storage
+from app.services import db, photo_source, sapiens_labels, segmenter, storage
 from app.worker.registry import register, register_preflight
 
 log = logging.getLogger("worker.seg")
@@ -48,8 +48,8 @@ def _handle(job: dict[str, Any]) -> dict[str, Any]:
     comparable = set(db.comparable_class_names())
     master = db.master_class_names()
 
-    log.info("사진 다운로드: %s/%s", photo["storage_bucket"], photo["storage_path"])
-    image_bytes = storage.download(photo["storage_bucket"], photo["storage_path"])
+    # 메모리(팟 경로) 또는 Storage(종전) — 어디서 읽을지는 photo_source 가 정한다.
+    image_bytes = photo_source.load(photo)
 
     log.info("추론 시작 (%s)", segmenter.describe_environment())
     result = segmenter.segment(image_bytes, comparable=comparable, master_class_names=master)

@@ -32,6 +32,13 @@ class PhotoBase(BaseModel):
         default=False,
         description="거울 촬영으로 접수돼 서버가 좌우를 되돌려 저장했는지",
     )
+    #: 팟 경로(사진 미저장)에서 팟이 세그 전에 적용한 크롭. 프론트는 기기 원본을
+    #  flipped 면 좌우 반전한 뒤 이 박스로 잘라 그 위에 맵을 얹는다.
+    #  종전 경로(사진 저장)에서는 null — signed_url 의 크롭본을 그대로 쓴다.
+    crop_box: dict | None = Field(
+        default=None,
+        description="{x, y, w, h, source_width, source_height, flipped} — 비반전 원본 픽셀 좌표",
+    )
     created_at: str
 
 
@@ -48,9 +55,22 @@ class ReferencePhotoResponse(PhotoBase):
         default=None, description="SEG_REFERENCE 잡. GET /jobs/{job_id} 로 폴링. 없으면 null"
     )
     pose_landmarks: list[PoseLandmark]
-    signed_url: str
-    signed_url_expires_at: str
+    #: ⚠️ 팟 경로(PHOTO_PIPELINE=pod)에서는 null — 서버에 사진이 없다. 화면은 기기
+    #  원본을 쓴다 (crop_box 참고).
+    signed_url: str | None = None
+    signed_url_expires_at: str | None = None
     segmented: bool = Field(default=False, description="세그멘테이션 완료 여부")
+
+
+class UploadTokenResponse(BaseModel):
+    """POST /sessions/{id}/upload-token — 팟 업로드용 일회용 토큰.
+
+    ⚠️ 팟 주소는 여기 없다. 프론트 빌드에 고정한다 (services/upload_token.py 주석).
+    """
+
+    token: str
+    expires_at: int = Field(description="만료 epoch 초 (발급 후 약 2분)")
+    session_id: str
 
 
 class UserPhotoResponse(PhotoBase):

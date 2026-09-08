@@ -143,7 +143,12 @@ CREATE TABLE photo (
     kind                    VARCHAR(20)   NOT NULL
                             CHECK (kind IN ('REFERENCE', 'USER')),
     storage_bucket          VARCHAR(63)   NOT NULL DEFAULT 'photos',
-    storage_path            VARCHAR(500)  NOT NULL,
+    -- ⚠️ PHOTO_PIPELINE=pod 로 만든 행은 NULL — 사진을 저장하지 않는다
+    --    (db/migrations/2026-09-09_photo_pod_pipeline.sql).
+    storage_path            VARCHAR(500),
+    -- 팟이 세그 전에 적용한 크롭 (비반전 원본 픽셀 좌표 + 원본 크기 + flipped).
+    -- 프론트가 기기 원본을 같은 박스로 잘라 맵을 얹는다. storage 경로에서는 NULL.
+    crop_box                JSONB,
     width                   INT           CHECK (width > 0),
     height                  INT           CHECK (height > 0),
     capture_source          VARCHAR(20)

@@ -15,7 +15,7 @@ import logging
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, UploadFile, status
+from fastapi import APIRouter, File, Form, Request, UploadFile, status
 from fastapi.concurrency import run_in_threadpool
 from PIL import Image
 
@@ -23,15 +23,26 @@ from app.config import settings
 from app.deps import OwnedSession, UserId
 from app.errors import (
     file_too_large,
+    invalid_request,
     not_found,
+    pod_upload_required,
     precondition_not_met,
     screening_unavailable,
     unsuitable_photo,
     unsupported_media_type,
 )
 from app.schemas.enums import CaptureSource, JobKind, PhotoKind, PoseScaleBasis
-from app.schemas.photo import ReferencePhotoResponse, UserPhotoResponse
-from app.services import db, diagnosis_repo, images, photo_screening, pose, storage
+from app.schemas.photo import ReferencePhotoResponse, UploadTokenResponse, UserPhotoResponse
+from app.services import (
+    db,
+    diagnosis_repo,
+    images,
+    photo_screening,
+    pose,
+    rate_limit,
+    storage,
+    upload_token,
+)
 from app.worker import queue
 
 log = logging.getLogger("routes.photos")
@@ -44,7 +55,12 @@ router = APIRouter(tags=["photos"])
 # --------------------------------------------------------------------------- #
 
 
-async def _read_upload(file: UploadFile) -> Image.Image:
+#: 팟 경로인가 — 사진은 API 를 거치지 않고 팟으로 간다. 이 파일의 분기는 전부 이 값 하나다.
+def _pod_mode() -> bool:
+    return settings.photo_pipeline == "pod"
+
+
+async def _read_upload(file: UploadFile | None) -> Image.Image:
     """업로드 파일을 검사하고 디코딩한다.
 
     ⚠️ **Content-Type 헤더로 형식을 거르지 않는다.** 브라우저가 아이폰 HEIC에
@@ -52,6 +68,8 @@ async def _read_upload(file: UploadFile) -> Image.Image:
        거르면 멀쩡한 사진이 415로 막힌다. **실제로 열리는지**가 유일한 기준이다.
        저장은 어차피 JPEG로 다시 인코딩하므로 입력 형식은 남지 않는다.
     """
+    if file is None:
+        raise invalid_request("file 이 필요합니다.")
     raw = await file.read()
     if len(raw) > settings.max_upload_bytes:
         raise file_too_large(settings.max_upload_bytes)
@@ -98,8 +116,37 @@ def _discard_existing(user_id: UUID, session_id: UUID, kind: PhotoKind) -> None:
     if segmentation is not None:
         storage.remove(segmentation["storage_bucket"], [segmentation["map_path"]])
 
-    storage.remove(existing["storage_bucket"], [existing["storage_path"]])
+    # ⚠️ 팟 경로 행은 storage_path 가 NULL 이다 — 지울 파일이 없다.
+    if existing.get("storage_path"):
+        storage.remove(existing["storage_bucket"], [existing["storage_path"]])
     db.delete_photo(photo_id)
+
+
+def _register_without_file(
+    session_id: UUID,
+    kind: PhotoKind,
+    is_mirrored: bool,
+    extra: dict[str, Any],
+) -> dict[str, Any]:
+    """팟 경로 — 사진 없이 **랜드마크·메타만** photo 행으로 남긴다.
+
+    사진은 분석 시작 때 기기가 팟에 직접 올리고, 팟이 이 행을 찾아 크기·크롭 박스·
+    재정규화 랜드마크를 채운다 (app/pod/pipeline.py). 여기서는 storage_path 를 비운다.
+    세그 잡도 걸지 않는다 — 팟이 사진을 받는 순간 자기 안에서 만든다.
+
+    ⚠️ 랜드마크는 종전과 같이 **비반전 기준**으로 저장한다 (거울이면 되돌린 값).
+       팟이 이미지를 되돌린 뒤 같은 좌표계에서 크롭하므로 여기서 맞춰둬야 한다.
+    """
+    return db.create_photo(
+        {
+            "session_id": str(session_id),
+            "kind": str(kind),
+            "storage_bucket": settings.bucket_photos,
+            "storage_path": None,
+            "was_mirrored": is_mirrored,
+            **extra,
+        }
+    )
 
 
 def _store(
@@ -207,7 +254,6 @@ def _landmarks_for_storage(raw_json: str | None, is_mirrored: bool) -> list[dict
 async def upload_reference(
     user_id: UserId,
     session: OwnedSession,
-    file: Annotated[UploadFile, File(description="jpeg/png/heic/webp 등, 10MB 이하")],
     pose_landmarks: Annotated[str, Form(description="MediaPipe 33개 랜드마크 JSON 배열")],
     pose_scale_basis: Annotated[PoseScaleBasis, Form()],
     pose_person_area_ratio: Annotated[float | None, Form()] = None,
@@ -226,8 +272,50 @@ async def upload_reference(
             ),
         ),
     ] = "full",
+    file: Annotated[
+        UploadFile | None,
+        File(
+            description=(
+                "jpeg/png/heic/webp 등, 10MB 이하. "
+                "⚠️ PHOTO_PIPELINE=pod 에서는 보내지 않는다 — 사진은 분석 시작 시 팟으로 직접"
+            )
+        ),
+    ] = None,
 ) -> ReferencePhotoResponse:
     session_id = UUID(str(session["session_id"]))
+
+    # ── 팟 경로: 사진은 받지 않는다. 랜드마크·메타만 행으로 남긴다 ──────────────
+    #    기준 사진은 지금도 OpenAI 판정을 하지 않으므로 여기서 사진을 볼 이유가 없다.
+    #    사진은 분석 시작 때 사용자 사진과 함께 팟으로 간다.
+    if _pod_mode():
+        if file is not None:
+            raise pod_upload_required()
+        pose.ensure_single_person(multi_person)
+        pose.ensure_observation_ranges(person_area_ratio=pose_person_area_ratio)
+        landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
+        await run_in_threadpool(_discard_existing, user_id, session_id, PhotoKind.REFERENCE)
+        photo = await run_in_threadpool(
+            _register_without_file,
+            session_id,
+            PhotoKind.REFERENCE,
+            is_mirrored,
+            {
+                "pose_landmarks": landmarks,
+                "pose_scale_basis": str(pose_scale_basis),
+                "pose_person_area_ratio": pose_person_area_ratio,
+                "multi_person": multi_person,
+            },
+        )
+        return ReferencePhotoResponse(
+            photo_id=str(photo["photo_id"]),
+            kind=PhotoKind.REFERENCE,
+            pose_scale_basis=pose_scale_basis,
+            was_mirrored=is_mirrored,
+            created_at=str(photo["created_at"]),
+            job_id=None,
+            pose_landmarks=landmarks,
+            segmented=False,
+        )
 
     img = await _read_upload(file)
     pose.ensure_single_person(multi_person)
@@ -270,6 +358,34 @@ async def upload_reference(
     )
 
 
+def _photo_view(photo: dict[str, Any], kind: PhotoKind, job_kind: JobKind) -> ReferencePhotoResponse:
+    """저장된 사진 행 → 조회 응답. 팟 경로 행(storage_path NULL)은 signed_url 이 없다."""
+    session_id = UUID(str(photo["session_id"]))
+    photo_id = UUID(str(photo["photo_id"]))
+    jobs = queue.list_jobs(session_id, kind=job_kind)
+
+    url = expires = None
+    if photo.get("storage_path"):
+        url, expires_at = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
+        expires = expires_at.isoformat()
+
+    return ReferencePhotoResponse(
+        photo_id=str(photo_id),
+        kind=kind,
+        width=photo["width"],
+        height=photo["height"],
+        pose_scale_basis=photo["pose_scale_basis"],
+        was_mirrored=bool(photo.get("was_mirrored")),
+        crop_box=photo.get("crop_box"),
+        created_at=str(photo["created_at"]),
+        job_id=str(jobs[-1]["job_id"]) if jobs else None,
+        pose_landmarks=photo["pose_landmarks"] or [],
+        signed_url=url,
+        signed_url_expires_at=expires,
+        segmented=db.get_segmentation(photo_id) is not None,
+    )
+
+
 @router.get(
     "/sessions/{session_id}/photos/reference",
     response_model=ReferencePhotoResponse,
@@ -280,25 +396,7 @@ async def get_reference(session: OwnedSession) -> ReferencePhotoResponse:
     photo = db.get_photo(session_id, PhotoKind.REFERENCE)
     if photo is None:
         raise not_found("레퍼런스 사진")
-
-    photo_id = UUID(str(photo["photo_id"]))
-    jobs = queue.list_jobs(session_id, kind=JobKind.SEG_REFERENCE)
-    url, expires_at = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
-
-    return ReferencePhotoResponse(
-        photo_id=str(photo_id),
-        kind=PhotoKind.REFERENCE,
-        width=photo["width"],
-        height=photo["height"],
-        pose_scale_basis=photo["pose_scale_basis"],
-        was_mirrored=bool(photo.get("was_mirrored")),
-        created_at=str(photo["created_at"]),
-        job_id=str(jobs[-1]["job_id"]) if jobs else None,
-        pose_landmarks=photo["pose_landmarks"] or [],
-        signed_url=url,
-        signed_url_expires_at=expires_at.isoformat(),
-        segmented=db.get_segmentation(photo_id) is not None,
-    )
+    return _photo_view(photo, PhotoKind.REFERENCE, JobKind.SEG_REFERENCE)
 
 
 @router.get(
@@ -319,25 +417,7 @@ async def get_user_photo(session: OwnedSession) -> ReferencePhotoResponse:
     photo = db.get_photo(session_id, PhotoKind.USER)
     if photo is None:
         raise not_found("사용자 사진")
-
-    photo_id = UUID(str(photo["photo_id"]))
-    jobs = queue.list_jobs(session_id, kind=JobKind.SEG_USER)
-    url, expires_at = storage.signed_url(photo["storage_bucket"], photo["storage_path"])
-
-    return ReferencePhotoResponse(
-        photo_id=str(photo_id),
-        kind=PhotoKind.USER,
-        width=photo["width"],
-        height=photo["height"],
-        pose_scale_basis=photo["pose_scale_basis"],
-        was_mirrored=bool(photo.get("was_mirrored")),
-        created_at=str(photo["created_at"]),
-        job_id=str(jobs[-1]["job_id"]) if jobs else None,
-        pose_landmarks=photo["pose_landmarks"] or [],
-        signed_url=url,
-        signed_url_expires_at=expires_at.isoformat(),
-        segmented=db.get_segmentation(photo_id) is not None,
-    )
+    return _photo_view(photo, PhotoKind.USER, JobKind.SEG_USER)
 
 
 # --------------------------------------------------------------------------- #
@@ -354,7 +434,6 @@ async def get_user_photo(session: OwnedSession) -> ReferencePhotoResponse:
 async def upload_user_photo(
     user_id: UserId,
     session: OwnedSession,
-    file: Annotated[UploadFile, File()],
     capture_source: Annotated[CaptureSource, Form()],
     pose_landmarks: Annotated[str, Form()],
     pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
@@ -401,12 +480,68 @@ async def upload_user_photo(
             ),
         ),
     ] = "full",
+    file: Annotated[
+        UploadFile | None,
+        File(description="⚠️ PHOTO_PIPELINE=pod 에서는 보내지 않는다 — 사진은 팟으로 직접"),
+    ] = None,
 ) -> UserPhotoResponse:
     session_id = UUID(str(session["session_id"]))
 
     reference = db.get_photo(session_id, PhotoKind.REFERENCE)
     if reference is None:
         raise precondition_not_met("레퍼런스 사진을 먼저 등록해주세요.")
+
+    # ── 팟 경로: 1차 관문(자세)만 여기서, 사진·2차 관문(스크리닝)은 팟에서 ────────
+    #    자세 판정은 랜드마크만 있으면 되므로 사진 없이 종전 규칙 그대로 적용한다.
+    #    통과하면 행만 남기고, 사진은 분석 시작 때 기준 사진과 함께 팟으로 간다.
+    if _pod_mode():
+        if file is not None:
+            raise pod_upload_required()
+        landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
+        pose.ensure_observation_ranges(
+            pose_oks=pose_oks, person_area_ratio=pose_person_area_ratio
+        )
+        if facing_delta > 10.0:
+            log.warning("facing_delta %.2f > 10 — 10.0 으로 눌러 저장합니다", facing_delta)
+            facing_delta = 10.0
+        pose.judge_user_photo(
+            pose_similarity=pose_similarity,
+            framing_score=framing_score,
+            scale_basis=pose_scale_basis,
+            reference_scale_basis=reference.get("pose_scale_basis"),
+            multi_person=multi_person,
+            facing_delta=facing_delta,
+        )
+        await run_in_threadpool(_discard_existing, user_id, session_id, PhotoKind.USER)
+        photo = await run_in_threadpool(
+            _register_without_file,
+            session_id,
+            PhotoKind.USER,
+            is_mirrored,
+            {
+                "capture_source": str(capture_source),
+                "pose_landmarks": landmarks,
+                "pose_scale_basis": str(pose_scale_basis),
+                "pose_similarity": pose_similarity,
+                "framing_score": framing_score,
+                "facing_delta": facing_delta,
+                "pose_oks": pose_oks,
+                "pose_person_area_ratio": pose_person_area_ratio,
+                "multi_person": multi_person,
+            },
+        )
+        return UserPhotoResponse(
+            photo_id=str(photo["photo_id"]),
+            kind=PhotoKind.USER,
+            pose_scale_basis=pose_scale_basis,
+            was_mirrored=is_mirrored,
+            created_at=str(photo["created_at"]),
+            job_id=None,
+            capture_source=capture_source,
+            pose_similarity=pose_similarity,
+            framing_score=framing_score,
+            multi_person=multi_person,
+        )
 
     img = await _read_upload(file)
     landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
@@ -497,4 +632,51 @@ async def upload_user_photo(
         pose_similarity=pose_similarity,
         framing_score=framing_score,
         multi_person=multi_person,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 팟 업로드 토큰 (PHOTO_PIPELINE=pod)
+# --------------------------------------------------------------------------- #
+
+
+@router.post(
+    "/sessions/{session_id}/upload-token",
+    response_model=UploadTokenResponse,
+    summary="GPU 팟 업로드용 일회용 토큰 발급 (사진은 팟으로 직접)",
+)
+async def issue_upload_token(request: Request, session: OwnedSession) -> UploadTokenResponse:
+    """분석 시작 직전에 받아, 기준+사용자 두 장을 팟 `POST /upload` 에 붙여 보낸다.
+
+    ⚠️ **팟 주소는 돌려주지 않는다.** 프론트 빌드에 고정한다 — API 가 주소를 주면
+       API 운영자가 주소를 바꿔치기해 사진을 받을 수 있다.
+    ⚠️ 두 사진의 행(랜드마크)이 먼저 등록돼 있어야 한다. 팟은 그 행을 찾아 크기·
+       크롭 박스를 채우므로, 없으면 업로드가 팟에서 409 로 막힌다 — 여기서 먼저 알린다.
+    ⚠️ IP당 속도 제한 — 토큰 발급 자체가 인증 없는 흐름(user_id 만) 뒤에 있어서,
+       스크립트로 반복하면 팟 스크리닝 GPT 요금이 나간다.
+    """
+    if not _pod_mode():
+        raise precondition_not_met("팟 직접 업로드 경로가 꺼져 있습니다 (PHOTO_PIPELINE).")
+
+    client_ip = request.client.host if request.client else "unknown"
+    rate_limit.check(
+        f"upload-token:{client_ip}",
+        settings.pod_upload_rate_limit,
+        settings.pod_upload_rate_window_sec,
+    )
+
+    session_id = UUID(str(session["session_id"]))
+    missing = [
+        str(kind)
+        for kind in (PhotoKind.REFERENCE, PhotoKind.USER)
+        if db.get_photo(session_id, kind) is None
+    ]
+    if missing:
+        raise precondition_not_met(
+            "레퍼런스와 사용자 사진(랜드마크)을 먼저 등록해주세요.", {"missing": missing}
+        )
+
+    issued = upload_token.issue(UUID(str(session["user_id"])), session_id)
+    return UploadTokenResponse(
+        token=issued["token"], expires_at=issued["expires_at"], session_id=str(session_id)
     )

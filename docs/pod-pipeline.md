@@ -109,7 +109,7 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 - 프론트: **블러 작업 없음.** 원본을 그대로 올린다
 - `/health` 의 `pipeline.face_mask` 가 true 여야 한다
 
-**진단 동일성 실측 (2026-09-09, 사진 123→456, 실제 MediaPipe 랜드마크 `scripts/pose_landmarks_web.mjs`, gpt temperature=0).** 같은 사진으로 5회: 원본 2회(A·A2), 회색 2회(B·B2), 블러 1회(C). 세그 행은 5회 전부 동일(가림이 세그에 안 닿는다). 스크리닝은 5회 전부 통과.
+**진단 동일성 실측 (2026-09-09, 사진 123→456, 실제 MediaPipe 랜드마크 `scripts/pose_landmarks_web.mjs`, gpt temperature=0).** 같은 사진으로 6회: 원본 2회(A·A2), 회색 2회(B·B2), 사각 블러 1회(C), 타원 블러 1회(D). 세그 행은 5회 전부 동일(가림이 세그에 안 닿는다). 스크리닝은 5회 전부 통과.
 
 | | 원본 A | 원본 A2 | 회색 B | 회색 B2 | 블러 C |
 |---|---|---|---|---|---|
@@ -117,9 +117,11 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 | 하퇴 좌우 등급 | SLIGHT | SLIGHT | SLIGHT | SLIGHT | NONE |
 | 종합 점수 | 69 | 62 | 62 | 62 | 69 |
 
+타원 블러(최종 기본, D): 상완 MODERATE · 하퇴 SLIGHT · 점수 62 · 우선순위 [상완L, 상완R, 몸통] — 원본 A2 와 허벅지 우선순위(1↔2)만 다르고 그 차이는 회색끼리(B·B2)도 있던 흔들림이다.
+
 - **원본끼리(A vs A2)가 원본 vs 가림만큼 다르다.** 상완 SLIGHT↔MODERATE, 점수 69↔62 는 temperature=0 이어도 나오는 GPT 흔들림이지 가림의 영향이 아니다. 가림(회색·블러) 결과는 전부 이 흔들림 범위 안에 있다
 - 즉 "가림 때문에 결과가 바뀐다"는 근거는 없다. 대신 **경계 부위(상완·하퇴)의 등급은 원래 실행마다 한 단계 흔들린다** — 이건 가림과 무관한 기존 문제다 (`vlm.call_json` 에 `seed` 를 주면 줄어들 수 있으나 보장은 아니다. 담당 B 영역)
-- 재실측: `node scripts/pose_landmarks_web.mjs 사진 out/landmarks/x.json` → 팟 `POD_FACE_MASK=false/true` 로 스모크 `--keep --ref-landmarks --user-landmarks` → `scripts/compare_diagnosis.py --a --b` → `DELETE /users/me`. 같은 조건을 두 번 돌려 흔들림 기준선을 먼저 잰다
+- 재실측: `node scripts/pose_landmarks_web.mjs 사진 out/landmarks/x.json` → 팟 `POD_FACE_MASK=false/true` 로 스모크 `--keep --ref-landmarks --user-landmarks` → **`compare_diagnosis.py --dump <세션> out/diagnosis-runs/x.json` 로 먼저 저장** → `--a --b` 비교 → `DELETE /users/me`. 유저를 지우면 DB 에서 사라지므로 저장이 먼저다. 같은 조건을 두 번 돌려 흔들림 기준선을 먼저 잰다
 
 ## 로컬에서 돌리기 (검증용)
 

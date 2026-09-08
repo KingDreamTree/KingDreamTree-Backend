@@ -28,14 +28,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 #: MediaPipe Pose 33점 중 얼굴에 해당하는 인덱스
 FACE_INDICES: tuple[int, ...] = tuple(range(11))
 #: 이 값 미만은 "안 보임"으로 본다 (MediaPipe visibility 0~1)
 MIN_VISIBILITY = 0.5
-#: 덮는 색 — 살색·검정은 피한다 (살색은 얼굴로, 검정은 그림자·잘림으로 읽힐 수 있다)
+#: 덮는 색 (style=fill) — 살색·검정은 피한다 (살색은 얼굴로, 검정은 그림자·잘림으로 읽힐 수 있다)
 FILL = (128, 128, 128)
+#: 블러 반지름 = 박스 짧은 변 / BLUR_DIVISOR (style=blur). 6 = 강함 — 얼굴 형태가 사라진다.
+#  스크리닝 판정은 이 강도에서도 원본과 같았다 (2026-09-09 실측). 세그에는 안 쓰므로 세게 해도 된다.
+BLUR_DIVISOR = 6
 
 
 def face_box(
@@ -67,7 +70,7 @@ def face_box(
     face_w = max(x1 - x0, (y1 - y0) * 0.8, 12.0)  # 귀~귀 폭. 옆모습이면 세로로 대신 잡는다
     pad_x = face_w * 0.25
     top = y0 - face_w * 0.75  # 눈 위로 이마·머리 윗부분
-    bottom = y1 + face_w * 0.45  # 입 아래로 턱
+    bottom = y1 + face_w * 0.6  # 입 아래로 턱 끝까지 (0.45 는 턱선이 남았다 — 실물 확인)
     return (
         int(max(0, x0 - pad_x)),
         int(max(0, top)),
@@ -77,12 +80,23 @@ def face_box(
 
 
 def apply(
-    img: Image.Image, landmarks: list[dict[str, Any]] | None
+    img: Image.Image, landmarks: list[dict[str, Any]] | None, style: str = "blur"
 ) -> tuple[Image.Image, tuple[int, int, int, int] | None]:
-    """얼굴 박스를 단색으로 덮은 **새 이미지**를 돌려준다. 원본은 건드리지 않는다."""
+    """얼굴 박스를 가린 **새 이미지**를 돌려준다. 원본은 건드리지 않는다.
+
+    style="blur" : 강한 가우시안 블러 — 피부색·머리 윤곽은 남고 이목구비만 사라진다.
+                   회색 덮기(fill)는 GPT 가 몸을 보는 판단까지 바꿨다 (상완 등급·점수 이동,
+                   2026-09-09 실측). 사진처럼 보이는 쪽이 진단을 덜 흔든다.
+    style="fill" : 회색 사각형. 익명화는 가장 확실하나 위 이유로 기본이 아니다.
+    """
     box = face_box(landmarks, img.size)
     if box is None or box[2] <= box[0] or box[3] <= box[1]:
         return img, None
     out = img.copy()
-    ImageDraw.Draw(out).rectangle(box, fill=FILL)
+    if style == "fill":
+        ImageDraw.Draw(out).rectangle(box, fill=FILL)
+    else:
+        region = out.crop(box)
+        radius = max(3, min(box[2] - box[0], box[3] - box[1]) // BLUR_DIVISOR)
+        out.paste(region.filter(ImageFilter.GaussianBlur(radius)), box)
     return out, box

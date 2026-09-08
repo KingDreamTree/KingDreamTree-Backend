@@ -106,7 +106,7 @@ def prepare(photo: dict[str, Any], raw: bytes) -> Prepared:
     face_box = None
     vlm_jpeg = jpeg
     if settings.pod_face_mask:
-        masked, face_box = face_mask.apply(_decode(jpeg), recentered)
+        masked, face_box = face_mask.apply(_decode(jpeg), recentered, settings.pod_face_mask_style)
         if face_box is None:
             log.info("[%s] 얼굴 점이 안 보여 가리지 않습니다 (뒷모습·프레임 밖)", photo.get("kind"))
         else:

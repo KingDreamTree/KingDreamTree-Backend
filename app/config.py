@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     #: OpenAI 로 보내는 사진의 얼굴을 팟이 단색으로 덮는다 (services/face_mask).
     #  false 는 **실측 전용**(원본 vs 가림 진단 비교) — 운영에서 끄면 얼굴이 OpenAI 로 나간다.
     pod_face_mask: bool = True
+    #: 가리는 방식 — blur(강한 블러, 기본) | fill(회색 사각형). services/face_mask.apply 참고
+    pod_face_mask_style: str = "blur"
 
     # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값

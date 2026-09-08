@@ -49,21 +49,30 @@ def parts(session_id: UUID) -> dict[str, dict]:
 
 
 def overall(session_id: UUID) -> dict | None:
-    rows = db.rows_for_session(
-        "overall_diagnosis",
-        session_id,
-        "similarity_score,priority_parts,silhouette,summary,confidence,status",
-    )
+    # ⚠️ 컬럼을 열거하지 않는다 — schema.sql 의 silhouette 등이 실제 DB 에 없을 수 있다
+    rows = db.rows_for_session("overall_diagnosis", session_id, "*")
     return rows[0] if rows else None
 
 
+_SEG_SKIP = {
+    "segmentation_id",
+    "photo_id",
+    "created_at",
+    "map_path",
+    "storage_bucket",
+    "session_id",
+    "inference_ms",
+}
+
+
 def segments(session_id: UUID) -> dict[str, dict]:
+    """kind → 세그 행(식별자·경로 제외). 두 세션이 같은 사진이면 완전히 같아야 한다."""
     photos = db.rows_for_session("photo", session_id, "photo_id,kind")
     out: dict[str, dict] = {}
     for p in photos:
         seg = db.get_segmentation(UUID(p["photo_id"]))
         if seg:
-            out[p["kind"]] = seg
+            out[p["kind"]] = {k: v for k, v in seg.items() if k not in _SEG_SKIP}
     return out
 
 
@@ -83,12 +92,15 @@ def main() -> int:
         if not x or not y:
             print(f"  {kind}: 한쪽에 세그 없음")
             continue
-        same_valid = x.get("is_valid") == y.get("is_valid")
-        print(
-            f"  {kind}: is_valid {x.get('is_valid')} vs {y.get('is_valid')}  {'같음' if same_valid else '다름'}"
+        same_seg = json.dumps(x, sort_keys=True, default=str) == json.dumps(
+            y, sort_keys=True, default=str
         )
-        if not same_valid:
+        print(f"  {kind}: 세그 행 {'같음' if same_seg else '다름'} (비교 키 {len(x)}개)")
+        if not same_seg:
             diff += 1
+            for k in sorted(set(x) | set(y)):
+                if x.get(k) != y.get(k):
+                    print(f"      {k}: {str(x.get(k))[:80]}  vs  {str(y.get(k))[:80]}")
 
     print("\n== 부위 진단 ==")
     pa, pb = parts(a), parts(b)
@@ -123,7 +135,10 @@ def main() -> int:
             ob.get("priority_parts"), sort_keys=True
         )
         s_sum = sim(oa.get("summary"), ob.get("summary"))
-        s_sil = sim(oa.get("silhouette"), ob.get("silhouette"))
+        s_sil = sim(
+            str(oa.get("silhouette") or oa.get("key_differences") or ""),
+            str(ob.get("silhouette") or ob.get("key_differences") or ""),
+        )
         print(
             f"  점수 {oa.get('similarity_score')} vs {ob.get('similarity_score')}  {'같음' if same_score else '다름'}"
         )

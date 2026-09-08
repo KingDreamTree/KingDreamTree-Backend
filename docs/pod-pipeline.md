@@ -102,25 +102,24 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 - 세그가 안 틀어지는 건 약한 블러뿐인데, 약한 블러는 얼굴 윤곽이 남아 익명화가 안 된다. 즉 "한 장을 기기에서 블러해 세그·GPT 에 같이 쓴다"는 목표(OpenAI 에 얼굴이 안 나감)를 못 이룬다
 - 스크리닝(GPT) 판정은 강한 블러·머리 박스에서도 2/2 쌍 동일 — GPT 쪽은 세게 가려도 된다
 
-**그래서.** 세그는 **안 가린 가공본**, OpenAI 로 가는 세 호출(스크리닝·부위·종합)은 **얼굴을 회색 사각형으로 덮은 복사본**을 쓴다. 복사본은 가공 직후 한 번 만들어(`pipeline.prepare` → `face_mask.apply`) 처리 내내 메모리에 두고(`photo_source` 의 vlm 변형, `load(photo, for_vlm=True)`), 끝나면 가공본과 함께 지운다. 블러가 아니라 **덮는** 이유: 스크리닝 프롬프트가 "초점이 안 맞아 외곽선이 뭉개졌는가"를 보므로 블러는 그 판정과 헷갈릴 수 있다. 세 프롬프트에 "얼굴은 일부러 가려져 있다 — 품질·진단 근거로 쓰지 마라"를 넣었다.
+**그래서.** 세그는 **안 가린 가공본**, OpenAI 로 가는 세 호출(스크리닝·부위·종합)은 **얼굴을 가린 복사본**을 쓴다. 복사본은 가공 직후 한 번 만들어(`pipeline.prepare` → `face_mask.apply`) 처리 내내 메모리에 두고(`photo_source` 의 vlm 변형, `load(photo, for_vlm=True)`), 끝나면 가공본과 함께 지운다. 세 프롬프트에 "얼굴은 일부러 가려져 있다 — 품질·진단 근거로 쓰지 마라"를 넣었다.
 
-- 얼굴 위치: 프론트가 등록 때 보낸 포즈 랜드마크 0~10(코·눈·귀·입) 중 visibility ≥ 0.5 인 점. 귀~귀 폭을 얼굴 폭으로 보고 이마(위 0.75폭)·턱(아래 0.45폭)·좌우 0.25폭을 넓힌다. 점이 3개 미만(뒷모습·프레임 밖)이면 가리지 않고 로그만 남긴다 — 업로드 응답 `face_masked` 로 알 수 있다
+- 가리는 방식 `POD_FACE_MASK_STYLE`: **blur**(기본, 강한 가우시안 = 박스 짧은 변/6 — 이목구비가 사라지고 피부색·머리 윤곽만 남는다) | fill(회색 사각형). 둘 다 진단 차이는 아래 실측에서 흔들림 범위 안이었다. blur 가 기본인 이유는 사진처럼 보여 GPT 가 "가림"을 품질 문제로 볼 여지가 적기 때문
+- 얼굴 위치: 프론트가 등록 때 보낸 포즈 랜드마크 0~10(코·눈·귀·입) 중 visibility ≥ 0.5 인 점. 귀~귀 폭을 얼굴 폭으로 보고 이마(위 0.75폭)·턱(아래 0.6폭)·좌우 0.25폭을 넓힌다. 점이 3개 미만(뒷모습·프레임 밖)이면 가리지 않고 로그만 남긴다 — 업로드 응답 `face_masked` 로 알 수 있다
 - 프론트: **블러 작업 없음.** 원본을 그대로 올린다
 - `/health` 의 `pipeline.face_mask` 가 true 여야 한다
 
-**아직 안 잰 것 — 배포 전 실측.** 가린 복사본으로 부위·종합 진단 문장이 원본과 같은지는 아직 비교하지 않았다 (스크리닝만 같았다). 절차:
+**진단 동일성 실측 (2026-09-09, 사진 123→456, 실제 MediaPipe 랜드마크 `scripts/pose_landmarks_web.mjs`, gpt temperature=0).** 같은 사진으로 5회: 원본 2회(A·A2), 회색 2회(B·B2), 블러 1회(C). 세그 행은 5회 전부 동일(가림이 세그에 안 닿는다). 스크리닝은 5회 전부 통과.
 
-```
-pip install mediapipe                                            # 검증 전용
-python scripts/pose_landmarks.py photos/123.jpg --out out/landmarks/123.json   # 실제 랜드마크
-python scripts/pose_landmarks.py photos/456.jpg --out out/landmarks/456.json
-# 팟 POD_FACE_MASK=false 로 기동 → 스모크 --keep --ref-landmarks ... --user-landmarks ...   (A)
-# 팟 POD_FACE_MASK=true  로 기동 → 같은 명령                                                (B)
-python scripts/compare_diagnosis.py --a <세션A> --b <세션B>       # 등급·우선순위·점수 같으면 통과
-# 끝나면 두 유저 삭제 (DELETE /users/me)
-```
+| | 원본 A | 원본 A2 | 회색 B | 회색 B2 | 블러 C |
+|---|---|---|---|---|---|
+| 상완 좌우 등급 | SLIGHT | MODERATE | MODERATE | MODERATE | MODERATE |
+| 하퇴 좌우 등급 | SLIGHT | SLIGHT | SLIGHT | SLIGHT | NONE |
+| 종합 점수 | 69 | 62 | 62 | 62 | 69 |
 
-다르면 박스를 줄여(face_mask.py 의 확장 비율) 다시 잰다. 그래도 다르면 후퇴안은 "기기에서 약한 블러(짧은 변/12) 한 장" — 세그·스크리닝은 같지만 익명화가 약하다.
+- **원본끼리(A vs A2)가 원본 vs 가림만큼 다르다.** 상완 SLIGHT↔MODERATE, 점수 69↔62 는 temperature=0 이어도 나오는 GPT 흔들림이지 가림의 영향이 아니다. 가림(회색·블러) 결과는 전부 이 흔들림 범위 안에 있다
+- 즉 "가림 때문에 결과가 바뀐다"는 근거는 없다. 대신 **경계 부위(상완·하퇴)의 등급은 원래 실행마다 한 단계 흔들린다** — 이건 가림과 무관한 기존 문제다 (`vlm.call_json` 에 `seed` 를 주면 줄어들 수 있으나 보장은 아니다. 담당 B 영역)
+- 재실측: `node scripts/pose_landmarks_web.mjs 사진 out/landmarks/x.json` → 팟 `POD_FACE_MASK=false/true` 로 스모크 `--keep --ref-landmarks --user-landmarks` → `scripts/compare_diagnosis.py --a --b` → `DELETE /users/me`. 같은 조건을 두 번 돌려 흔들림 기준선을 먼저 잰다
 
 ## 로컬에서 돌리기 (검증용)
 

@@ -84,7 +84,8 @@ def apply(
 ) -> tuple[Image.Image, tuple[int, int, int, int] | None]:
     """얼굴 박스를 가린 **새 이미지**를 돌려준다. 원본은 건드리지 않는다.
 
-    style="blur" : 강한 가우시안 블러 — 피부색·머리 윤곽은 남고 이목구비만 사라진다.
+    style="blur" : 박스에 내접하는 타원 안만 강한 가우시안 블러 — 피부색·머리 윤곽은 남고
+                   이목구비만 사라진다. 목·어깨는 건드리지 않는다.
                    회색 덮기(fill)는 GPT 가 몸을 보는 판단까지 바꿨다 (상완 등급·점수 이동,
                    2026-09-09 실측). 사진처럼 보이는 쪽이 진단을 덜 흔든다.
     style="fill" : 회색 사각형. 익명화는 가장 확실하나 위 이유로 기본이 아니다.
@@ -96,7 +97,14 @@ def apply(
     if style == "fill":
         ImageDraw.Draw(out).rectangle(box, fill=FILL)
     else:
+        # ⚠️ 박스 전체가 아니라 박스에 내접하는 **타원 안만** 뭉갠다. 사각형은 아래 모서리가
+        #    목 옆·승모근까지 내려와 승모근이 발달한 사람은 목과 경계가 흐려질 수 있다.
+        #    타원은 턱 끝에서 좁아져 목·어깨 픽셀은 손대지 않는다 (2026-09-09 결정).
         region = out.crop(box)
-        radius = max(3, min(box[2] - box[0], box[3] - box[1]) // BLUR_DIVISOR)
-        out.paste(region.filter(ImageFilter.GaussianBlur(radius)), box)
+        radius = max(3, min(region.size) // BLUR_DIVISOR)
+        blurred = region.filter(ImageFilter.GaussianBlur(radius))
+        mask = Image.new("L", region.size, 0)
+        ImageDraw.Draw(mask).ellipse((0, 0, region.size[0] - 1, region.size[1] - 1), fill=255)
+        mask = mask.filter(ImageFilter.GaussianBlur(2))  # 경계를 2px 만 부드럽게
+        out.paste(blurred, box, mask)
     return out, box

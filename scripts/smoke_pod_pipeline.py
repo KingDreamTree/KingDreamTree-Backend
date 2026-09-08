@@ -46,10 +46,19 @@ def check(label: str, cond: bool, extra: str = "") -> bool:
     return cond
 
 
-def landmarks_json() -> str:
-    """33개 더미. 인물이 중앙 세로로 서 있다고 가정 — 크롭 중심이 화면 중앙에 온다."""
+def landmarks_json(path: str | None = None) -> str:
+    """33개 랜드마크 JSON. 파일(scripts/pose_landmarks.py 출력)이 있으면 그것, 없으면 더미.
+
+    ⚠️ 더미는 인물이 중앙 세로로 서 있다고 가정한 것이라 얼굴 박스가 실제 얼굴과
+       안 맞는다. 얼굴 가림 실측(진단 비교)에는 반드시 실제 랜드마크 파일을 준다.
+    """
+    if path:
+        return Path(path).read_text(encoding="utf-8")
     return json.dumps(
-        [{"index": i, "x": 0.5, "y": 0.1 + i * 0.025, "z": 0.0, "visibility": 0.95} for i in range(33)]
+        [
+            {"index": i, "x": 0.5, "y": 0.1 + i * 0.025, "z": 0.0, "visibility": 0.95}
+            for i in range(33)
+        ]
     )
 
 
@@ -73,6 +82,12 @@ def main() -> int:
     ap.add_argument("--pod", default="http://localhost:8080")
     ap.add_argument("--ref", default="photos/123.jpg")
     ap.add_argument("--user", default="photos/456.jpg")
+    ap.add_argument(
+        "--ref-landmarks", default=None, help="기준 사진 랜드마크 JSON 파일 (없으면 더미)"
+    )
+    ap.add_argument(
+        "--user-landmarks", default=None, help="사용자 사진 랜드마크 JSON 파일 (없으면 더미)"
+    )
     ap.add_argument("--quick", action="store_true", help="세그 없는 웹캠 경로")
     ap.add_argument("--keep", action="store_true", help="끝나도 유저를 지우지 않는다")
     ap.add_argument("--timeout", type=int, default=420)
@@ -115,10 +130,11 @@ def main() -> int:
             from app.services import db as _db
 
             print("    (--pre-migration: 행을 직접 넣는다 — storage_path 자리표시)")
-            for kind, extra in (
-                ("REFERENCE", {}),
+            for kind, lm_path, extra in (
+                ("REFERENCE", args.ref_landmarks, {}),
                 (
                     "USER",
+                    args.user_landmarks,
                     {
                         "capture_source": "UPLOAD",
                         "pose_similarity": 95,
@@ -133,7 +149,7 @@ def main() -> int:
                         "kind": kind,
                         "storage_bucket": "photos",
                         "storage_path": f"{user_id}/{session_id}/pending-pod.jpg",
-                        "pose_landmarks": json.loads(landmarks_json()),
+                        "pose_landmarks": json.loads(landmarks_json(lm_path)),
                         "pose_scale_basis": "TORSO",
                         "was_mirrored": False,
                         **extra,
@@ -144,7 +160,10 @@ def main() -> int:
             r = api.post(
                 f"/sessions/{session_id}/photos/reference",
                 headers=headers,
-                data={"pose_landmarks": landmarks_json(), "pose_scale_basis": "TORSO"},
+                data={
+                    "pose_landmarks": landmarks_json(args.ref_landmarks),
+                    "pose_scale_basis": "TORSO",
+                },
             )
             check("기준 사진 등록 201", r.status_code == 201, r.text[:200])
             check("  signed_url 없음", r.status_code == 201 and r.json()["signed_url"] is None)
@@ -153,7 +172,7 @@ def main() -> int:
                 headers=headers,
                 data={
                     "capture_source": "UPLOAD",
-                    "pose_landmarks": landmarks_json(),
+                    "pose_landmarks": landmarks_json(args.user_landmarks),
                     "pose_similarity": "95",
                     "framing_score": "1.0",
                     "pose_scale_basis": "TORSO",
@@ -188,16 +207,32 @@ def main() -> int:
         body = r.json()
         jobs = body["jobs"]
         check("  crop_box 두 장", set(body.get("crop_box", {})) == {"REFERENCE", "USER"})
+        masked = body.get("face_masked") or {}
+        print(f"    face_masked: {masked}  (팟 POD_FACE_MASK 가 false 면 둘 다 false 가 정상)")
+        if h["pipeline"].get("face_mask", True):
+            check(
+                "  얼굴 가림 두 장 (face_masked)",
+                masked == {"REFERENCE": True, "USER": True},
+                str(masked),
+            )
 
         print("== 3. 잡 폴링 ==")
         results = {}
         for kind, job_id in jobs.items():
             results[kind] = wait_job(api, job_id, headers, args.timeout, kind)
-        overall_jobs = api.get(f"/sessions/{session_id}/jobs", headers=headers, params={"kind": "VLM_OVERALL"}).json()["items"]
+        overall_jobs = api.get(
+            f"/sessions/{session_id}/jobs", headers=headers, params={"kind": "VLM_OVERALL"}
+        ).json()["items"]
         if overall_jobs:
-            results["VLM_OVERALL"] = wait_job(api, overall_jobs[-1]["job_id"], headers, args.timeout, "VLM_OVERALL")
+            results["VLM_OVERALL"] = wait_job(
+                api, overall_jobs[-1]["job_id"], headers, args.timeout, "VLM_OVERALL"
+            )
         for kind, job in results.items():
-            check(f"{kind} DONE", job.get("status") == "DONE", f"{job.get('status')} {job.get('error') or ''}")
+            check(
+                f"{kind} DONE",
+                job.get("status") == "DONE",
+                f"{job.get('status')} {job.get('error') or ''}",
+            )
 
         prog = api.get(f"/sessions/{session_id}/analysis/progress", headers=headers).json()
         check("progress.completed", prog.get("completed") is True, json.dumps(prog)[:200])
@@ -214,20 +249,37 @@ def main() -> int:
             if args.pre_migration:
                 print(f"    {kind}: storage_path NULL · crop_box 확인은 건너뜀 (--pre-migration)")
             else:
-                check(f"{kind}: storage_path NULL", row is not None and row.get("storage_path") is None, str(row and row.get("storage_path")))
-                check(f"{kind}: crop_box 기록", bool(row and row.get("crop_box")), str(row and row.get("crop_box")))
-            check(f"{kind}: width/height 기록", bool(row and row.get("width") and row.get("height")))
+                check(
+                    f"{kind}: storage_path NULL",
+                    row is not None and row.get("storage_path") is None,
+                    str(row and row.get("storage_path")),
+                )
+                check(
+                    f"{kind}: crop_box 기록",
+                    bool(row and row.get("crop_box")),
+                    str(row and row.get("crop_box")),
+                )
+            check(
+                f"{kind}: width/height 기록", bool(row and row.get("width") and row.get("height"))
+            )
         leftover = storage.list_prefix("photos", user_id)
         check("Storage photos 버킷에 이 유저 파일 없음", not leftover, str(leftover))
         if not args.quick and not args.pre_migration:
             seg = api.get(f"/sessions/{session_id}/segmentation", headers=headers).json()
-            check("세그 응답의 photo_url 이 null (사진 없음)", (seg.get("user") or {}).get("photo_url") is None)
+            check(
+                "세그 응답의 photo_url 이 null (사진 없음)",
+                (seg.get("user") or {}).get("photo_url") is None,
+            )
             check("세그 응답에 crop_box", bool((seg.get("user") or {}).get("crop_box")))
         elif not args.quick:
             # 자리표시 경로에 서명 URL 을 만들다 404 가 나므로(진짜 pod 행은 NULL 이라 건너뜀) 여기선 안 본다
             print("    세그 응답(photo_url null·crop_box) 확인은 건너뜀 (--pre-migration)")
         h2 = pod.get("/health").json()
-        check("팟 메모리 사진 해제 (held_photos 0)", h2["pipeline"]["held_photos"] == 0, str(h2["pipeline"]))
+        check(
+            "팟 메모리 사진 해제 (held_photos 0)",
+            h2["pipeline"]["held_photos"] == 0,
+            str(h2["pipeline"]),
+        )
         check("팟 held_photos 가 시작 전과 같음", h2["pipeline"]["held_photos"] == held_before)
 
         blob = json.dumps(
@@ -237,7 +289,11 @@ def main() -> int:
                 "jobs": db.rows_for_session("job", session_id, "result,error,payload"),  # type: ignore[arg-type]
             }
         )
-        check("저장된 결과에 이미지 데이터 없음", "data:image" not in blob and "base64," not in blob, f"{len(blob)} bytes")
+        check(
+            "저장된 결과에 이미지 데이터 없음",
+            "data:image" not in blob and "base64," not in blob,
+            f"{len(blob)} bytes",
+        )
 
     finally:
         if session_id and args.keep:

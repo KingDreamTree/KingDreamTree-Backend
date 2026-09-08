@@ -286,6 +286,31 @@ check("  가공본 크기·crop_box 가 행에 기록됨", PHOTOS["USER"].get("w
 check("  두 장이 메모리에 등록됨 (held_photos 2)", photo_source.held() == 2, str(photo_source.held()))
 check("  메모리의 가공본이 JPEG", (photo_source.get(SESSION_ID, "USER") or b"")[:3] == b"\xff\xd8\xff")
 
+# 얼굴 가림 — OpenAI 행 복사본만 가려지고 세그용 가공본은 그대로
+from app.services import face_mask  # noqa: E402
+
+check("  응답 face_masked 두 장 true", body.get("face_masked") == {"REFERENCE": True, "USER": True}, str(body.get("face_masked")))
+seg_copy = photo_source.get(SESSION_ID, "USER") or b""
+vlm_copy = photo_source.get(SESSION_ID, "USER", for_vlm=True) or b""
+check("  GPT 행 복사본이 세그용과 다른 바이트", vlm_copy and vlm_copy != seg_copy)
+if vlm_copy and seg_copy:
+    seg_img = Image.open(io.BytesIO(seg_copy)).convert("RGB")
+    vlm_img = Image.open(io.BytesIO(vlm_copy)).convert("RGB")
+    lms = PHOTOS["USER"]["pose_landmarks"]
+    box = face_mask.face_box(lms, seg_img.size)
+    cx, cy = ((box[0] + box[2]) // 2, (box[1] + box[3]) // 2) if box else (0, 0)
+    check("  얼굴 박스가 잡힘", box is not None, str(box))
+    check("  복사본의 얼굴 박스 안이 회색", box is not None and vlm_img.getpixel((cx, cy)) == face_mask.FILL, str(vlm_img.getpixel((cx, cy))))
+    check("  세그용 가공본의 같은 자리는 원래 색", box is not None and seg_img.getpixel((cx, cy)) != face_mask.FILL, str(seg_img.getpixel((cx, cy))))
+    out_x, out_y = 5, seg_img.height - 5
+    check("  박스 밖은 두 벌이 같음", vlm_img.getpixel((out_x, out_y)) == seg_img.getpixel((out_x, out_y)))
+    check("  두 벌 크기 같음", vlm_img.size == seg_img.size, f"{vlm_img.size} vs {seg_img.size}")
+check("  storage 경로(가린 복사본 없음)는 for_vlm 도 가공본을 줌", photo_source.get("no-such", "USER", for_vlm=True) is None)
+# 얼굴 점이 전부 안 보이면 가리지 않는다 (뒷모습)
+hidden = [{"index": i, "x": 0.5, "y": 0.2 + i * 0.02, "z": 0.0, "visibility": 0.1 if i < 11 else 0.95} for i in range(33)]
+check("  얼굴 점 visibility 낮음 → 박스 없음", face_mask.face_box(hidden, (600, 800)) is None)
+check("  랜드마크 없음 → 박스 없음", face_mask.face_box(None, (600, 800)) is None)
+
 r = pod.post("/upload", files=files(), headers={"X-Upload-Token": tok})
 check("같은 토큰 재사용 → 401", r.status_code == 401, str(r.status_code))
 

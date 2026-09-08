@@ -80,7 +80,9 @@ async def _gate(
     """
     client_ip = request.client.host if request.client else "unknown"
     rate_limit.check(
-        f"pod-upload:{client_ip}", settings.pod_upload_rate_limit, settings.pod_upload_rate_window_sec
+        f"pod-upload:{client_ip}",
+        settings.pod_upload_rate_limit,
+        settings.pod_upload_rate_window_sec,
     )
     if content_length is not None and content_length > _MAX_BODY:
         raise file_too_large(settings.max_upload_bytes)
@@ -160,10 +162,12 @@ async def upload(
     del ref_raw, user_raw
 
     # ── 스크리닝 — 종전 API 와 같은 함수, 같은 기준. 이 응답 안에서 즉시 ───────
+    #    ⚠️ OpenAI 로 가는 건 **얼굴을 가린 복사본**(vlm_jpeg)이다. 가공본(jpeg)을 넘기면
+    #       얼굴이 그대로 나간다 — 이 두 줄이 이슈 3 의 마지막 방어선이다.
     try:
         screening = await photo_screening.screen(
-            pipeline.prepared_image(prepared[str(PhotoKind.USER)]),
-            prepared[str(PhotoKind.REFERENCE)].jpeg,
+            pipeline.screening_image(prepared[str(PhotoKind.USER)]),
+            prepared[str(PhotoKind.REFERENCE)].vlm_jpeg,
         )
     except photo_screening.ScreeningUnavailable:
         raise screening_unavailable() from None
@@ -185,5 +189,8 @@ async def upload(
         "screening": {"suitable": True, "skipped": screening.skipped},
         "jobs": jobs,
         "crop_box": {kind: p.crop_box for kind, p in prepared.items()},
-        "photo_size": {kind: {"width": p.width, "height": p.height} for kind, p in prepared.items()},
+        "face_masked": {kind: p.face_box is not None for kind, p in prepared.items()},
+        "photo_size": {
+            kind: {"width": p.width, "height": p.height} for kind, p in prepared.items()
+        },
     }

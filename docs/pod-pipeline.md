@@ -10,20 +10,22 @@
 ## 무엇이 바뀌나
 
 ```
-[기기] 얼굴 블러 → 원본은 IndexedDB
+[기기] 원본은 IndexedDB (기기에서 블러하지 않는다 — 아래 "얼굴 가림")
    ├─ 기준/사용자 사진 등록 ──랜드마크·메타만──▶ [API]  POST /photos/reference · /photos/user
    ├─ 분석 시작 ──▶ [API] POST /sessions/{id}/upload-token  (팟 주소는 안 줌 — 프론트 고정)
    └─ 두 장 + X-Upload-Token ──▶ [팟] POST /upload
                                     ① 토큰·크기·속도 제한 (본문 읽기 전)
                                     ② 거울 되돌림·3:4 크롭·리사이즈 (종전 _store 와 같은 함수)
-                                    ③ 사용자 사진 스크리닝(GPT) → 이 응답에서 즉시 통과/반려
-                                    ④ 202 → 뒤에서 세그×2 → 부위 진단 → 종합 진단 (메모리)
-                                    ⑤ 맵·진단문·수치·crop_box 만 Supabase, 사진은 메모리에서 해제
+                                       + 랜드마크로 얼굴을 회색으로 덮은 **복사본 한 벌** (face_mask)
+                                    ③ 사용자 사진 스크리닝(GPT, 가린 복사본) → 이 응답에서 즉시 통과/반려
+                                    ④ 202 → 뒤에서 세그×2(안 가린 가공본) → 부위·종합 진단(가린 복사본)
+                                    ⑤ 맵·진단문·수치·crop_box 만 Supabase, 사진 두 벌은 메모리에서 해제
 [기기] ──폴링──▶ [API] GET /jobs/{id} · /analysis/progress · /analysis   (그대로)
 [화면] = 기기 원본을 (flipped 면 좌우 반전 후) crop_box 로 잘라 + 서버 맵
 ```
 
-사진이 존재하는 곳: 기기 · 팟 메모리(처리 중) · OpenAI. Storage·DB·API·EC2 워커에는 없다.
+사진이 존재하는 곳: 기기 · 팟 메모리(처리 중, 가공본 + 가린 복사본) · OpenAI(**가린 복사본만**).
+Storage·DB·API·EC2 워커에는 없다.
 
 ## 코드 지도
 
@@ -34,6 +36,7 @@
 | `app/pod/main.py` | 진입점. 점검 → 모델 예열 → 재시작 잔여 잡 FAILED 정리 → 서버 |
 | `app/services/photo_source.py` | 핸들러가 사진을 읽는 유일한 창구 — 메모리 우선, 없으면 Storage(종전) |
 | `app/services/upload_token.py` | HMAC 일회용 토큰. API 발급 / 팟 검증 |
+| `app/services/face_mask.py` | 랜드마크(코·눈·귀·입)로 얼굴 박스를 잡아 회색으로 덮는다. OpenAI 행 복사본에만 |
 | `app/routes/photos.py` | pod 모드: 파일 없이 랜드마크만 저장, `upload-token` 발급 |
 | `db/migrations/2026-09-09_photo_pod_pipeline.sql` | `photo.storage_path` NULL 허용 + `photo.crop_box` |
 | `Dockerfile.pod` | SSH·터미널 없는 이미지. CMD 가 곧 서버 |
@@ -51,6 +54,7 @@ MODEL_DIR=/workspace/models        HF_HOME=/workspace/.cache/huggingface
 SAPIENS_SIZE=1b  SAPIENS_DEVICE=cuda  SAPIENS_DTYPE=float16
 CORS_ORIGINS=https://www.refit.live  (브라우저가 팟에 직접 붙는다 — 비우면 화면에서만 실패)
 POD_PORT=8080  POD_QUEUE_MAX=8  POD_UPLOAD_RATE_LIMIT=10
+POD_FACE_MASK=true   (false 는 실측 전용 — 운영에서 끄면 OpenAI 에 얼굴이 나간다)
 ```
 
 API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의 `WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH` (EC2 워커가 VLM 잡을 집지 않게).
@@ -78,26 +82,44 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 - **로그**: RunPod 대시보드 컨테이너 로그(stdout). 기동 점검 실패도 여기 첫 줄에 나온다. 사진 바이트·토큰은 찍지 않는다
 - **헬스**: `GET /health` → `pipeline.queued`(대기), `held_photos`(메모리 사진 수 — 대기 상태면 0), `worker_alive`
 - **재시작**: 메모리 사진이 사라지므로 처리 중이던 잡은 기동 직후 `FAILED` + "다시 올려주세요" 로 정리된다 (`queue.fail_orphans`, payload.source=pod 만)
-- **마이그레이션 전**: `photo.crop_box` 컬럼이 없으면 팟이 경고를 남기고 crop_box 없이 저장한다 (업로드는 죽지 않음). 단 `storage_path` NOT NULL 은 폴백이 없다 — API 의 랜드마크 등록이 DB 에서 막히므로 **pod 모드는 마이그레이션 적용이 전제**다
+- **마이그레이션 전**: 폴백이 없다. `storage_path` NOT NULL 은 API 의 랜드마크 등록을, `crop_box` 없음은 팟의 행 갱신(업로드 500)을 막는다 — **pod 모드는 마이그레이션 적용이 전제**다. (crop_box 없이 조용히 저장하는 폴백은 2026-09-09 결정으로 뺐다: 업로드는 성공처럼 보이는데 화면만 어긋나는 게 더 찾기 어렵다)
 - **대기열 초과**: 업로드가 503 `POD_BUSY` — 프론트는 "잠시 후 다시"
 - **디버깅**: 문 없는 팟에는 들어갈 수 없다. 같은 이미지에 SSH 템플릿을 얹은 **스테이징 팟**을 따로 만들어 거기서 본다. 프로덕션 팟은 재배포만
 - **잔여 확인**: `scripts/check_pod_no_photo_residue.py` (스테이징 팟·로컬), `scripts/audit_photo_privacy.py --session <id>` (DB·Storage 감사)
 
-## 얼굴 블러 선행 실측 (2026-09-09, `scripts/measure_face_blur.py`)
+## 얼굴 가림 (이슈 3) — 팟이 OpenAI 행 복사본만 가린다 (2026-09-09 결정)
 
-사진 4장(photos/123·456·reference·mybody), 로컬 RTX 5060 · 1b fp16. 원본 vs 얼굴 블러본의 세그 결과 비교.
+**왜 기기 블러가 아닌가.** 원본 vs 얼굴 블러본의 세그 결과를 실측했다 (사진 4장, RTX 5060 · 1b fp16, `scripts/measure_face_blur.py`).
 
 | 블러 방식 | 인물 픽셀(분모) 변화 | 부위 면적비 최대 차 | 부위 IoU 최소 | 판정 |
 |---|---|---|---|---|
 | 머리+목 박스(Face_Neck·Hair +15%) · 강한 블러(짧은 변/6) | −12 ~ −15% | 15 ~ 18% (몸통 픽셀 −15%) | 0.835 | **다름** |
 | 얼굴만 · 강한 블러(짧은 변/6) | −7 ~ −9% (1장은 ±0) | 7 ~ 10% | 0.979 | **다름** |
-| **얼굴만 · 약한 블러(짧은 변/12)** | **±1%** | **≤ 2.5%** | **≥ 0.98** | **같음 (4/4)** |
+| 얼굴만 · 약한 블러(짧은 변/12) | ±1% | ≤ 2.5% | ≥ 0.98 | 같음 (4/4) |
 
-- 사피엔스는 **강하게 뭉갠 얼굴을 배경으로** 분류한다 → 인물 픽셀(모든 부위 비율의 분모)이 줄고, 목·어깨까지 가리면 몸통도 깎인다
-- 약한 블러(반지름 ≈ 얼굴 짧은 변의 1/12, 110px 얼굴이면 9px)는 얼굴로 인식된 채 형태만 뭉개진다. is_valid 변경은 어느 설정에서도 없었다
-- 스크리닝(GPT) 판정은 강한 블러·머리 박스에서도 2/2 쌍 동일 (suitable·rule·blurry 관찰 모두 같음)
-- **프론트 지침**: 포즈 랜드마크(눈·코·귀)로 잡은 **얼굴 박스만**, 가우시안 반지름 = 박스 짧은 변 / 12. 목·머리카락까지 넓히거나 더 세게 뭉개면 결과가 달라진다. 기준 사진도 같은 규칙으로 (분모 변화가 두 장에서 상쇄되도록)
-- 재실측: `python scripts/measure_face_blur.py --pairs a.jpg:b.jpg --box face --blur 12 --screen`
+- 사피엔스는 **강하게 뭉갠 얼굴을 배경으로** 분류한다 → 인물 픽셀(모든 부위 비율의 분모)이 줄고 부위 비율이 틀어진다
+- 세그가 안 틀어지는 건 약한 블러뿐인데, 약한 블러는 얼굴 윤곽이 남아 익명화가 안 된다. 즉 "한 장을 기기에서 블러해 세그·GPT 에 같이 쓴다"는 목표(OpenAI 에 얼굴이 안 나감)를 못 이룬다
+- 스크리닝(GPT) 판정은 강한 블러·머리 박스에서도 2/2 쌍 동일 — GPT 쪽은 세게 가려도 된다
+
+**그래서.** 세그는 **안 가린 가공본**, OpenAI 로 가는 세 호출(스크리닝·부위·종합)은 **얼굴을 회색 사각형으로 덮은 복사본**을 쓴다. 복사본은 가공 직후 한 번 만들어(`pipeline.prepare` → `face_mask.apply`) 처리 내내 메모리에 두고(`photo_source` 의 vlm 변형, `load(photo, for_vlm=True)`), 끝나면 가공본과 함께 지운다. 블러가 아니라 **덮는** 이유: 스크리닝 프롬프트가 "초점이 안 맞아 외곽선이 뭉개졌는가"를 보므로 블러는 그 판정과 헷갈릴 수 있다. 세 프롬프트에 "얼굴은 일부러 가려져 있다 — 품질·진단 근거로 쓰지 마라"를 넣었다.
+
+- 얼굴 위치: 프론트가 등록 때 보낸 포즈 랜드마크 0~10(코·눈·귀·입) 중 visibility ≥ 0.5 인 점. 귀~귀 폭을 얼굴 폭으로 보고 이마(위 0.75폭)·턱(아래 0.45폭)·좌우 0.25폭을 넓힌다. 점이 3개 미만(뒷모습·프레임 밖)이면 가리지 않고 로그만 남긴다 — 업로드 응답 `face_masked` 로 알 수 있다
+- 프론트: **블러 작업 없음.** 원본을 그대로 올린다
+- `/health` 의 `pipeline.face_mask` 가 true 여야 한다
+
+**아직 안 잰 것 — 배포 전 실측.** 가린 복사본으로 부위·종합 진단 문장이 원본과 같은지는 아직 비교하지 않았다 (스크리닝만 같았다). 절차:
+
+```
+pip install mediapipe                                            # 검증 전용
+python scripts/pose_landmarks.py photos/123.jpg --out out/landmarks/123.json   # 실제 랜드마크
+python scripts/pose_landmarks.py photos/456.jpg --out out/landmarks/456.json
+# 팟 POD_FACE_MASK=false 로 기동 → 스모크 --keep --ref-landmarks ... --user-landmarks ...   (A)
+# 팟 POD_FACE_MASK=true  로 기동 → 같은 명령                                                (B)
+python scripts/compare_diagnosis.py --a <세션A> --b <세션B>       # 등급·우선순위·점수 같으면 통과
+# 끝나면 두 유저 삭제 (DELETE /users/me)
+```
+
+다르면 박스를 줄여(face_mask.py 의 확장 비율) 다시 잰다. 그래도 다르면 후퇴안은 "기기에서 약한 블러(짧은 변/12) 한 장" — 세그·스크리닝은 같지만 익명화가 약하다.
 
 ## 로컬에서 돌리기 (검증용)
 
@@ -109,4 +131,4 @@ python -m app.worker.run --kinds OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH
 python scripts/smoke_pod_pipeline.py --ref photos/reference.jpg --user photos/mybody.jpg
 ```
 
-네트워크 없이 관문만: `python scripts/verify_pod_upload.py` (스크리닝·파이프라인은 가짜로 대체).
+네트워크 없이 관문만: `python scripts/verify_pod_upload.py` (스크리닝·파이프라인은 가짜로 대체 — 얼굴 가림은 실제로 검사한다).

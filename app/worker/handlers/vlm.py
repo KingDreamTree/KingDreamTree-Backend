@@ -86,7 +86,8 @@ def _load_side(context: dict[str, Any], kind: PhotoKind) -> tuple[bytes, bytes, 
         ]
 
     # 사진은 메모리(팟 경로) 또는 Storage(종전) — photo_source 가 정한다. 맵은 저장된다.
-    photo_bytes = photo_source.load(photo)
+    # ⚠️ for_vlm=True: 팟 경로에서는 **얼굴을 가린 복사본**을 받는다 (services/face_mask).
+    photo_bytes = photo_source.load(photo, for_vlm=True)
     map_bytes = storage.download(seg["storage_bucket"], seg["map_path"])
 
     image = segmap.fit_for_vlm(Image.open(io.BytesIO(photo_bytes)).convert("RGB"))
@@ -515,7 +516,7 @@ def _photo_jpeg_for_vlm(session_id: UUID, kind: PhotoKind) -> bytes | None:
     photo = db.get_photo(session_id, kind)
     if photo is None:
         return None
-    raw = photo_source.load(photo)
+    raw = photo_source.load(photo, for_vlm=True)  # 팟 경로: 얼굴을 가린 복사본
     img = Image.open(io.BytesIO(raw)).convert("RGB")
     img = segmap.fit_for_vlm(img)
     buf = io.BytesIO()

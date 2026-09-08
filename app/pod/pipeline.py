@@ -34,7 +34,7 @@ from PIL import Image
 
 from app.config import settings
 from app.schemas.enums import JobKind, PhotoKind
-from app.services import db, images, photo_source
+from app.services import db, face_mask, images, photo_source
 from app.worker import queue
 from app.worker.run import _is_retryable, _user_message
 
@@ -59,13 +59,15 @@ RESTART_MESSAGE = "처리 중 팟이 재시작되어 이 분석은 사라졌습�
 
 @dataclass
 class Prepared:
-    """저장용과 같은 규격의 가공본 + 프론트가 원본을 맞출 크롭 박스."""
+    """저장용과 같은 규격의 가공본 + 프론트가 원본을 맞출 크롭 박스 + OpenAI 행 복사본."""
 
-    jpeg: bytes
+    jpeg: bytes  # 세그·저장 규격 가공본 (얼굴 그대로)
     width: int
     height: int
     crop_box: dict[str, Any]
     landmarks: list[dict[str, Any]] | None
+    vlm_jpeg: bytes  # 얼굴을 가린 복사본 — GPT 세 번(스크리닝·부위·종합)은 이것만 본다
+    face_box: tuple[int, int, int, int] | None  # 가공본 픽셀 좌표. None = 얼굴 점 없음
 
 
 def prepare(photo: dict[str, Any], raw: bytes) -> Prepared:
@@ -75,6 +77,9 @@ def prepare(photo: dict[str, Any], raw: bytes) -> Prepared:
        Storage 경로의 세그 입력이 달라져 "결과 동일" 전제가 깨진다.
     ⚠️ crop_box 는 **되돌린(비반전) 원본** 픽셀 좌표다. 프론트는 기기 원본을 flipped 면
        먼저 좌우 반전하고, 그 다음 이 박스로 자른다.
+    ⚠️ 얼굴 가림은 **여기서 한 번만** 한다 (services/face_mask). 세그는 안 가린 가공본,
+       OpenAI 로 가는 세 호출은 가린 복사본. POD_FACE_MASK=false 는 실측(원본 vs 가림
+       진단 비교) 전용 — 운영에서 끄면 OpenAI 에 얼굴이 나간다.
     """
     img = images.load_rgb(raw)
     flipped = bool(photo.get("was_mirrored"))
@@ -98,14 +103,34 @@ def prepare(photo: dict[str, Any], raw: bytes) -> Prepared:
         "source_height": src_h,
         "flipped": flipped,
     }
-    return Prepared(jpeg=jpeg, width=width, height=height, crop_box=crop_box, landmarks=recentered)
+    face_box = None
+    vlm_jpeg = jpeg
+    if settings.pod_face_mask:
+        masked, face_box = face_mask.apply(_decode(jpeg), recentered)
+        if face_box is None:
+            log.info("[%s] 얼굴 점이 안 보여 가리지 않습니다 (뒷모습·프레임 밖)", photo.get("kind"))
+        else:
+            vlm_jpeg, _, _ = images.encode_photo(masked)
+    return Prepared(
+        jpeg=jpeg,
+        width=width,
+        height=height,
+        crop_box=crop_box,
+        landmarks=recentered,
+        vlm_jpeg=vlm_jpeg,
+        face_box=face_box,
+    )
 
 
-def prepared_image(p: Prepared) -> Image.Image:
-    """스크리닝에 넘길 PIL 이미지 (가공본 기준)."""
+def _decode(jpeg: bytes) -> Image.Image:
     import io
 
-    return Image.open(io.BytesIO(p.jpeg)).convert("RGB")
+    return Image.open(io.BytesIO(jpeg)).convert("RGB")
+
+
+def screening_image(p: Prepared) -> Image.Image:
+    """스크리닝(GPT)에 넘길 PIL 이미지 — **얼굴을 가린 복사본** 기준."""
+    return _decode(p.vlm_jpeg)
 
 
 # --------------------------------------------------------------------------- #
@@ -143,6 +168,7 @@ def status() -> dict[str, Any]:
         "done": _state["done"],
         "failed": _state["failed"],
         "held_photos": photo_source.held(),
+        "face_mask": bool(settings.pod_face_mask),
         "worker_alive": bool(_worker and _worker.is_alive()),
     }
 
@@ -163,11 +189,14 @@ def submit(
 
     session_id = str(session["session_id"])
     for kind, p in prepared.items():
-        photo_source.put(session_id, kind, p.jpeg)
+        photo_source.put(session_id, kind, p.jpeg, vlm=p.vlm_jpeg)
         patch: dict[str, Any] = {"width": p.width, "height": p.height, "crop_box": p.crop_box}
         if p.landmarks is not None:
             patch["pose_landmarks"] = p.landmarks
-        _update_photo_row(UUID(str(photos[kind]["photo_id"])), patch)
+        # ⚠️ crop_box 컬럼이 없으면(마이그레이션 미적용) 여기서 그대로 500 이다 — 일부러
+        #    폴백을 두지 않는다. crop_box 없이 저장되면 업로드는 성공처럼 보이는데 화면만
+        #    어긋나서 더 찾기 어렵다. pod 모드는 2026-09-09_photo_pod_pipeline.sql 이 전제다.
+        db.update_photo(UUID(str(photos[kind]["photo_id"])), patch)
 
     task = Task(session_id=session_id, mode=mode)
     sid = UUID(session_id)
@@ -183,7 +212,9 @@ def submit(
         part_payload: dict[str, Any] = {"source": SOURCE}
         if mode == "quick":
             part_payload["mode"] = "quick"
-        task.jobs[str(JobKind.VLM_PART)] = queue.open_processing(sid, JobKind.VLM_PART, part_payload)
+        task.jobs[str(JobKind.VLM_PART)] = queue.open_processing(
+            sid, JobKind.VLM_PART, part_payload
+        )
     except Exception:
         photo_source.clear(session_id)
         _fail_all(task, "분석 준비 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
@@ -197,35 +228,6 @@ def submit(
         raise PodBusy() from None
 
     return {kind: str(job["job_id"]) for kind, job in task.jobs.items()}
-
-
-_crop_box_column_missing = False
-
-
-def _update_photo_row(photo_id: UUID, patch: dict[str, Any]) -> None:
-    """photo 행 갱신 — crop_box 컬럼이 아직 없으면(마이그레이션 미적용) 그것만 빼고 저장.
-
-    ⚠️ #172 의 merge_contraindications 폴백과 같은 규약이다: 마이그레이션·배포 순서가
-       어긋나도 업로드가 500 으로 죽지 않게 한다. 대신 프론트는 crop_box 없이 맵을
-       원본에 못 맞추므로, 경고를 남겨 **마이그레이션을 적용하라**는 신호로 삼는다.
-       (db/migrations/2026-09-09_photo_pod_pipeline.sql)
-    """
-    global _crop_box_column_missing
-    from postgrest.exceptions import APIError
-
-    if _crop_box_column_missing:
-        patch = {k: v for k, v in patch.items() if k != "crop_box"}
-    try:
-        db.update_photo(photo_id, patch)
-    except APIError as e:
-        if e.code != "PGRST204" or "crop_box" not in str(e.message):
-            raise
-        _crop_box_column_missing = True
-        log.warning(
-            "photo.crop_box 컬럼이 없습니다 — 마이그레이션 2026-09-09_photo_pod_pipeline.sql 을 "
-            "적용하세요. 이번에는 crop_box 없이 저장합니다 (프론트가 맵을 원본에 못 맞춤)."
-        )
-        db.update_photo(photo_id, {k: v for k, v in patch.items() if k != "crop_box"})
 
 
 def _fail_all(task: Task, message: str) -> None:
@@ -274,7 +276,9 @@ def _process(task: Task) -> None:
 
     sid = task.session_id
     _state["running"] = sid
-    log.info("[%s] 처리 시작 — mode=%s 대기 %.1fs", sid, task.mode, time.monotonic() - task.enqueued_at)
+    log.info(
+        "[%s] 처리 시작 — mode=%s 대기 %.1fs", sid, task.mode, time.monotonic() - task.enqueued_at
+    )
 
     ok = True
     if task.mode != "quick":
@@ -330,7 +334,12 @@ def _loop() -> None:
             cleared = photo_source.clear(task.session_id)
             _state["running"] = None
             gc.collect()
-            log.info("[%s] 메모리 사진 %d장 해제 (남은 사진 %d)", task.session_id, cleared, photo_source.held())
+            log.info(
+                "[%s] 메모리 사진 %d장 해제 (남은 사진 %d)",
+                task.session_id,
+                cleared,
+                photo_source.held(),
+            )
             _tasks.task_done()
     log.info("처리 스레드 종료")
 
@@ -340,7 +349,9 @@ def start() -> None:
     global _worker
     orphaned = queue.fail_orphans(POD_KINDS, {"source": SOURCE}, RESTART_MESSAGE)
     if orphaned:
-        log.warning("재시작 전 남은 잡 %d개를 FAILED 로 정리했습니다 (사진이 메모리에만 있었음)", orphaned)
+        log.warning(
+            "재시작 전 남은 잡 %d개를 FAILED 로 정리했습니다 (사진이 메모리에만 있었음)", orphaned
+        )
     _stop.clear()
     _worker = threading.Thread(target=_loop, name="pod-pipeline", daemon=True)
     _worker.start()

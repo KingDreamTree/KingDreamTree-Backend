@@ -247,9 +247,11 @@ GENERIC_ERROR = "처리 중 오류가 발생했습니다. 잠시 후 다시 시�
 
 #: 원문을 화면에 절대 내보내지 않는 예외 타입. 이름으로 잡는 이유는 이 모듈이
 #: vlm/ocr/routine 을 import 하지 않기 때문이다 (워커 kinds 에 따라 로드가 갈린다).
-_LLM_ERROR_TYPES = frozenset(
-    {"VlmResponseError", "OcrResponseError", "RoutineInputError", "InputNotUsableError"}
-)
+#: ⚠️ InputNotUsableError 는 여기 넣지 않는다 — 그 문구("비교 가능한 부위가 N개뿐입니다.
+#:    다시 촬영해주세요")는 우리가 직접 쓴 재촬영 안내라 화면까지 가야 한다. 8/16 에 같이
+#:    묶여서 일반 오류 문구로 바뀌어 나갔고, 사용자는 서버 문제인 줄 알고 같은 사진으로
+#:    재시도했다 (2026-09-09 부위 부족 실측에서 발견). 내부 정보 검사(_LEAK_MARKERS)는 그대로 탄다.
+_LLM_ERROR_TYPES = frozenset({"VlmResponseError", "OcrResponseError", "RoutineInputError"})
 
 
 def _user_message(e: Exception) -> str:

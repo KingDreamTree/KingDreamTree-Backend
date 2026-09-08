@@ -17,8 +17,12 @@
 
 FROM pytorch/pytorch:2.11.0-cuda12.8-cudnn9-runtime
 
+# ⚠️ PIP_BREAK_SYSTEM_PACKAGES — 베이스 이미지의 파이썬이 Debian 시스템 관리 환경(PEP 668)이라
+#    이게 없으면 pip install 이 "externally-managed-environment" 로 거부된다 (2026-09-09 빌드에서 확인).
+#    컨테이너 전용 파이썬이라 venv 를 따로 둘 이유가 없다. pip 26 은 이 환경변수를 존중한다.
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     PHOTO_PIPELINE=pod \
     MODEL_DIR=/workspace/models \
     HF_HOME=/workspace/.cache/huggingface \

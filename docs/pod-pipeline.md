@@ -74,7 +74,7 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 
 1. Supabase SQL 편집기에서 `2026-09-09_photo_pod_pipeline.sql` 적용 (종전 경로에 영향 없음)
 2. 팟 이미지 빌드·푸시 → 팟 생성 → `GET /health` 가 `status: ok`, `pipeline.worker_alive: true`
-3. API `.env`: `PHOTO_PIPELINE=pod`, `POD_UPLOAD_SECRET`, `WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH` → `docker compose up -d --build`
+3. API `.env`: `PHOTO_PIPELINE=pod`, `POD_UPLOAD_SECRET`, `WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH` → `scripts/deploy_rolling.sh` (무중단: api_a → api_b → worker 순서로 교체. `.env` 만 바뀐 경우도 같은 스크립트)
 4. 프론트 배포 (팟 주소 고정, 새 흐름)
 5. `scripts/smoke_pod_pipeline.py --api https://api.refit.live/api/v1 --pod https://<pod>-8080.proxy.runpod.net` 로 관통 확인
 

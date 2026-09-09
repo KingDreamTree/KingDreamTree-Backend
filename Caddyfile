@@ -8,7 +8,21 @@
 # ⚠️ http(80) 요청은 Caddy 가 자동으로 https 로 리다이렉트한다.
 #
 # api.refit.live — 가비아 DNS 의 A 레코드(호스트 api)가 EC2 탄력적 IP 를 가리킨다.
+#
+# 무중단 배포 (2026-09-09): API 컨테이너가 api_a·api_b 둘이다.
+#   · lb_policy first     — 평소엔 api_a 로만 보낸다 (둘 다 살아 있으면 순서대로 첫 번째).
+#   · health_uri /health  — 3초마다 능동 확인. 재시작 중인 쪽은 목록에서 빠진다.
+#   · lb_try_duration     — 연결이 막 끊긴 순간의 요청은 다른 쪽으로 다시 시도한다.
+#   그래서 scripts/deploy_rolling.sh 가 하나씩 갈아끼우는 동안 502 가 나지 않는다.
 
 api.refit.live {
-    reverse_proxy api:8000
+    reverse_proxy api_a:8000 api_b:8000 {
+        lb_policy first
+        lb_try_duration 8s
+        lb_try_interval 250ms
+        health_uri /health
+        health_interval 3s
+        health_timeout 3s
+        fail_duration 10s
+    }
 }

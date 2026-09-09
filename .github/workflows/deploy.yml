@@ -46,9 +46,10 @@ jobs:
             #    배포를 못 되살린다.
             # ⚠️ 추적되는 파일만 되돌린다 — .env 는 .gitignore 라 그대로 남는다.
             git reset --hard origin/main
-            docker compose up -d --build
-            # 재빌드가 쌓일수록 옛 레이어가 디스크(30GB)를 먹는다 — 매번 정리
-            docker image prune -f
+            # 무중단 배포 — 이미지 한 번 빌드 → api_a → api_b → worker 순서로 교체.
+            #   (`docker compose up -d --build` 는 API 를 통째로 재시작해 몇 초 끊긴다)
+            #   옛 이미지 정리(image prune)도 스크립트 안에서 한다.
+            bash scripts/deploy_rolling.sh
 
       - name: 배포 결과 확인 (헬스 체크)
         run: |

@@ -1,25 +1,46 @@
-# EC2 배포 구성 — 컨테이너 3개.
+# EC2 배포 구성 — 컨테이너 4개.
 #
-#   caddy   80/443 수신. HTTPS 인증서를 Let's Encrypt 에서 **자동 발급·갱신**하고
-#           api 로 프록시한다. (도메인은 Caddyfile 에서 설정)
-#   api     FastAPI. 내부 8000 — 보안그룹에서도, 여기서도 밖에 직접 열지 않는다.
-#   worker  LLM 잡 워커 (OCR·VLM·루틴). 세그멘테이션 워커는 RunPod — 여기 없다.
+#   caddy    80/443 수신. HTTPS 인증서를 Let's Encrypt 에서 **자동 발급·갱신**하고
+#            api_a / api_b 중 **살아 있는 쪽**으로 프록시한다. (도메인은 Caddyfile 에서 설정)
+#   api_a    FastAPI. 내부 8000 — 보안그룹에서도, 여기서도 밖에 직접 열지 않는다.
+#   api_b    같은 이미지의 두 번째 API. 무중단 배포용 — 하나를 갈아끼우는 동안 다른 하나가 받는다.
+#   worker   LLM 잡 워커 (OCR·VLM·루틴). 세그멘테이션 워커는 RunPod — 여기 없다.
 #
-# 실행:  docker compose up -d --build
-# 로그:  docker compose logs -f api        (또는 worker / caddy)
-# 갱신:  git pull && docker compose up -d --build
+# 실행(처음):  docker compose up -d --build
+# 배포(무중단): scripts/deploy_rolling.sh   ← 이미지 한 번 빌드 → api_a → api_b → worker 순서로 교체.
+#              deploy.yml 이 이걸 부른다. `docker compose up -d --build` 로 한꺼번에 올리면
+#              두 API 가 동시에 재시작되어 몇 초 끊긴다 — 무중단이 필요하면 스크립트로.
+# 로그:  docker compose logs -f api_a        (또는 api_b / worker / caddy)
 #
 # ⚠️ 같은 폴더에 .env 가 있어야 뜬다 (Supabase·OpenAI 키). 리포에는 없으므로
 #    서버에서 직접 만든다 — .env.example 참고.
+# ⚠️ api_a 만 build: 를 갖고 api_b 는 그 이미지(image:)를 그대로 쓴다. 둘 다 build: 를
+#    두면 같은 걸 두 번 빌드한다.
+
+x-api: &api
+  image: kingdreamtree-backend-api:latest
+  restart: unless-stopped
+  env_file: .env
+  stop_grace_period: 120s
+  # 컨테이너 안에서 /health 가 200 이면 healthy. `docker compose up -d --wait` 가 이걸 기다린다.
+  # (slim 이미지에 curl 이 없어 python 으로 본다)
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+    interval: 5s
+    timeout: 5s
+    retries: 6
+    start_period: 10s
+
 services:
-  api:
+  api_a:
+    <<: *api
     build: .
-    restart: unless-stopped
-    env_file: .env
-    stop_grace_period: 120s
+
+  api_b:
+    <<: *api
 
   worker:
-    build: .
+    image: kingdreamtree-backend-api:latest
     # ⚠️ 사진 경로가 팟(PHOTO_PIPELINE=pod)으로 바뀌면 .env 에
     #      WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH
     #    를 두어 VLM_PART/VLM_OVERALL 을 **여기서 빼야 한다.** 그 잡은 팟이 자기 안에서

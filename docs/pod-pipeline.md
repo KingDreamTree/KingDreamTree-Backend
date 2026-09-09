@@ -61,10 +61,11 @@ POD_INSTANCE_ID=   (비우면 RUNPOD_POD_ID → 호스트명. 재시작 정리�
 
 API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의 `WORKER_KINDS=OCR_INBODY,ROUTINE_GEN,ROUTINE_PATCH` (EC2 워커가 VLM 잡을 집지 않게).
 
-## RunPod 설정 (미실행 — 팟을 올릴 때)
+## RunPod 설정 (2026-09-10 실행 — 팟 `refit-pod`, 템플릿 `refit-pod`)
 
-- 이미지: `kingdreamtree-pod:<tag>` (레지스트리에 푸시한 것). 로컬 빌드 확인됨(2026-09-09, 12.6GB): sshd·ssh·ttyd·jupyter 없음, torch 2.11.0+cu128·torchvision 0.26.0·transformers 5.15.0, 시크릿 없이 띄우면 기동 점검 4건 실패로 종료
-- **Community Cloud 그대로** (2026-09-09 결정). Secure Cloud 는 GPU 주인이 메모리를 볼 수 있다는 구조적 위험 때문에 고려 대상이었지만, 지금 단계에서는 하지 않는다. 이슈 표에 후순위로 남긴다
+- 이미지: Docker Hub `junseowo/kingdreamtree-pod:<날짜 태그>` — **비공개 저장소**. RunPod Settings › Container Registry Auth 에 읽기 전용 토큰을 `dockerhub` 로 등록하고 템플릿에서 고른다 (없으면 이미지를 못 받아 안 뜬다). 태그는 날짜(`2026-09-10.1`)로 박고 바꿀 때마다 새 태그 — 같은 태그는 호스트 캐시를 쓸 수 있다. 로컬 빌드 확인됨(2026-09-09, 12.6GB): sshd·ssh·ttyd·jupyter 없음, torch 2.11.0+cu128·torchvision 0.26.0·transformers 5.15.0, 시크릿 없이 띄우면 기동 점검 4건 실패로 종료
+- **Community Cloud 그대로** (2026-09-09 결정). Secure Cloud 는 GPU 주인이 메모리를 볼 수 있다는 구조적 위험 때문에 고려 대상이었지만, 지금 단계에서는 하지 않는다. 이슈 표에 후순위로 남긴다. 다만 지금 배포 화면에는 Community/Secure 선택이 없고 재고 있는 쪽으로 배정된다 — 9/10 은 같은 값($0.28, RTX 4000 Ada)으로 Secure 에 배정됐다. 결정의 뜻은 "돈을 더 내지 않는다"이지 Secure 를 피하는 게 아니다
+- GPU 는 $0.6 이하면 아무거나 (2000 Ada $0.24 → A4500 $0.25 → 4000 Ada $0.28 → L4 $0.49). 싼 카드는 몇 분 사이에 재고가 사라진다. 배포 화면에서 **템플릿을 바꾸면 Storage 설정이 초기화**되므로 Deploy 직전에 Container disk 20 / Network volume 20 을 다시 확인한다
 - Network Volume → `/workspace` (가중치). 볼륨을 먼저 만들고 **그 리전**의 GPU 를 고른다. 볼륨이 비어 있어도 된다 — 팟이 기동하면서 가중치(1b 5.5GB)를 스스로 내려받는다 (`POD_AUTO_DOWNLOAD_WEIGHTS`, 첫 기동만 몇 분 더). 20GB 면 충분
 - **Expose HTTP Ports: 8080**. SSH/TCP 포트는 열지 않는다. 템플릿의 start command 는 비운다 (이미지 CMD 사용)
 - 환경 변수는 위 목록을 팟 템플릿에 넣는다 (시크릿 포함)
@@ -80,8 +81,11 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 
 되돌리기: API `PHOTO_PIPELINE=storage` + `WORKER_KINDS` 비움 + 프론트 이전 빌드. 마이그레이션은 두어도 된다.
 
+2026-09-10 실행: 1·2·3·5 완료 — 프로덕션 스모크(api.refit.live + 팟, 기준 234·사용자 ok_cropped_head) 전부 통과: 202 16.4초, 세그 2·부위 7·종합 DONE, storage_path NULL·crop_box 기록·Storage 파일 없음·팟 메모리 0. 4(프론트 Vercel `VITE_POD_BASE_URL`)만 남음 — 그 전까지 www.refit.live 사진 분석은 안 된다.
+
 ## 운영
 
+- **기동 직후 2~3초는 DNS 가 안 된다** (9/10 RunPod 실측 — 시작 2.2초 안 요청은 전부 "Temporary failure in name resolution", 3.0초 뒤 요청은 성공). 점검이 그 사이에 돌면 셋 다 실패 → 종료 → RunPod 재시작을 17초마다 반복한다. `app/pod/main.py` `_wait_for_network()` 가 Supabase 호스트가 풀릴 때까지(최대 120초) 기다린 뒤 점검한다. 로그에 `네트워크 대기 중` 이 몇 줄 찍히는 건 정상
 - **로그**: RunPod 대시보드 컨테이너 로그(stdout). 기동 점검 실패도 여기 첫 줄에 나온다. 사진 바이트·토큰은 찍지 않는다
 - **헬스**: `GET /health` → `pipeline.queued`(대기), `running`(참/거짓), `held_photos`(메모리 사진 수 — 대기 상태면 0), `worker_alive`, `instance`(팟 id). 세션 id 는 내지 않는다
 - **재시작**: 메모리 사진이 사라지므로 처리 중이던 잡은 기동 직후 `FAILED` + "다시 올려주세요" 로 정리된다 (`queue.fail_orphans`, payload 의 source=pod **와 pod=<이 팟 id>** 가 모두 일치하는 것만). 다른 팟(스테이징)의 잡은 건드리지 않는다

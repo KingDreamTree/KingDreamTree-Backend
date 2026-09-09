@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 
 log = logging.getLogger("services.sapiens_weights")
+
+#: 다운로드 재시도 횟수·간격 — 컨테이너 기동 직후 DNS 가 늦게 뜨거나 받는 도중 끊기는 경우
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_RETRY_SEC = 5
 
 #: 크기별 세그멘테이션 체크포인트 레포
 REPOS: dict[str, str] = {
@@ -53,7 +58,18 @@ def ensure(size: str, model_dir: str) -> str:
 
     os.makedirs(path, exist_ok=True)
     log.warning("가중치 없음 — %s 를 %s 로 내려받습니다 (1b ≈ 5.5GB, 몇 분)", REPOS[size], path)
-    snapshot_download(repo_id=REPOS[size], local_dir=path, allow_patterns=ALLOW_PATTERNS)
+    # ⚠️ 몇 GB 를 받는 동안 연결이 한 번 끊기면 통째로 실패한다. 받다 만 파일은 이어받으므로
+    #    (huggingface_hub 의 .incomplete) 몇 번 더 시도하는 비용은 거의 없다.
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            snapshot_download(repo_id=REPOS[size], local_dir=path, allow_patterns=ALLOW_PATTERNS)
+            break
+        except Exception as e:  # noqa: BLE001 — 네트워크 계열이 대부분, 종류를 다 열거하지 않는다
+            if attempt == DOWNLOAD_ATTEMPTS:
+                raise
+            log.warning("가중치 다운로드 실패(%d/%d) — %s: %s — %d초 뒤 재시도",
+                        attempt, DOWNLOAD_ATTEMPTS, type(e).__name__, str(e)[:120], DOWNLOAD_RETRY_SEC)
+            time.sleep(DOWNLOAD_RETRY_SEC)
     if not is_present(size, model_dir):
         raise RuntimeError(f"다운로드 뒤에도 model.safetensors 가 없습니다: {path}")
     log.info("가중치 준비 완료: %s", path)

@@ -16,6 +16,38 @@ from app.config import settings
 log = logging.getLogger("pod")
 
 
+def _wait_for_network(timeout_sec: float = 120.0) -> bool:
+    """컨테이너가 켜진 직후 몇 초는 DNS 가 안 되는 호스트가 있다 — 이름이 풀릴 때까지 기다린다.
+
+    ⚠️ 9/10 RunPod 실측: 시작 0.4~2초 안에 보낸 요청은 전부 "Temporary failure in name
+       resolution", 3초 뒤 요청은 성공. 그 상태에서 바로 점검하면 Supabase·가중치·세그 점검이
+       한꺼번에 실패 → 종료 → RunPod 이 다시 켬 → 또 실패, 17초마다 반복(무한 재시작).
+       기다리는 비용은 정상 호스트에서 0 이다 (첫 시도에 풀리면 바로 통과).
+    """
+    import socket
+    import time
+    from urllib.parse import urlparse
+
+    host = urlparse(settings.supabase_url).hostname or "huggingface.co"
+    deadline = time.monotonic() + timeout_sec
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            socket.getaddrinfo(host, 443)
+        except OSError as e:
+            if time.monotonic() >= deadline:
+                log.error("네트워크 대기 시간 초과(%.0f초) — %s 이름을 못 풀었습니다: %s", timeout_sec, host, e)
+                return False
+            if attempt == 1 or attempt % 5 == 0:
+                log.warning("네트워크 대기 중 — %s 이름 풀기 실패(%s), 2초 뒤 재시도", host, e)
+            time.sleep(2)
+            continue
+        if attempt > 1:
+            log.info("네트워크 준비됨 — %d번째 시도, 약 %d초", attempt, (attempt - 1) * 2)
+        return True
+
+
 def _preflight() -> list[str]:
     """뜨기 전 확인. 문제 목록을 돌려준다 (비어 있으면 통과)."""
     problems: list[str] = []
@@ -56,6 +88,9 @@ def main() -> int:
         stream=sys.stdout,
     )
     log.info("팟 기동 — port=%d queue_max=%d", settings.pod_port, settings.pod_queue_max)
+
+    # 점검보다 먼저 — 안 풀려도 점검은 돌린다(그래야 이유가 로그에 남는다).
+    _wait_for_network()
 
     problems = _preflight()
     if problems:

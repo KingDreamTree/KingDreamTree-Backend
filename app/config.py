@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     #: 이 팟의 식별자. 재시작 정리(fail_orphans)가 자기 잡만 건드리게 한다. 비우면
     #  RUNPOD_POD_ID → 호스트명 순으로 잡는다 (app/pod/pipeline.INSTANCE_ID).
     pod_instance_id: str = ""
+    #: 팟 기동 때 가중치(MODEL_DIR/sapiens2-seg-<size>)가 없으면 HuggingFace 에서 내려받는다.
+    #  볼륨을 새로 만들었을 때 임시 팟으로 들어가 받을 필요가 없게. 1b ≈ 5.5GB, 몇 분.
+    pod_auto_download_weights: bool = True
 
     # ------------------------------------------------------------------ #
     # 포즈 판정 — ⚠️ 전부 튜닝 대상 잠정값

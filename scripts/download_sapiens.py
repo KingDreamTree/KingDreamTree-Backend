@@ -32,27 +32,7 @@ from pathlib import Path
 # app.config 의 settings 로 MODEL_DIR 을 읽기 위해 (셸 export 없이 .env 만 있어도 되게)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-#: 크기별 세그멘테이션 체크포인트 레포
-REPOS = {
-    "0.4b": "facebook/sapiens2-seg-0.4b",
-    "0.8b": "facebook/sapiens2-seg-0.8b",
-    "1b": "facebook/sapiens2-seg-1b",
-    "5b": "facebook/sapiens2-seg-5b",
-}
-
-#: ⚠️ 반드시 좁혀서 받는다.
-#
-#   레포에는 같은 가중치가 **두 이름으로** 들어 있다 (0.4b 기준 각 1551MB):
-#       model.safetensors               ← transformers가 로드하는 이름. 이것만 받는다
-#       sapiens2_0.4b_seg.safetensors   ← 원본 명명. 내용 동일
-#   `*.safetensors` 로 받으면 3.1GB, 즉 두 배를 받게 된다.
-#
-#   실제 파일 구성은 --list 로 먼저 확인할 것.
-ALLOW_PATTERNS = [
-    "model.safetensors",
-    "config.json",
-    "preprocessor_config.json",
-]
+from app.services.sapiens_weights import ALLOW_PATTERNS, REPOS, ensure  # noqa: E402
 
 
 def main() -> None:
@@ -92,29 +72,14 @@ def main() -> None:
             model_dir = settings.model_dir
         except Exception:  # noqa: BLE001 — 의존성 없는 환경이면 기본값으로
             model_dir = "models"
-    target = os.path.join(model_dir, f"sapiens2-seg-{args.size}")
-    os.makedirs(target, exist_ok=True)
-
     print(f"레포     : {repo_id}")
-    print(f"저장 위치: {os.path.abspath(target)}")
+    print(f"저장 위치: {os.path.abspath(os.path.join(model_dir, f'sapiens2-seg-{args.size}'))}")
     print(f"패턴     : {', '.join(ALLOW_PATTERNS)}")
     print()
     print("다운로드를 시작합니다. 백본 크기에 따라 수 GB이며 시간이 걸립니다...")
     print()
-
-    snapshot_download(
-        repo_id=repo_id,
-        local_dir=target,
-        allow_patterns=ALLOW_PATTERNS,
-    )
-
-    print()
-    print(f"완료. {target}")
-    print()
-    print("다음 단계 — 첫 추론에서 반드시 확인할 것:")
-    print("  1. 출력 클래스 개수가 29인지")
-    print("  2. 각 픽셀 값 ↔ 클래스명 매핑 (segmentation.label_map 에 저장할 값)")
-    print("     → python scripts/seed_body_parts.py --check 로 마스터와 대조")
+    ensure(args.size, model_dir)
+    print("완료")
 
 
 if __name__ == "__main__":

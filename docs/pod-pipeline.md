@@ -65,7 +65,7 @@ API 쪽: `PHOTO_PIPELINE=pod`, 같은 `POD_UPLOAD_SECRET`, 그리고 compose 의
 
 - 이미지: `kingdreamtree-pod:<tag>` (레지스트리에 푸시한 것). 로컬 빌드 확인됨(2026-09-09, 12.6GB): sshd·ssh·ttyd·jupyter 없음, torch 2.11.0+cu128·torchvision 0.26.0·transformers 5.15.0, 시크릿 없이 띄우면 기동 점검 4건 실패로 종료
 - **Community Cloud 그대로** (2026-09-09 결정). Secure Cloud 는 GPU 주인이 메모리를 볼 수 있다는 구조적 위험 때문에 고려 대상이었지만, 지금 단계에서는 하지 않는다. 이슈 표에 후순위로 남긴다
-- Network Volume → `/workspace` (가중치). 리전은 볼륨 리전(EU-RO-1)
+- Network Volume → `/workspace` (가중치). 볼륨을 먼저 만들고 **그 리전**의 GPU 를 고른다. 볼륨이 비어 있어도 된다 — 팟이 기동하면서 가중치(1b 5.5GB)를 스스로 내려받는다 (`POD_AUTO_DOWNLOAD_WEIGHTS`, 첫 기동만 몇 분 더). 20GB 면 충분
 - **Expose HTTP Ports: 8080**. SSH/TCP 포트는 열지 않는다. 템플릿의 start command 는 비운다 (이미지 CMD 사용)
 - 환경 변수는 위 목록을 팟 템플릿에 넣는다 (시크릿 포함)
 - 프록시 주소 `https://<pod-id>-8080.proxy.runpod.net` 을 **프론트 빌드 환경변수**에 고정한다. API 응답에 넣지 않는다

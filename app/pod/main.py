@@ -31,6 +31,15 @@ def _preflight() -> list[str]:
         get_client().table("body_part").select("class_name").limit(1).execute()
     except Exception as e:  # noqa: BLE001
         problems.append(f"Supabase 연결 실패: {type(e).__name__}")
+    # 가중치가 볼륨에 없으면(볼륨을 새로 만든 경우) 여기서 내려받는다 — 문 없는 팟은
+    # 들어가서 받을 수 없다. Network Volume 이면 다음 기동부터는 있다. 1b ≈ 5.5GB.
+    if settings.pod_auto_download_weights:
+        try:
+            from app.services import sapiens_weights
+
+            sapiens_weights.ensure(settings.sapiens_size, settings.model_dir)
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"가중치 다운로드 실패: {type(e).__name__}: {str(e)[:120]}")
     try:
         from app.worker.handlers import seg  # torch 로드
 

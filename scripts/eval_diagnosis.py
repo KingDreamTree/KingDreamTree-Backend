@@ -42,10 +42,15 @@ from app.services import diagnosis_repo, segmap, vlm  # noqa: E402
 from app.services.vlm import _norm_ko  # noqa: E402
 from app.worker.handlers.vlm import _inbody_for, _load_side  # noqa: E402
 
-#: 문장 수 상한 — 초과하면 위반. §길이 (프롬프트) 와 같은 표.
-#: 4단계 구성(①전체 →②세부 →③인바디 →④우선순위)을 넣으면서 상한을 올렸다.
-#: MODERATE 가 ①+③+④ 로 3문장이 되는 건 정상이다.
-_MAX_SENTENCES = {"NONE": 1, "SLIGHT": 1, "MODERATE": 2, "SIGNIFICANT": 3}
+#: 문장 수 상한 — 초과하면 위반. §분량 (프롬프트) 와 같은 기준.
+#: ⚠️ 2026-09-10 완화. 종전 상한(NONE/SLIGHT 1 · MODERATE 2 · SIGNIFICANT 3)은
+#:    프롬프트의 «40자/90자» 예산과 한 벌이었는데, 아홉 장을 그 상자에 넣으면
+#:    근거를 넣을 자리가 없어 전부 «더 가늘어 보입니다» 한 줄로 수렴했다.
+#:    예산을 걷어내면서 이 상한도 같이 푼다 — 여기서 잡으려는 것은 «근거를 쓴
+#:    카드»가 아니라 **끝없이 늘어지는 카드**다.
+#: ⚠️ 이 검사의 값어치는 절대 수치가 아니라 «프롬프트 A 와 B 를 같은 잣대로
+#:    잰다»는 데 있다. 상한을 바꿨으면 **바꾼 뒤끼리만** 비교할 것.
+_MAX_SENTENCES = {"NONE": 2, "SLIGHT": 2, "MODERATE": 4, "SIGNIFICANT": 5}
 
 #: 처방으로 보는 신호. 운동 이름이 나오거나 권유형으로 끝나면 처방으로 센다.
 _EXERCISE_WORDS = ("스쿼트", "런지", "플랭크", "팔굽혀펴기", "덤벨", "컬", "운동")

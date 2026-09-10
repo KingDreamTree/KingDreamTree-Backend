@@ -79,17 +79,27 @@ def contract_prompt() -> None:
     check("옷이 덮는 범위 표 (반팔=전완 드러남)", "덮지 못하는 곳" in PART_CMP_SYSTEM)
     check("옷을 비교하지 말라는 명시 규칙", "옷을 비교하지 마세요" in PART_CMP_SYSTEM)
     check("판단 불가 → gap_level null", "gap_level      : null" in PART_CMP_SYSTEM)
-    check("한쪽만 보여도 비교 불가", "한쪽 사진에서만 보여도" in PART_CMP_SYSTEM)
+    check("한쪽만 보여도 비교 불가", "비교는 두 장이 다 있어야 성립" in PART_CMP_SYSTEM)
     check("모순 금지 (못 봤는데 관찰 적기)", "모순" in PART_CMP_SYSTEM)
 
     # 사용자 요구 — 현재 설명이 아니라 «레퍼런스 대비 차이» 중심
     check("판단 순서 명시 (현재→목표→차이)", "① 사용자 사진에서" in PART_CMP_SYSTEM)
     check("차이 중심 (현재만 설명 금지)", "레퍼런스 대비 차이**가 본체" in PART_CMP_SYSTEM)
-    check("옷 위에서도 읽는 것 열거", "외곽선 굴곡" in PART_CMP_SYSTEM)
+    # ⚠️ 종전에는 «무엇을 보고 비교하는가» 열거절을 검사했는데, 그 목록은
+    #    부위별 «볼 것»(_LOOK_AT)과 겹쳐 지웠다 — 부위마다 다른 지점을 주는
+    #    쪽이 «아홉 장이 같은 문장» 을 막는 데 실제로 듣는다 (2026-09-10).
+    check("옷 위에서도 읽는 것 명시", "폭·비율·외곽선" in PART_CMP_SYSTEM)
+    check("부위마다 다른 관찰 지점을 준다", "그 부위에서만 할 수 있는 말" in PART_CMP_SYSTEM)
     check("좌우 차이는 실제일 때만", "없는 차이를 지어내지 마세요" in PART_CMP_SYSTEM)
 
     # 부위 카드에 처방을 넣지 않는다는 기존 불변 (코드로도 막지만 프롬프트에도 있어야)
-    check("부위 카드에 운동 처방 금지", "운동 처방이 아닙니다" in PART_CMP_SYSTEM)
+    # ⚠️ 처방 금지는 **프롬프트에서 코드로 옮겼다** (2026-09-10). 산문으로
+    #    두 곳에서 금지해도 계속 나왔기 때문이다 — vlm._strip_prescription /
+    #    _strip_exercise_names 가 해당 문장을 통째로 걷어낸다. 그래서 검사도
+    #    프롬프트 문구가 아니라 그 코드가 살아 있는지를 본다.
+    from app.services.vlm import _strip_exercise_names, _strip_prescription
+    check("처방 문장 제거기 동작", _strip_prescription("A 입니다. 스쿼트를 하세요") == "A 입니다.")
+    check("종목 이름 제거기 동작", _strip_exercise_names("A 입니다. 덤벨 컬이 좋아요") == "A 입니다.")
 
     parts = [p for p in list_body_parts() if p.get("is_comparable")]
     prompt = build_part_comparison_prompt(parts=parts, inbody=None)

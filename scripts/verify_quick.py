@@ -94,7 +94,27 @@ def contract_prompt() -> None:
     #    카드가 다시 «부위 이름만 바뀐 판정 한 줄» 로 돌아간다.
     check("판정 대신 형태 묘사", "판정하지 말고 보이는 것을 그리세요" in PART_CMP_SYSTEM)
     check("인바디 수치를 카드에 복사 금지", "인바디 수치를 카드에 옮겨 적지 마세요" in PART_CMP_SYSTEM)
-    check("어투 — 안내조 종결", "옆에서 같이" in PART_CMP_SYSTEM)
+    check("어투 — 진단체", "단정을 피한 전문가 어투" in PART_CMP_SYSTEM)
+
+    # ⚠️ **두 부위 경로가 같은 규칙을 갖는지** (2026-09-10). 카드는 갤러리(세그)로
+    #    만들었든 웹캠(퀵)으로 만들었든 **같은 화면에 섞여** 나간다. 한쪽만 고치면
+    #    사용자에게 두 목소리가 보인다 — 분량 규칙이 한쪽에만 있어 진단문이
+    #    32자 vs 66자로 벌어진 전례가 있다 (RE_FIT #11).
+    from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SEG_SYSTEM
+
+    for rule in (
+        "판정하지 말고 보이는 것을 그리세요",
+        "굵기 형용사만으로 내리는 판정",
+        "gap_level 이 이미 담고 있습니다",
+        "단정을 피한 전문가 어투",
+        "입체감, 윤곽, 라인, 실루엣, 두께, 경계",
+        "«부족합니다» 로 문장을 끝내지 마세요",
+        "판정은 같게, 문장은 그 카드의 부위로",
+    ):
+        check(
+            f"두 경로 동일 규칙: {rule[:24]}",
+            rule in PART_CMP_SYSTEM and rule in PART_SEG_SYSTEM,
+        )
     check("좌우 차이는 실제일 때만", "없는 차이를 지어내지 마세요" in PART_CMP_SYSTEM)
 
     # 부위 카드에 처방을 넣지 않는다는 기존 불변 (코드로도 막지만 프롬프트에도 있어야)

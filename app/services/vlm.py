@@ -41,6 +41,13 @@ VLM_MODEL = "gpt-4o"
 
 #: 부위 수만큼 항목이 나와야 하므로 넉넉히. 9부위 × 항목당 ~150토큰 + 여유.
 PART_MAX_TOKENS = 4096
+
+#: 진단문을 «쓰는» 호출의 temperature. 판정 호출(스크리닝)은 0 을 그대로 쓴다.
+#: ⚠️ 0 을 쓰면 한 응답 안의 부위 9개가 같은 문형으로 수렴한다 (_call_json 주석).
+#:    0 → 0.7 은 «다른 결과» 가 아니라 «같은 관찰을 다른 말로» 쓰게 하는 폭이다.
+#:    등급(gap_level)이 흔들리는 폭은 0 에서도 이미 있었다 — 그건 이 값이 만든 게
+#:    아니므로, 재현성이 필요하면 온도가 아니라 결과 캐싱으로 잡는다 (#165).
+DIAGNOSIS_TEMPERATURE = 0.7
 #: ⚠️ 2026-08-17 상향 — 프로필 A·B·방향·전략·다음사이클이 추가돼 1024 로는 잘린다.
 #:    잘리면 JSON 이 깨져 종합 진단이 통째로 실패한다 (부분 저장이 없다).
 OVERALL_MAX_TOKENS = 2048
@@ -149,8 +156,22 @@ async def _call_json(
     system: str,
     content: list[dict[str, Any]],
     max_tokens: int,
+    temperature: float = 0,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """JSON mode 로 호출하고 (파싱된 결과, raw 응답)을 반환한다."""
+    """JSON mode 로 호출하고 (파싱된 결과, raw 응답)을 반환한다.
+
+    ⚠️ temperature 기본값은 **0 이다 — 판정에는 그게 맞다.** 사진 스크리닝처럼
+       통과/반려가 갈리는 호출은 실행마다 뒤집히면 안 된다.
+
+    ⚠️ 그러나 **진단문 생성에는 0 이 해롭다.** 근거는 두 가지다:
+         · 0 이 결정성을 사주지 못한다 — 같은 사진 두 번에 상완 SLIGHT↔MODERATE,
+           점수 69↔62 가 흔들렸다 (2026-09-09 실측, scripts/compare_diagnosis.py
+           모듈 주석). 즉 0 은 «같은 결과» 를 못 주면서 «같은 문장» 만 준다.
+         · 부위 9개를 한 번의 응답에서 쓰는데, greedy 디코딩은 첫 카드의 문형을
+           최고확률 경로로 만들어 나머지 8개가 그 틀을 따라간다. 프롬프트로
+           «부위마다 다른 문장을 쓰라»고 아무리 적어도 디코딩을 이기지 못한다.
+       그래서 DIAGNOSIS_TEMPERATURE 를 따로 둔다 (아래).
+    """
     if settings.vlm_provider and settings.vlm_provider.lower() != "openai":
         raise VlmResponseError(
             f"VLM_PROVIDER='{settings.vlm_provider}' 는 진단 파이프라인에서 지원하지 않습니다. "
@@ -166,7 +187,7 @@ async def _call_json(
     response = await client.chat.completions.create(
         model=VLM_MODEL,
         response_format={"type": "json_object"},
-        temperature=0,  # 같은 사진에 같은 진단이 나와야 한다
+        temperature=temperature,
         max_tokens=max_tokens,
         messages=[
             {"role": "system", "content": system},
@@ -711,7 +732,7 @@ async def diagnose_parts(
         {"type": "text", "text": text},
     ]
 
-    parsed, raw = await _call_json(PART_SYSTEM, content, PART_MAX_TOKENS)
+    parsed, raw = await _call_json(PART_SYSTEM, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     return out
@@ -754,7 +775,9 @@ async def compare_parts_direct(
         {"type": "text", "text": text},
     ]
 
-    parsed, raw = await _call_json(PART_COMPARISON_SYSTEM, content, PART_MAX_TOKENS)
+    parsed, raw = await _call_json(
+        PART_COMPARISON_SYSTEM, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE
+    )
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     return out

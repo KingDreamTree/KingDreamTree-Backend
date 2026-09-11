@@ -23,20 +23,19 @@ import logging
 from typing import Any
 
 from app.config import settings
-from app.schemas.enums import ExerciseKind
-from app.prompts.routine_gen import SYSTEM_PROMPT as SELECTION_SYSTEM
 from app.prompts.routine_gen import build_selection_prompt
-from app.prompts.routine_patch import SYSTEM_PROMPT, TOOLS
-from app.services import exercise_catalog, routine_mode
+from app.prompts.routine_patch import TOOLS
+from app.schemas.enums import ExerciseKind
+from app.services import exercise_catalog, prompt_store, routine_mode
 from app.services.routine_templates import (
     CUT_NOTICE,
     CUT_NOTICE_TITLE,
-    join_notices,
     SEVEN_DAY_NOTICE,
     SEVEN_DAY_NOTICE_TITLE,
     DayPlan,
     apply_weakness_boost,
     get_template,
+    join_notices,
     weekly_sets_by_group,
 )
 
@@ -269,7 +268,7 @@ async def _llm_selections(
 
     try:
         parsed, raw = await call_json(
-            SELECTION_SYSTEM,
+            prompt_store.get("routine.select")[0],
             [{"type": "text", "text": build_selection_prompt(days, candidates, priority_parts)}],
             max_tokens=1500,
         )
@@ -574,7 +573,7 @@ async def patch_routine(
     response = await client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt_store.get("routine.patch")[0]},
             {"role": "user", "content": user_message},
         ],
         tools=TOOLS,

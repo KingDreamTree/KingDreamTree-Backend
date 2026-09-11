@@ -38,9 +38,9 @@ import logging
 from typing import Any
 
 from app.config import settings
+from app.prompts.coach_chat import TOOLS, build_context
 from app.schemas.enums import ExerciseKind
-from app.prompts.coach_chat import SYSTEM_PROMPT, TOOLS, build_context
-from app.services import exercise_catalog
+from app.services import exercise_catalog, prompt_store
 from app.services.routine_templates import slot_sets_cap
 
 log = logging.getLogger("services.coach_chat")
@@ -700,7 +700,7 @@ async def chat_turn(
 
     context = build_context(day, contraindications, candidates, turn, MAX_TURNS)
     llm_messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": prompt_store.get("coach.system")[0]},
         {"role": "system", "content": context},
         *messages,
     ]

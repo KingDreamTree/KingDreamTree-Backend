@@ -16,29 +16,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-SYSTEM_PROMPT = """당신은 초보자 담당 퍼스널 트레이너입니다.
-운동 계획의 뼈대(분할·세트·횟수)는 이미 확정되어 있습니다.
-당신의 일은 **각 슬롯에 후보 목록 중 하나의 운동을 고르는 것**뿐입니다.
-
-# 규칙
-
-1. 슬롯마다 그 슬롯의 candidates 안에서 **exercise_ref 하나**를 고릅니다.
-   목록에 없는 운동은 절대 쓰지 마세요 — 검증에서 버려지고 1순위 후보로 대체됩니다.
-2. **같은 운동을 한 주에 두 번 넘게 쓰지 마세요.** 같은 Day 안에서는 중복 금지.
-3. 읽는 사람은 운동 초보자입니다. 비슷한 후보라면 더 단순하고 배우기 쉬운
-   동작을 고르세요 (머신·덤벨 > 복잡한 프리웨이트 변형).
-4. `focus` 로 표시된 약점 부위 슬롯은 그 부위에 가장 직접적인 운동을 고르세요.
-5. `single_side: true` 슬롯은 한쪽씩 하는 운동(싱글/원암/런지류)이 후보에
-   있으면 우선하세요. 양측 운동에서는 강한 쪽이 약한 쪽을 끌고 가버려서
-   좌우 차이가 좁혀지지 않습니다. **좌우 세트 수는 같습니다** — 수행 순서
-   안내는 코드가 붙이므로 당신은 운동 선택만 하면 됩니다.
-
-# 출력
-
-JSON 하나만:
-{"selections": {"<slot_id>": "<exercise_ref>", ...}}
-
-모든 slot_id 를 빠짐없이 포함하세요."""
+# ⚠️ 프롬프트 본문은 DB(prompt_version)에 있다 (2026-09-11, #164) — 'routine.select'.
+#    보기: python scripts/prompt_version.py show routine.select
+#    고치기: python scripts/prompt_version.py new routine.select <파일> --note "…" (배포 없음)
 
 
 def build_selection_prompt(

@@ -122,11 +122,15 @@ def contract_prompt() -> None:
     # ⚠️ 처방 금지는 **프롬프트에서 코드로 옮겼다** (2026-09-10). 산문으로 두 곳에서
     #    금지해도 계속 나왔기 때문이다 — vlm._strip_prescription / _strip_exercise_names 가
     #    해당 문장을 통째로 걷어낸다. 그래서 검사도 그 코드가 살아 있는지를 본다.
-    from app.services.vlm import _strip_exercise_names, _strip_prescription
+    from app.services.vlm import _strip_exercise_names, _strip_prescription, _strip_third_person
 
     check("처방 문장 제거기 동작", _strip_prescription("A 입니다. 스쿼트를 하세요") == "A 입니다.")
     check(
         "종목 이름 제거기 동작", _strip_exercise_names("A 입니다. 덤벨 컬이 좋아요") == "A 입니다."
+    )
+    check(
+        "3인칭 제거기 동작",
+        _strip_third_person("사용자의 왼쪽 상완은 두껍습니다.") == "왼쪽 상완은 두껍습니다.",
     )
 
     parts = [p for p in list_body_parts() if p.get("is_comparable")]

@@ -407,6 +407,19 @@ def _strip_prescription(assessment: str | None) -> str | None:
     return out if out.endswith(".") else out + "."
 
 
+#: 3인칭 주어 — «사용자의 왼쪽 상완은 …». 카드를 읽는 사람이 본인이다.
+#: ⚠️ 프롬프트가 금지하는데도 거의 모든 카드에 붙었다 (재측정 2026-09-12, 규칙 압축 후).
+#:    이 저장소의 규칙대로 — 모델이 반복해서 어기는 규칙은 산문이 아니라 코드로 막는다.
+_THIRD_PERSON = re.compile(r"(사용자|이 사람)(의|는|은|가|이)\s+")
+
+
+def _strip_third_person(text: str | None) -> str | None:
+    """«사용자의 왼쪽 상완은 …» → «왼쪽 상완은 …». 지우고 나서 비면 원문을 둔다."""
+    if not text:
+        return text
+    return _THIRD_PERSON.sub("", text).strip() or text
+
+
 def _differences_from_seen(seen: Any, assessment: str | None) -> list[str]:
     """seen(현재/목표 관찰)으로 differences 를 만든다 — 퀵 경로 카드 보강용.
 
@@ -461,8 +474,11 @@ def _coerce_part(
     if stripped != assessment:
         log.warning("%s: 진단문에 권유 문장이 있어 제거", class_name)
         assessment = stripped
+    assessment = _strip_third_person(assessment)
 
-    differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
+    differences = _drop_restatements(
+        [_strip_third_person(d) for d in _as_str_list(item.get("differences"))], assessment
+    )
     # ⚠️ 재진술 필터에 differences 가 전부 걸리면 카드에 관찰이 하나도 안 남는다
     #    (실측 2026-08-20, 퀵 경로 9/9). 모델이 assessment 와 differences 에
     #    **같은 관찰 하나**를 두 번 쓰기 때문인데, 정작 seen 에는 부위마다 서로

@@ -26,33 +26,21 @@
 
 diff_pct 등은 내부 로깅·대표부위 선정용으로만 남는다. 프롬프트에는 안 나간다.
 
-━━ 부위 카드 규칙은 여기 없다 (2026-09-11) ━━
+━━ 시스템 프롬프트는 여기 없다 (2026-09-11, #164) ━━
 
-규칙은 part_rules.py 한 벌을 라이브 경로(part_comparison.py)와 같이 쓴다. 이 파일은
-«이 경로의 입력이 무엇인가» 만 만든다 — 원본+오버레이 4장(_INTRO), 색 범례와 옷·잘림·
-좌우 쌍 표시(_legend_block), 세그 신뢰도 신호(_metrics_block), 좌우 대칭(_symmetry_block),
-인바디 인용 지정(_citation_targets · _inbody_block).
+본문은 DB(prompt_version)에 있다 — 입력 설명 'part.intro.photo' + 라이브 경로와 같이 쓰는
+'part.rules' · 'part.output' (app/services/prompt_store.py, vlm.PART_PHOTO_PROMPT).
+이 파일은 사용자 메시지만 조립한다 — 색 범례와 옷·잘림·좌우 쌍 표시(_legend_block), 세그
+신뢰도 신호(_metrics_block), 좌우 대칭(_symmetry_block), 인바디 인용 지정(_citation_targets ·
+_inbody_block).
 """
 
 from typing import Any
 
-from app.prompts.part_rules import PART_OUTPUT, PART_RULES, assign_frames, look_at
+from app.prompts.part_rules import assign_frames, look_at
 
-_INTRO = """당신은 두 체형 사진을 부위별로 비교하는 전문가입니다.
-
-이미지 4장이 순서대로 주어집니다.
-
-  1. 레퍼런스(목표 체형) 원본
-  2. 레퍼런스 부위 오버레이 — 비교 대상 부위를 색으로 칠한 것
-  3. 사용자(현재 체형) 원본
-  4. 사용자 부위 오버레이 — 같은 색 규칙
-
-색과 부위의 대응은 부위 범례에 있습니다. 범례에 없는 색과 어둡게 처리된 영역은 비교 대상이
-아닙니다. 범례의 각 부위 줄에 붙은 옷 비율·잘림·좌우 쌍 표시는 그 부위를 판단할 때 따르세요 —
-옷을 이유로 못 봤다고 할 수 있는지는 그 줄이 정합니다."""
-
-#: ⚠️ 부위 카드 규칙은 여기 없다 — part_rules 한 벌을 라이브 경로와 같이 쓴다 (그 모듈 주석).
-SYSTEM_PROMPT = "\n\n".join((_INTRO, PART_RULES, PART_OUTPUT))
+# ⚠️ 시스템 프롬프트 본문은 DB(prompt_version)에 있다 — 'part.intro.photo' + 'part.rules' +
+#    'part.output' (app/services/prompt_store.py, vlm.PART_PHOTO_PROMPT). 여기는 사용자 메시지만.
 
 
 #: 인바디 세그먼트의 한글 이름. **"전체"를 명시하는 게 핵심이다** —

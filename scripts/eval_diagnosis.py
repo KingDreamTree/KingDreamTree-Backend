@@ -15,6 +15,11 @@
 ⚠️ **DB 에 쓰지 않는다.** 진단 결과를 저장하지 않고 세지기만 한다.
    세션의 기존 진단은 그대로 남는다.
 
+━━ 두 프롬프트 버전 비교 ━━
+
+지금 활성 버전으로 한 번 돌리고, 새 버전을 적용한 뒤(scripts/prompt_version.py new → SQL 적용,
+60초 대기) 같은 세션으로 한 번 더 돌려 **중앙값**을 견준다. 요약 끝에 측정한 버전이 찍힌다.
+
 ━━ 위반 검사의 한계 ━━
 
 ⚠️ 처방 문장 탐지는 **휴리스틱**이다 (운동 이름 + 권유형 어미). 한국어 종결형을
@@ -80,6 +85,16 @@ _BANNED = (
 #: 두 부위 문장이 같다고 볼 유사도.
 _DUP_RATIO = 0.75
 
+#: 첫 문장의 «틀» 이 같다고 볼 유사도 — 좌우·부위 이름·숫자를 지운 뒤 잰다 (_frame).
+#: ⚠️ «중복문장» 만으로는 부위 이름만 바꿔 끼운 카드를 못 잡는다. 사람이 «다 똑같다» 고 한 카드
+#:    (2026-08-15, scripts/verify_restatement_filter.py 에 보관)가 그 잣대로는 0.34~0.55 라 한 건도
+#:    안 걸렸다 — 인바디 수치가 문장을 갈라 비율을 끌어내리고, 부위 이름이 다른 글자로 섞인다.
+#: ponytail: 그 카드끼리 0.61~0.67, 실제 관찰 문장끼리 ≤0.32 사이에 둔 선. 표본이 늘면 다시 잰다.
+_FRAME_RATIO = 0.5
+_FRAME_STRIP = re.compile(
+    r"(왼쪽|오른쪽|왼팔|오른팔|좌측|우측|양쪽|몸통|상완|전완|허벅지|종아리|[0-9%])"
+)
+
 
 def _strip_side(text: str) -> str:
     """좌우를 가리키는 말을 지운다. 내용만 비교하기 위해."""
@@ -98,6 +113,12 @@ def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?])\s+", text or "") if s.strip()]
 
 
+def _frame(text: str) -> str:
+    """첫 문장의 틀 — 좌우·부위 이름·숫자를 지운 것. 틀이 같으면 빈칸만 바꾼 문장이다."""
+    first = (_sentences(text) or [""])[0]
+    return _norm_ko(_FRAME_STRIP.sub("", first))
+
+
 def _has_advice(text: str) -> bool:
     for s in _sentences(text):
         if _ADVICE_TAIL.search(s.strip()) and any(w in s for w in _EXERCISE_WORDS):
@@ -108,7 +129,8 @@ def _has_advice(text: str) -> bool:
 def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     """규칙 위반을 모은다. {검사 이름: [위반 설명...]}"""
     out: dict[str, list[str]] = {
-        k: [] for k in ("길이", "처방", "인바디인용", "중복문장", "좌우불일치", "금지표현")
+        k: []
+        for k in ("길이", "처방", "인바디인용", "중복문장", "문형반복", "좌우불일치", "금지표현")
     }
 
     for p in parts:
@@ -149,6 +171,18 @@ def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
                 continue
             if SequenceMatcher(None, _norm_ko(ta), _norm_ko(tb)).ratio() >= _DUP_RATIO:
                 out["중복문장"].append(f"{a['class_name']} ≈ {b['class_name']}")
+
+    # ⚠️ **첫 문장의 틀** 이 같은가 — 부위 이름만 바꿔 끼운 문장 (_FRAME_RATIO 주석).
+    #    좌우 쌍은 뺀다 (내용이 비슷한 게 정상). 판단 불가 카드도 뺀다 — 못 본 이유가 같으면
+    #    문장이 비슷한 게 자연스럽고, 문제는 등급을 매긴 카드들이 같은 말을 하는 것이다.
+    judged = [p for p in parts if p.get("gap_level") and p.get("assessment")]
+    for i, a in enumerate(judged):
+        for b in judged[i + 1 :]:
+            if _is_pair(a["class_name"], b["class_name"]):
+                continue
+            fa, fb = _frame(a["assessment"]), _frame(b["assessment"])
+            if SequenceMatcher(None, fa, fb).ratio() >= _FRAME_RATIO:
+                out["문형반복"].append(f"{a['class_name']} ≈ {b['class_name']}")
 
     # 좌우 쌍인데 **문장이 갈라진** 경우 — 이제는 이쪽이 위반이다.
     for a in parts:
@@ -205,6 +239,7 @@ def main() -> int:
     print(f"부위 {len(names)}개 · 인바디 {inbody_source} · {args.runs}회 반복\n")
 
     totals: dict[str, list[int]] = {}
+    versions: set[str] = set()  # 반복 도중 프롬프트가 바뀌면 결과가 두 버전을 섞는다
     for run in range(1, args.runs + 1):
         result = asyncio.run(
             vlm.diagnose_parts(
@@ -219,6 +254,7 @@ def main() -> int:
                 inbody=inbody,
             )
         )
+        versions.add(result.get("prompt_version") or "(버전 없음 — mock)")
         found = audit(result["results"])
         counts = {k: len(v) for k, v in found.items()}
         for k, c in counts.items():
@@ -248,6 +284,10 @@ def main() -> int:
     per_run = [sum(totals[k][i] for k in totals) for i in range(args.runs)]
     print("-" * 66)
     print(f"{'합계':<12}{statistics.median(per_run):>8.1f}{min(per_run):>6}{max(per_run):>6}")
+    print()
+    print(f"측정한 프롬프트 버전: {', '.join(sorted(versions))}")
+    if len(versions) > 1:
+        print("⚠️ 반복 도중 프롬프트 버전이 바뀌었습니다 — 두 버전이 섞인 결과입니다. 다시 재세요.")
     print()
     print("⚠️ 중앙값끼리 비교하세요. 최소~최대 폭 안의 차이는 프롬프트 효과가 아니라")
     print("   그냥 흔들림입니다 — 그 폭보다 크게 줄어야 개선입니다.")

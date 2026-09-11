@@ -334,6 +334,8 @@ CREATE TABLE part_diagnosis (
     priority              SMALLINT     CHECK (priority BETWEEN 1 AND 5),
     confidence            VARCHAR(10)
                           CHECK (confidence IN ('LOW', 'MEDIUM', 'HIGH')),
+    --: 어느 프롬프트 버전으로 만든 결과인가 (prompt_store.compose 태그). mock·옛 행은 NULL
+    prompt_version        VARCHAR(200),
     raw_response          JSONB,
     status                VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                           CHECK (status IN ('PENDING', 'DONE', 'FAILED')),
@@ -371,6 +373,8 @@ CREATE TABLE overall_diagnosis (
     silhouette            TEXT,
     --: 종합 판단의 확신도. ⚠️ similarity_score 와 무관하다 — 점수는 규칙이 계산한다.
     confidence            NUMERIC(3, 2) CHECK (confidence IS NULL OR confidence BETWEEN 0 AND 1),
+    --: 어느 프롬프트 버전으로 만든 결과인가 (prompt_store.compose 태그). mock·옛 행은 NULL
+    prompt_version        VARCHAR(200),
     raw_response          JSONB,
     status                VARCHAR(20)  NOT NULL DEFAULT 'PENDING'
                           CHECK (status IN ('PENDING', 'DONE', 'FAILED')),
@@ -687,3 +691,25 @@ AS $$
     WHERE s.session_id = p_session_id
     RETURNING s.contraindications;
 $$;
+
+
+-- ── prompt_version — 진단 시스템 프롬프트의 버전 (#164, 2026-09-11) ─────────────
+-- ⚠️ 본문(시드)은 여기 없다. 새 DB 는 이 파일 다음에 db/migrations/*_prompt_*.sql 을 날짜순으로
+--    적용해야 한다 — 활성 버전이 없으면 부위·종합 진단 잡이 전부 실패한다.
+CREATE TABLE prompt_version (
+    prompt_version_id  UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    name               VARCHAR(60)   NOT NULL,
+    version            INTEGER       NOT NULL CHECK (version >= 1),
+    content            TEXT          NOT NULL,
+    note               TEXT,
+    is_active          BOOLEAN       NOT NULL DEFAULT false,
+    created_at         TIMESTAMPTZ   NOT NULL DEFAULT now(),
+
+    CONSTRAINT prompt_version_uniq UNIQUE (name, version)
+);
+
+CREATE UNIQUE INDEX prompt_version_one_active_idx ON prompt_version (name) WHERE is_active;
+
+-- ⚠️ 다른 테이블과 같이 RLS 를 켠다 (schema.sql 의 RLS 블록 참고). 서버는 service_role 키라 우회하고,
+--    정책이 없으니 공개(anon) 키로는 읽지도 쓰지도 못한다 — 프롬프트를 바꿀 수 있는 곳이 생기면 안 된다.
+ALTER TABLE prompt_version ENABLE ROW LEVEL SECURITY;

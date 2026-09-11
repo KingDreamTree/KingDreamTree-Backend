@@ -483,7 +483,10 @@ def test_baseline_separation() -> None:
     """
     print("\n8. 기준선 분리 (평균 대비 vs 목표 격차)")
 
-    from app.prompts.part_diagnosis import SYSTEM_PROMPT as part_system
+    # ⚠️ 프롬프트는 DB(prompt_version)의 활성 버전을 잰다 (#164)
+    from app.services import prompt_store, vlm
+
+    part_system, _ = prompt_store.compose(*vlm.PART_PHOTO_PROMPT)
     from app.prompts.part_diagnosis import _inbody_lr
 
     check("'실측이 사진을 이깁니다' 제거됨", "이깁니다" not in part_system)
@@ -576,7 +579,9 @@ def test_baseline_separation() -> None:
     )
     check("우선순위 상위 3개만 (규칙)", len(picked) == 3, str(picked))
 
-    from app.prompts.overall_diagnosis import SYSTEM_PROMPT as overall_system
+    from app.services import prompt_store, vlm
+
+    overall_system, _ = prompt_store.compose(*vlm.OVERALL_PROMPT)
 
     check("F09 는 우선순위를 정하지 않는다", "우선순위는 당신이 정하지 않습니다" in overall_system)
     # ⚠️ 요약이 "팔부터 하고 몸통은 그다음" 같은 **순서**를 말하면 실제 루틴과
@@ -633,8 +638,9 @@ def test_baseline_separation() -> None:
     # ⚠️ 2026-09-11 전면 개편 — ①②③ 상황별 틀과 판단 불가 고정 문장(«충분히 보이지
     #    않아서 … 비교하기는 어렵습니다»)을 **폐기했다.** 틀은 모델이 빈칸만 바꿔 복사했고,
     #    고정 문장은 가려진 카드를 전부 같은 문장으로 만들었다. 이제는 그것들이 **없는지**
-    #    본다. 부위 카드 규칙은 part_rules 한 벌이라 그 블록이 통째로 들어갔는지를 본다.
-    from app.prompts.part_rules import PART_OUTPUT, PART_RULES
+    #    본다. 부위 카드 규칙은 DB 의 'part.rules' 한 벌이라 그 조각이 통째로 들어갔는지를 본다.
+    PART_RULES, _ = prompt_store.get("part.rules")
+    PART_OUTPUT, _ = prompt_store.get("part.output")
 
     check("부위 카드 공통 규칙이 통째로 들어감", PART_RULES in part_system)
     check("공통 출력 형식이 통째로 들어감", PART_OUTPUT in part_system)

@@ -2,8 +2,9 @@
 
 ━━ 이 파일이 하는 일 ━━
 
-부위 카드의 **규칙은 여기 없다** — part_rules.py 한 벌을 사진 경로(part_diagnosis.py)와
-같이 쓴다. 이 파일은 «이 경로의 입력이 무엇인가» 만 말한다:
+**사용자 메시지만 조립한다.** 시스템 프롬프트 본문은 DB(prompt_version)에 있다 — 입력 설명
+'part.intro.live' + 사진 경로와 같이 쓰는 'part.rules' · 'part.output'
+(app/services/prompt_store.py, vlm.PART_LIVE_PROMPT). 이 경로의 입력은:
 
     · 이미지 2장 (레퍼런스 → 사용자). 부위를 칠한 그림은 없다
     · 부위는 색 대신 **해부학적 위치를 글로** 지목한다 (_LOCATION)
@@ -15,13 +16,13 @@
 
 ⚠️ 이미지 순서는 vlm.compare_parts_direct 가 넣는 순서와 같아야 한다 (레퍼런스 → 사용자).
    어긋나면 비교가 정반대로 나온다.
-⚠️ 출력 형식은 사진 경로와 같다 (part_rules.PART_OUTPUT) — vlm.parse_part_response 를 같이 쓴다.
+⚠️ 출력 형식은 사진 경로와 같다 (DB 'part.output') — vlm.parse_part_response 를 같이 쓴다.
 """
 
 from typing import Any
 
 from app.prompts.overall_diagnosis import _inbody_block
-from app.prompts.part_rules import PART_OUTPUT, PART_RULES, assign_frames, look_at
+from app.prompts.part_rules import assign_frames, look_at
 
 #: 색 오버레이를 대신해 **글로** 부위를 지목한다.
 #  ⚠️ 좌우는 «인물 자신 기준» 이다 — 세그멘테이션(Sapiens)이 붙이는 라벨과 같은 규약이어야
@@ -37,18 +38,6 @@ _LOCATION: dict[str, str] = {
     "Left_Lower_Leg": "인물 자신의 왼쪽 무릎~발목",
     "Right_Lower_Leg": "인물 자신의 오른쪽 무릎~발목",
 }
-
-_INTRO = """당신은 두 체형 사진을 부위별로 비교하는 전문가입니다.
-
-사진 두 장이 순서대로 주어집니다.
-
-  1번째 이미지 = 레퍼런스 (목표 체형)
-  2번째 이미지 = 사용자 (현재 체형)
-
-부위를 색으로 칠한 그림은 없습니다. 부위 목록의 위치 설명을 보고 두 사진에서 같은 자리를
-직접 찾으세요. 옷 흡수 비율 같은 수치도 없으니 옷이 어디를 덮는지는 직접 보고 판단합니다."""
-
-SYSTEM_PROMPT = "\n\n".join((_INTRO, PART_RULES, PART_OUTPUT))
 
 
 def build_part_comparison_prompt(

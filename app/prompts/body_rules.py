@@ -25,7 +25,9 @@ quick_diagnosis 로 **복사**됐다 (그 파일 모듈 주석이 "그대로 옮
 
 옮기는 것 자체는 해야 할 일이지만, 문구 차이를 하나씩 확인하며 별도로
 진행해야 한다 (verify_analysis.py 가 문자열로 검사하고 있어 회귀는 잡힌다).
-이 파일을 만든 지금 시점의 소비자는 part_comparison.py 다.
+지금 소비자는 part_rules.py (부위 카드 공통 규칙) 이고, NO_MEASUREMENT 만 가져다 쓴다.
+USER_FACING_TONE 의 안내조(«~하면 좋아요»)는 부위 카드의 진단체와 부딪혀 뺐다
+(2026-09-11). COMMON_RULES 묶음은 overall_diagnosis 를 옮겨올 때 쓸 자리다.
 """
 
 #: 사진으로 «측정»할 수 없는 것들. 근육량·골격·치수 추정을 막는다.

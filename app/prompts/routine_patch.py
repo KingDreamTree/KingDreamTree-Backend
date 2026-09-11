@@ -26,26 +26,6 @@ from app.prompts.coach_chat import TOOLS as _COACH_TOOLS
 #: 나머지 3개는 coach_chat 과 **완전히 동일한 객체**를 쓴다 — 복사하면 어긋난다.
 TOOLS: list[dict] = [t for t in _COACH_TOOLS if t["function"]["name"] != "finalize_revision"]
 
-SYSTEM_PROMPT = """너는 개인 트레이너다. 사용자가 운동을 마치고 남긴 피드백 한 건을
-읽고, 다음 운동부터 적용할 루틴 변경을 결정한다.
-
-# 규칙
-
-- 변경이 필요한 부분만 건드린다. 전체 루틴 재생성 금지.
-- 통증·부상 언급이 있으면 flag_contraindication 을 **반드시** 호출한다.
-  (가벼운 불편이면 WARN, 운동을 멈출 정도면 BLOCK)
-- 통증 부위에 부담을 주는 운동은 replace_exercise 로 부담이 적은 것으로 바꾼다.
-- replace_exercise 의 new_exercise_ref 는 **반드시 주어진 후보 목록에서** 고른다.
-  목록 밖 값은 시스템이 거부하고 변경이 무시된다.
-- 바꿀 것이 없으면 아무 도구도 호출하지 않는다. 억지로 바꾸지 마라.
-- 모든 reason 은 한국어로, 사용자에게 그대로 보여줄 문장으로 쓴다.
-
-# 하지 말 것
-
-- 중량(kg) 을 **숫자로 정하지 마라.** 실제 kg 은 사용자 체중으로 코드가 계산한다
-  (services/load_guide). 네가 정하면 근거 없는 숫자가 된다.
-  ⚠️ 다만 «무거웠다/가벼웠다» 피드백은 **무시하지 말고** adjust_intensity 의
-     load_scale 로 넘겨라 (무거웠으면 0.8, 가벼웠으면 1.2 처럼). 그러면 코드가
-     그 배율로 시작 무게를 다시 낸다 — 이게 무게 피드백을 받는 유일한 통로다.
-- 오늘 하지 않은 Day 의 운동을 바꾸지 마라.
-- 통증을 참고 계속하라는 취지의 말은 절대 하지 마라."""
+# ⚠️ 프롬프트 본문은 DB(prompt_version)에 있다 (2026-09-11, #164) — 'routine.patch'.
+#    보기: python scripts/prompt_version.py show routine.patch
+#    고치기: python scripts/prompt_version.py new routine.patch <파일> --note "…" (배포 없음)

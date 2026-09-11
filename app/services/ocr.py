@@ -19,7 +19,7 @@ from typing import Any
 from PIL import Image
 
 from app.config import settings
-from app.prompts.inbody_ocr import SEGMENT_USER_PROMPT, SYSTEM_PROMPT, USER_PROMPT
+from app.services import prompt_store
 
 # ⚠️ openai 는 모듈 최상단에서 import 하지 않는다.
 #    routes/inbody → services/ocr 경로라, 여기서 최상단 import 를 하면
@@ -136,7 +136,8 @@ async def extract_inbody(
 
     client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
 
-    raw = await _extract(client, [_image_block(p, mime_type) for p in pages], USER_PROMPT)
+    user_prompt, _ = prompt_store.get("inbody_ocr.user")
+    raw = await _extract(client, [_image_block(p, mime_type) for p in pages], user_prompt)
 
     # 2차가 실패하면 1차의 segments 를 그대로 둔다 — 전신 수치까지 잃을 이유가
     # 없고, 섞어 읽은 값은 _check_percentage_columns 가 WARN 으로 표시한다.
@@ -144,7 +145,8 @@ async def extract_inbody(
         tile_blocks = [
             _image_block(t, "image/jpeg") for p in pages for t in _segment_tiles(p)
         ]
-        focused = await _extract(client, tile_blocks, SEGMENT_USER_PROMPT)
+        segment_prompt, _ = prompt_store.get("inbody_ocr.segment_user")
+        focused = await _extract(client, tile_blocks, segment_prompt)
         if isinstance(focused.get("segments"), dict):
             raw["segments"] = focused["segments"]
     except Exception:  # noqa: BLE001 — 2차는 보강 호출이라 어떤 실패든 1차로 후퇴
@@ -204,7 +206,7 @@ async def _extract(client: Any, image_blocks: list[dict], user_prompt: str) -> d
         response_format={"type": "json_object"},
         temperature=0,  # 수치 추출은 결정론적으로
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": prompt_store.get("inbody_ocr.system")[0]},
             {"role": "user", "content": [*image_blocks, {"type": "text", "text": user_prompt}]},
         ],
     )

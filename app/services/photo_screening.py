@@ -36,8 +36,7 @@ from dataclasses import dataclass
 from PIL import Image
 
 from app.config import settings
-from app.prompts import photo_screening as prompt
-from app.services import images
+from app.services import images, prompt_store
 
 log = logging.getLogger("services.photo_screening")
 
@@ -205,12 +204,12 @@ async def screen(user_image: bytes | Image.Image, reference_image: bytes | None)
             #    두 벌로 두면 한쪽만 고쳐져 어긋난다 (2차 검사가 temperature 를
             #    안 잡아 판정이 실행마다 뒤집힌 적이 있다).
             vlm.call_json(
-                system=prompt.SYSTEM,
+                system=prompt_store.get("photo_screening.system")[0],
                 # ⚠️ 순서가 프롬프트의 전제다 — 첫 번째가 레퍼런스, 두 번째가 사용자.
                 content=[
                     vlm.image_block(_jpeg_for_vlm(reference_image)),
                     vlm.image_block(_jpeg_for_vlm(user_image)),
-                    {"type": "text", "text": prompt.USER},
+                    {"type": "text", "text": prompt_store.get("photo_screening.user")[0]},
                 ],
                 max_tokens=400,
             ),

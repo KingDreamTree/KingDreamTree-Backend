@@ -24,6 +24,11 @@ db/migrations/ 에 SQL 파일을 만든다. 적용은 다른 마이그레이션�
     part.rules        부위 카드 공통 규칙 (두 경로 공용)
     part.output       부위 카드 공통 출력 형식 (두 경로 공용)
     overall.system    종합 진단 시스템 프롬프트
+    coach.system      코치 대화
+    inbody_ocr.*      인바디 OCR — system · user(1차) · segment_user(2차 부위표)
+    routine.select    루틴 운동 선택
+    routine.patch     루틴 한 방 피드백
+    photo_screening.* 사진 2차 검사 — system · user
 """
 
 from __future__ import annotations

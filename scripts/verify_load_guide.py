@@ -171,13 +171,16 @@ def rule_persistence() -> None:
     check("③ 재생성(_generate)이 이전 버전 배율을 물려받음", '"load_adjust": carried_load_adjust' in handler)
 
     # ⚠️ 프롬프트가 금지하면 도구가 있어도 LLM 이 안 쓴다 — 실측으로 겪었다.
-    patch_prompt = (root / "app/prompts/routine_patch.py").read_text(encoding="utf-8")
+    # ⚠️ 프롬프트 본문은 DB(prompt_version)의 활성 버전을 잰다 (#164) — 소스 파일에는 이제 없다
+    from app.services import prompt_store
+
+    patch_prompt, _ = prompt_store.get("routine.patch")
     check("한 방 피드백 프롬프트가 load_scale 사용을 안내", "load_scale" in patch_prompt)
     check(
         "«세트·횟수·휴식으로만» 같은 전면 금지 문구가 남아있지 않음",
         "휴식으로만 조정한다" not in patch_prompt,
     )
-    chat_prompt = (root / "app/prompts/coach_chat.py").read_text(encoding="utf-8")
+    chat_prompt, _ = prompt_store.get("coach.system")
     check("코치 대화 프롬프트도 load_scale 안내", "load_scale" in chat_prompt)
 
     # 두 경로가 **같은 도구 객체**를 쓰는가 (복사하면 한쪽만 바뀐다)

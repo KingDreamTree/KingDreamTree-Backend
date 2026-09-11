@@ -709,3 +709,7 @@ CREATE TABLE prompt_version (
 );
 
 CREATE UNIQUE INDEX prompt_version_one_active_idx ON prompt_version (name) WHERE is_active;
+
+-- ⚠️ 다른 테이블과 같이 RLS 를 켠다 (schema.sql 의 RLS 블록 참고). 서버는 service_role 키라 우회하고,
+--    정책이 없으니 공개(anon) 키로는 읽지도 쓰지도 못한다 — 프롬프트를 바꿀 수 있는 곳이 생기면 안 된다.
+ALTER TABLE prompt_version ENABLE ROW LEVEL SECURITY;

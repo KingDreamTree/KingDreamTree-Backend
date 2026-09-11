@@ -37,6 +37,10 @@ CREATE TABLE IF NOT EXISTS prompt_version (
 CREATE UNIQUE INDEX IF NOT EXISTS prompt_version_one_active_idx
     ON prompt_version (name) WHERE is_active;
 
+-- ⚠️ 다른 테이블과 같이 RLS 를 켠다 (schema.sql 의 RLS 블록 참고). 서버는 service_role 키라 우회하고,
+--    정책이 없으니 공개(anon) 키로는 읽지도 쓰지도 못한다 — 프롬프트를 바꿀 수 있는 곳이 생기면 안 된다.
+ALTER TABLE prompt_version ENABLE ROW LEVEL SECURITY;
+
 -- 어느 프롬프트 버전으로 만든 결과인가 (prompt_store.compose 태그). mock·옛 행은 NULL.
 ALTER TABLE part_diagnosis    ADD COLUMN IF NOT EXISTS prompt_version VARCHAR(200);
 ALTER TABLE overall_diagnosis ADD COLUMN IF NOT EXISTS prompt_version VARCHAR(200);

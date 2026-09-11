@@ -29,6 +29,10 @@ diff_pct 등은 내부 로깅·대표부위 선정용으로만 남는다. 프롬
 
 from typing import Any
 
+# ⚠️ 부위별 «볼 것» 은 퀵 경로와 **같은 값**을 쓴다 — 한 벌만 둔다. 두 벌이면
+#    한쪽만 고쳐진다 (body_rules 모듈 주석의 교훈과 같다).
+from app.prompts.part_comparison import _look_at
+
 SYSTEM_PROMPT = """당신은 체형 비교 분석 전문가입니다.
 레퍼런스(목표 체형) 사진과 사용자 사진을 부위별로 비교해 진단합니다.
 
@@ -534,6 +538,14 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
                 f" — 옷 흡수 {ratio:.0%}: 형태를 **전혀** 못 읽을 때만 옷을 이유로"
                 " 판단 불가 가능 (윤곽이 조금이라도 보이면 판단하세요)"
             )
+
+        # ⚠️ 부위마다 **볼 지점**을 준다 (2026-09-11). 이 경로는 색으로 «어디가 그
+        #    부위인지» 는 알려주지만 «그 부위의 어디를 보라» 는 없었다. 위치만 주면
+        #    부위가 달라도 같은 문장이 나온다 (part_comparison._LOOK_AT 주석의 실측 —
+        #    상완·전완 4개가 한 문장으로 통일). 형태 묘사 규칙도 이 지점이 있어야 선다.
+        look = _look_at(name)
+        if look:
+            gate += f"\n  볼 것: {look}"
 
         # ⚠️ 잘림은 옷과 무관하게 그 부위 줄에 붙인다 — 전역 경고는 부위 줄의
         #    지시에 묻힌다 (_citation_targets·옷 게이트와 같은 이유).

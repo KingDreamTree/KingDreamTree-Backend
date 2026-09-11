@@ -44,7 +44,6 @@ settings.use_mock = True  # LLM·스크리닝 없이 전 구간
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.main import app  # noqa: E402
-from app.prompts.part_comparison import SYSTEM_PROMPT as PART_CMP_SYSTEM  # noqa: E402
 from app.prompts.part_comparison import build_part_comparison_prompt  # noqa: E402
 from app.schemas.enums import JobKind  # noqa: E402
 from app.services.db import get_client, list_body_parts  # noqa: E402
@@ -70,8 +69,14 @@ def contract_prompt() -> None:
     #    이어 붙인다. 그래서 «두 경로에 같은 문구가 있나» 를 일곱 개씩 대조하던 동등성
     #    검사를 지우고, 공통 블록이 양쪽에 그대로 들어갔는지를 본다 — 한쪽만 고칠
     #    방법 자체가 없어졌으므로 이게 동등성의 전부다.
-    from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SEG_SYSTEM
-    from app.prompts.part_rules import PART_OUTPUT, PART_RULES
+    # ⚠️ 프롬프트는 DB(prompt_version)의 **활성 버전**을 잰다 (#164) — 새 버전을 적용한 뒤
+    #    필수 규칙이 빠졌는지 여기서 잡힌다.
+    from app.services import prompt_store, vlm
+
+    PART_CMP_SYSTEM, _ = prompt_store.compose(*vlm.PART_LIVE_PROMPT)
+    PART_SEG_SYSTEM, _ = prompt_store.compose(*vlm.PART_PHOTO_PROMPT)
+    PART_RULES, _ = prompt_store.get("part.rules")
+    PART_OUTPUT, _ = prompt_store.get("part.output")
 
     for label, system in (("라이브", PART_CMP_SYSTEM), ("사진", PART_SEG_SYSTEM)):
         check(f"{label}: 공통 규칙이 통째로", PART_RULES in system)

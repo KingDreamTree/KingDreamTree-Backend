@@ -26,13 +26,11 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from app.config import settings
-from app.prompts.overall_diagnosis import SYSTEM_PROMPT as OVERALL_SYSTEM
 from app.prompts.overall_diagnosis import build_overall_prompt
-from app.prompts.part_comparison import SYSTEM_PROMPT as PART_COMPARISON_SYSTEM
 from app.prompts.part_comparison import build_part_comparison_prompt
-from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SYSTEM
 from app.prompts.part_diagnosis import build_part_prompt
 from app.schemas.enums import Confidence, GapLevel
+from app.services import prompt_store
 
 log = logging.getLogger("services.vlm")
 
@@ -50,6 +48,13 @@ PART_MAX_TOKENS = 4096
 #:    «두껍다» 1). 다양성은 이제 코드가 카드마다 문장 방식을 배정해 만든다
 #:    (part_rules.assign_frames) — 온도로 만들 필요가 없어졌으므로 낮춘다.
 DIAGNOSIS_TEMPERATURE = 0.2
+
+#: 각 진단의 시스템 프롬프트 = DB(prompt_version) 활성 버전들을 **이 순서로** 이어 붙인 것.
+#: 부위 두 경로는 'part.rules' · 'part.output' 을 같이 쓴다 — 한 벌이라 한쪽만 고쳐질 수 없다.
+#: ⚠️ 이름을 바꾸거나 조각을 더하면 prompt_version 에 그 이름의 활성 버전이 먼저 있어야 한다.
+PART_PHOTO_PROMPT = ("part.intro.photo", "part.rules", "part.output")
+PART_LIVE_PROMPT = ("part.intro.live", "part.rules", "part.output")
+OVERALL_PROMPT = ("overall.system",)
 #: ⚠️ 2026-08-17 상향 — 프로필 A·B·방향·전략·다음사이클이 추가돼 1024 로는 잘린다.
 #:    잘리면 JSON 이 깨져 종합 진단이 통째로 실패한다 (부분 저장이 없다).
 OVERALL_MAX_TOKENS = 2048
@@ -746,9 +751,11 @@ async def diagnose_parts(
         {"type": "text", "text": text},
     ]
 
-    parsed, raw = await _call_json(PART_SYSTEM, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
+    system, prompt_version = prompt_store.compose(*PART_PHOTO_PROMPT)
+    parsed, raw = await _call_json(system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
+    out["prompt_version"] = prompt_version
     return out
 
 
@@ -789,11 +796,11 @@ async def compare_parts_direct(
         {"type": "text", "text": text},
     ]
 
-    parsed, raw = await _call_json(
-        PART_COMPARISON_SYSTEM, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE
-    )
+    system, prompt_version = prompt_store.compose(*PART_LIVE_PROMPT)
+    parsed, raw = await _call_json(system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
+    out["prompt_version"] = prompt_version
     return out
 
 
@@ -862,11 +869,13 @@ async def diagnose_overall(
         content += [_image_block(reference_photo), _image_block(user_photo)]  # type: ignore[arg-type]
     content.append({"type": "text", "text": text})
 
-    parsed, raw = await _call_json(OVERALL_SYSTEM, content, OVERALL_MAX_TOKENS)
+    system, prompt_version = prompt_store.compose(*OVERALL_PROMPT)
+    parsed, raw = await _call_json(system, content, OVERALL_MAX_TOKENS)
 
     # ⚠️ 우선 부위 후보는 **판단된 부위만**이다. 판단 불가 부위가 여기 들어가면
     #    루틴의 볼륨 가중(L2)이 "못 본 부위"에 실린다 — 실측(2026-08-17)에서
     #    허벅지 2개가 gap_level=null 인 채 priority 3 을 달고 있었다.
     out = parse_overall_response(parsed)
     out["raw_response"] = raw
+    out["prompt_version"] = prompt_version
     return out

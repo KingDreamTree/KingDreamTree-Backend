@@ -121,7 +121,9 @@ def main() -> int:
 
     # ── 7. 측정 금지 — 종합 프롬프트에도 있어야 한다 ──────────────────────
     print("\n7. 프롬프트 — VLM 에게 몸을 재게 하지 않는다")
-    sys_prompt = __import__("app.prompts.overall_diagnosis", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
+    from app.services import prompt_store, vlm  # 프롬프트는 DB 활성 버전 (#164)
+
+    sys_prompt = prompt_store.compose(*vlm.OVERALL_PROMPT)[0]
     for label, needle in [
         ("치수 추정 금지", "실제 신체 치수"),
         ("근육량·체지방률 금지", "실제 근육량"),
@@ -182,7 +184,9 @@ def main() -> int:
     check("LLM 의 mode 는 버린다", "mode" not in out2, str(sorted(out2)))
     check("프로필 없으면 None", parse_overall_response({})["user_profile"] is None)
 
-    sysp = __import__("app.prompts.overall_diagnosis", fromlist=["SYSTEM_PROMPT"]).SYSTEM_PROMPT
+    from app.services import prompt_store, vlm  # 프롬프트는 DB 활성 버전 (#164)
+
+    sysp = prompt_store.compose(*vlm.OVERALL_PROMPT)[0]
     for label, needle in [
         ("골격 확정 금지", "골격 구조"),
         ("레퍼런스 도달 보장 금지", "도달 보장 대상"),

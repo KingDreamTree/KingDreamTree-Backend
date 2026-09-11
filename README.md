@@ -149,6 +149,8 @@ POST /api/v1/sessions/{id}/coach-chat               → 루틴 수정 대화
 2. **Supabase 프로젝트 생성** → 버킷 생성: `photos`, `segmentations`, `body-parts`, `inbody-temp` (전부 private)
 3. **DB 스키마 적용** — Supabase SQL 에디터에서 `db/schema.sql` 실행 (이후 변경은 `db/migrations/`)
 4. **마스터 데이터 시드** — `python scripts/seed_body_parts.py`
+   **프롬프트 시드** — `db/migrations/*_prompt_*.sql` 을 날짜순 적용. 없으면 진단 잡이 전부 실패한다
+   (프롬프트 본문은 DB 에 있다 — 보기·고치기는 `python scripts/prompt_version.py`)
 5. **모델 가중치 다운로드** — `python scripts/download_sapiens.py --size 1b`
 
 ---

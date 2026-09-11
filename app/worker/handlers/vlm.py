@@ -317,6 +317,8 @@ def _to_diagnosis_rows(
        재현 목적(work-b.md §6)은 그대로 달성된다.
     """
     meta = _call_meta(result.get("raw_response") or {})
+    # 어느 프롬프트 버전으로 만든 결과인가 (prompt_store.compose 태그). mock 이면 None.
+    prompt_version = result.get("prompt_version")
     by_name = {p["class_name"]: p for p in parts}
     rows: list[dict[str, Any]] = []
 
@@ -345,6 +347,7 @@ def _to_diagnosis_rows(
                 # ⚠️ blocked_reason 은 part_diagnosis 에 컬럼이 없다(스키마 §9).
                 #    스키마를 늘리는 대신 item 원문에 남겨 F09 가 여기서 되읽는다.
                 "raw_response": {"item": item, "call": meta},
+                "prompt_version": prompt_version,
                 "status": str(DomainStatus.DONE),
             }
         )
@@ -359,6 +362,7 @@ def _to_diagnosis_rows(
                 "vlm_input_type": str(VlmInputType.HIGHLIGHT),
                 "assessment": "이 부위는 진단 결과를 받지 못했습니다.",
                 "raw_response": {"item": None, "call": meta},
+                "prompt_version": prompt_version,
                 "status": str(DomainStatus.FAILED),
             }
         )
@@ -654,6 +658,7 @@ def _diagnose_overall(job: dict[str, Any]) -> dict[str, Any]:
             "priority_parts": priority_parts,
             "strengths": result["strengths"],
             "cautions": result["cautions"],
+            "prompt_version": result.get("prompt_version"),
             # breakdown 을 함께 박제 — 심사·디버깅 때 "이 점수가 어떻게 나왔나"를
             # 부위 단위까지 재구성할 수 있다.
             "raw_response": {

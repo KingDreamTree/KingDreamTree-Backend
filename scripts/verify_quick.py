@@ -79,17 +79,52 @@ def contract_prompt() -> None:
     check("옷이 덮는 범위 표 (반팔=전완 드러남)", "덮지 못하는 곳" in PART_CMP_SYSTEM)
     check("옷을 비교하지 말라는 명시 규칙", "옷을 비교하지 마세요" in PART_CMP_SYSTEM)
     check("판단 불가 → gap_level null", "gap_level      : null" in PART_CMP_SYSTEM)
-    check("한쪽만 보여도 비교 불가", "한쪽 사진에서만 보여도" in PART_CMP_SYSTEM)
+    check("한쪽만 보여도 비교 불가", "비교는 두 장이 다 있어야 성립" in PART_CMP_SYSTEM)
     check("모순 금지 (못 봤는데 관찰 적기)", "모순" in PART_CMP_SYSTEM)
 
     # 사용자 요구 — 현재 설명이 아니라 «레퍼런스 대비 차이» 중심
     check("판단 순서 명시 (현재→목표→차이)", "① 사용자 사진에서" in PART_CMP_SYSTEM)
     check("차이 중심 (현재만 설명 금지)", "레퍼런스 대비 차이**가 본체" in PART_CMP_SYSTEM)
-    check("옷 위에서도 읽는 것 열거", "외곽선 굴곡" in PART_CMP_SYSTEM)
+    # ⚠️ 종전에는 «무엇을 보고 비교하는가» 열거절을 검사했는데, 그 목록은
+    #    부위별 «볼 것»(_LOOK_AT)과 겹쳐 지웠다 — 부위마다 다른 지점을 주는
+    #    쪽이 «아홉 장이 같은 문장» 을 막는 데 실제로 듣는다 (2026-09-10).
+    check("옷 위에서도 읽는 것 명시", "폭·비율·외곽선" in PART_CMP_SYSTEM)
+    check("부위마다 다른 관찰 지점을 준다", "«볼 것» 에 지정된 지점" in PART_CMP_SYSTEM)
+    # ⚠️ 2026-09-10 — 판정어(«가늘다») 대신 형태 묘사를 요구하는 절. 이게 빠지면
+    #    카드가 다시 «부위 이름만 바뀐 판정 한 줄» 로 돌아간다.
+    check("판정 대신 형태 묘사", "판정하지 말고 보이는 것을 그리세요" in PART_CMP_SYSTEM)
+    check("인바디 수치를 카드에 복사 금지", "인바디 수치를 카드에 옮겨 적지 마세요" in PART_CMP_SYSTEM)
+    check("어투 — 진단체", "단정을 피한 전문가 어투" in PART_CMP_SYSTEM)
+
+    # ⚠️ **두 부위 경로가 같은 규칙을 갖는지** (2026-09-10). 카드는 갤러리(세그)로
+    #    만들었든 웹캠(퀵)으로 만들었든 **같은 화면에 섞여** 나간다. 한쪽만 고치면
+    #    사용자에게 두 목소리가 보인다 — 분량 규칙이 한쪽에만 있어 진단문이
+    #    32자 vs 66자로 벌어진 전례가 있다 (RE_FIT #11).
+    from app.prompts.part_diagnosis import SYSTEM_PROMPT as PART_SEG_SYSTEM
+
+    for rule in (
+        "판정하지 말고 보이는 것을 그리세요",
+        "굵기 형용사만으로 내리는 판정",
+        "gap_level 이 이미 담고 있습니다",
+        "단정을 피한 전문가 어투",
+        "입체감, 윤곽, 라인, 실루엣, 두께, 경계",
+        "«부족합니다» 로 문장을 끝내지 마세요",
+        "판정은 같게, 문장은 그 카드의 부위로",
+    ):
+        check(
+            f"두 경로 동일 규칙: {rule[:24]}",
+            rule in PART_CMP_SYSTEM and rule in PART_SEG_SYSTEM,
+        )
     check("좌우 차이는 실제일 때만", "없는 차이를 지어내지 마세요" in PART_CMP_SYSTEM)
 
     # 부위 카드에 처방을 넣지 않는다는 기존 불변 (코드로도 막지만 프롬프트에도 있어야)
-    check("부위 카드에 운동 처방 금지", "운동 처방이 아닙니다" in PART_CMP_SYSTEM)
+    # ⚠️ 처방 금지는 **프롬프트에서 코드로 옮겼다** (2026-09-10). 산문으로
+    #    두 곳에서 금지해도 계속 나왔기 때문이다 — vlm._strip_prescription /
+    #    _strip_exercise_names 가 해당 문장을 통째로 걷어낸다. 그래서 검사도
+    #    프롬프트 문구가 아니라 그 코드가 살아 있는지를 본다.
+    from app.services.vlm import _strip_exercise_names, _strip_prescription
+    check("처방 문장 제거기 동작", _strip_prescription("A 입니다. 스쿼트를 하세요") == "A 입니다.")
+    check("종목 이름 제거기 동작", _strip_exercise_names("A 입니다. 덤벨 컬이 좋아요") == "A 입니다.")
 
     parts = [p for p in list_body_parts() if p.get("is_comparable")]
     prompt = build_part_comparison_prompt(parts=parts, inbody=None)

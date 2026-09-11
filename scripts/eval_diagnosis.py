@@ -91,7 +91,9 @@ _DUP_RATIO = 0.75
 #:    안 걸렸다 — 인바디 수치가 문장을 갈라 비율을 끌어내리고, 부위 이름이 다른 글자로 섞인다.
 #: ponytail: 그 카드끼리 0.61~0.67, 실제 관찰 문장끼리 ≤0.32 사이에 둔 선. 표본이 늘면 다시 잰다.
 _FRAME_RATIO = 0.5
-_FRAME_STRIP = re.compile(r"(왼쪽|오른쪽|왼팔|오른팔|좌측|우측|양쪽|몸통|상완|전완|허벅지|종아리|[0-9%])")
+_FRAME_STRIP = re.compile(
+    r"(왼쪽|오른쪽|왼팔|오른팔|좌측|우측|양쪽|몸통|상완|전완|허벅지|종아리|[0-9%])"
+)
 
 
 def _strip_side(text: str) -> str:
@@ -127,7 +129,8 @@ def _has_advice(text: str) -> bool:
 def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     """규칙 위반을 모은다. {검사 이름: [위반 설명...]}"""
     out: dict[str, list[str]] = {
-        k: [] for k in ("길이", "처방", "인바디인용", "중복문장", "문형반복", "좌우불일치", "금지표현")
+        k: []
+        for k in ("길이", "처방", "인바디인용", "중복문장", "문형반복", "좌우불일치", "금지표현")
     }
 
     for p in parts:

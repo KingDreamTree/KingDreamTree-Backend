@@ -36,7 +36,7 @@ diff_pct 등은 내부 로깅·대표부위 선정용으로만 남는다. 프롬
 
 from typing import Any
 
-from app.prompts.part_rules import PART_OUTPUT, PART_RULES, look_at
+from app.prompts.part_rules import PART_OUTPUT, PART_RULES, assign_frames, look_at
 
 _INTRO = """당신은 두 체형 사진을 부위별로 비교하는 전문가입니다.
 
@@ -84,6 +84,7 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
        같은 원리다.
     """
     rows = (metrics or {}).get("parts") or {}
+    frames = assign_frames([p["class_name"] for p in parts])  # 카드마다 다른 말투 (part_rules 주석)
     lines = []
     for p in parts:
         name = p["class_name"]
@@ -114,6 +115,7 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
         look = look_at(name)
         if look:
             gate += f"\n  볼 것: {look}"
+        gate += f"\n  문장 방식: {frames[name]}"
 
         # ⚠️ 잘림은 옷과 무관하게 그 부위 줄에 붙인다 — 전역 경고는 부위 줄의
         #    지시에 묻힌다 (_citation_targets·옷 게이트와 같은 이유).

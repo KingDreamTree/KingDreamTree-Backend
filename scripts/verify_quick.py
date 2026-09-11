@@ -127,6 +127,10 @@ def contract_prompt() -> None:
     check("부위 목록이 이름으로 주어짐", "`Torso`" in prompt and "`Left_Upper_Arm`" in prompt)
     check("해부학적 위치 설명 포함", "인물 자신의 왼쪽" in prompt)
     check("부위마다 «볼 것» 지점", "볼 것:" in prompt)
+    # ⚠️ 다양성은 코드가 책임진다 (part_rules.assign_frames) — 카드마다 다른 시작 틀이 붙어야 한다
+    frames = [ln for ln in prompt.splitlines() if "문장 방식:" in ln]
+    check("부위마다 문장 방식 배정", len(frames) == len(parts))
+    check("시작 틀이 부위끼리 겹치지 않음", len({f.split("«")[1] for f in frames}) == len(frames))
     check("전 부위 응답 강제", f"위 {len(parts)}개 부위를 전부 담아" in prompt)
     check("색 범례 없음 (오버레이 미사용)", "부위를 색으로 칠한 그림은 없습니다" in PART_CMP_SYSTEM)
 

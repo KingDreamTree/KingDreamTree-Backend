@@ -37,7 +37,7 @@ _inbody_block).
 
 from typing import Any
 
-from app.prompts.part_rules import assign_frames, look_at
+from app.prompts.part_rules import look_at
 
 # ⚠️ 시스템 프롬프트 본문은 DB(prompt_version)에 있다 — 'part.intro.photo' + 'part.rules' +
 #    'part.output' (app/services/prompt_store.py, vlm.PART_PHOTO_PROMPT). 여기는 사용자 메시지만.
@@ -72,7 +72,6 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
        같은 원리다.
     """
     rows = (metrics or {}).get("parts") or {}
-    frames = assign_frames([p["class_name"] for p in parts])  # 카드마다 다른 말투 (part_rules 주석)
     lines = []
     for p in parts:
         name = p["class_name"]
@@ -103,7 +102,6 @@ def _legend_block(parts: list[dict[str, Any]], metrics: dict[str, Any] | None = 
         look = look_at(name)
         if look:
             gate += f"\n  볼 것: {look}"
-        gate += f"\n  문장 방식: {frames[name]}"
 
         # ⚠️ 잘림은 옷과 무관하게 그 부위 줄에 붙인다 — 전역 경고는 부위 줄의
         #    지시에 묻힌다 (_citation_targets·옷 게이트와 같은 이유).

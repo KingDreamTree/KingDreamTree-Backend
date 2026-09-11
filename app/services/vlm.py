@@ -37,6 +37,13 @@ log = logging.getLogger("services.vlm")
 #: 진단용 모델. ⚠️ 바꾸면 프롬프트 튜닝 결과가 그대로 재현되지 않는다.
 VLM_MODEL = "gpt-4o"
 
+#: 부위 카드 모델 — 부위 두 경로만. 종합·OCR·스크리닝·루틴은 VLM_MODEL 그대로.
+#: ⚠️ 2026-09-12 교체. gpt-4o 는 9장을 한 응답에 쓰면 첫 카드 문형으로 수렴했다 — 시작 틀 배정,
+#:    틀 제거, 글쓰기 단계 분리, 온도 조정을 다 해봐도 매 회차 한 골격(«X는 목표 체형에 비해 …
+#:    편입니다»)으로 돌아왔다. 같은 규칙에서 gpt-4.1 은 부위마다 다른 관찰로 문장을 열고, 좌우 복붙
+#:    13 → 3/20. 토큰 단가도 gpt-4o 보다 낮다. 바꾸면 scripts/eval_diagnosis.py 로 다시 잴 것.
+PART_MODEL = "gpt-4.1"
+
 #: 부위 수만큼 항목이 나와야 하므로 넉넉히. 9부위 × 항목당 ~150토큰 + 여유.
 PART_MAX_TOKENS = 4096
 
@@ -45,8 +52,7 @@ PART_MAX_TOKENS = 4096
 #:    등급(gap_level)이 흔들리는 폭은 0 에서도 이미 있었다 — 그건 이 값이 만든 게
 #:    아니므로, 재현성이 필요하면 온도가 아니라 결과 캐싱으로 잡는다 (#165).
 #: ⚠️ 2026-09-12 — 0.7 에서 **같은 사진의 판정 방향이 뒤집혔다** (5회 중 상완 «덜 발달» 2 ·
-#:    «두껍다» 1). 다양성은 이제 코드가 카드마다 문장 방식을 배정해 만든다
-#:    (part_rules.assign_frames) — 온도로 만들 필요가 없어졌으므로 낮춘다.
+#:    «두껍다» 1). 다양성은 온도가 아니라 모델(PART_MODEL)과 규칙이 만든다 — 낮게 둔다.
 DIAGNOSIS_TEMPERATURE = 0.2
 
 #: 각 진단의 시스템 프롬프트 = DB(prompt_version) 활성 버전들을 **이 순서로** 이어 붙인 것.
@@ -164,6 +170,7 @@ async def _call_json(
     content: list[dict[str, Any]],
     max_tokens: int,
     temperature: float = 0,
+    model: str = VLM_MODEL,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """JSON mode 로 호출하고 (파싱된 결과, raw 응답)을 반환한다.
 
@@ -192,7 +199,7 @@ async def _call_json(
     # is_stale 이 멀쩡한 잡을 좀비로 걸러 Vision 호출이 한 번 더 나간다(요금 2배).
     client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60, max_retries=1)
     response = await client.chat.completions.create(
-        model=VLM_MODEL,
+        model=model,
         response_format={"type": "json_object"},
         temperature=temperature,
         max_tokens=max_tokens,
@@ -407,6 +414,19 @@ def _strip_prescription(assessment: str | None) -> str | None:
     return out if out.endswith(".") else out + "."
 
 
+#: 3인칭 주어 — «사용자의 왼쪽 상완은 …». 카드를 읽는 사람이 본인이다.
+#: ⚠️ 프롬프트가 금지하는데도 거의 모든 카드에 붙었다 (재측정 2026-09-12, 규칙 압축 후).
+#:    이 저장소의 규칙대로 — 모델이 반복해서 어기는 규칙은 산문이 아니라 코드로 막는다.
+_THIRD_PERSON = re.compile(r"(사용자|이 사람)(의|는|은|가|이)\s+")
+
+
+def _strip_third_person(text: str | None) -> str | None:
+    """«사용자의 왼쪽 상완은 …» → «왼쪽 상완은 …». 지우고 나서 비면 원문을 둔다."""
+    if not text:
+        return text
+    return _THIRD_PERSON.sub("", text).strip() or text
+
+
 def _differences_from_seen(seen: Any, assessment: str | None) -> list[str]:
     """seen(현재/목표 관찰)으로 differences 를 만든다 — 퀵 경로 카드 보강용.
 
@@ -461,8 +481,11 @@ def _coerce_part(
     if stripped != assessment:
         log.warning("%s: 진단문에 권유 문장이 있어 제거", class_name)
         assessment = stripped
+    assessment = _strip_third_person(assessment)
 
-    differences = _drop_restatements(_as_str_list(item.get("differences")), assessment)
+    differences = _drop_restatements(
+        [_strip_third_person(d) for d in _as_str_list(item.get("differences"))], assessment
+    )
     # ⚠️ 재진술 필터에 differences 가 전부 걸리면 카드에 관찰이 하나도 안 남는다
     #    (실측 2026-08-20, 퀵 경로 9/9). 모델이 assessment 와 differences 에
     #    **같은 관찰 하나**를 두 번 쓰기 때문인데, 정작 seen 에는 부위마다 서로
@@ -752,7 +775,9 @@ async def diagnose_parts(
     ]
 
     system, prompt_version = prompt_store.compose(*PART_PHOTO_PROMPT)
-    parsed, raw = await _call_json(system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
+    parsed, raw = await _call_json(
+        system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE, PART_MODEL
+    )
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     out["prompt_version"] = prompt_version
@@ -797,7 +822,9 @@ async def compare_parts_direct(
     ]
 
     system, prompt_version = prompt_store.compose(*PART_LIVE_PROMPT)
-    parsed, raw = await _call_json(system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE)
+    parsed, raw = await _call_json(
+        system, content, PART_MAX_TOKENS, DIAGNOSIS_TEMPERATURE, PART_MODEL
+    )
     out = parse_part_response(parsed, class_names, inbody_available=inbody is not None)
     out["raw_response"] = raw
     out["prompt_version"] = prompt_version

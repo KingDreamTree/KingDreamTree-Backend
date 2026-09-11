@@ -129,8 +129,7 @@ def _has_advice(text: str) -> bool:
 def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     """규칙 위반을 모은다. {검사 이름: [위반 설명...]}"""
     out: dict[str, list[str]] = {
-        k: []
-        for k in ("길이", "처방", "인바디인용", "중복문장", "문형반복", "좌우불일치", "금지표현")
+        k: [] for k in ("길이", "처방", "인바디인용", "중복문장", "문형반복", "금지표현")
     }
 
     for p in parts:
@@ -160,8 +159,9 @@ def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
     if len(cited) > 2:
         out["인바디인용"].append(f"{len(cited)}곳: {', '.join(cited)}")
 
-    # ⚠️ 좌우 쌍이 같은 것은 **의도한 동작**이다 (vlm._unify_pairs). 위반이 아니다.
-    #    쌍이 아닌 두 부위가 겹치는 것만 센다.
+    # 쌍이 아닌 두 부위가 겹치는 것만 센다. 좌우 쌍은 내용이 비슷한 게 자연스럽다.
+    # ⚠️ «좌우 쌍 문장이 갈라지면 위반» 검사는 지웠다 (2026-09-12) — 좌우 문장 통일은 08-20 에
+    #    폐기됐고(vlm._unify_pairs), 지금 규칙은 오히려 쌍끼리 옮겨 쓰지 말라고 한다.
     for i, a in enumerate(parts):
         for b in parts[i + 1 :]:
             if _is_pair(a["class_name"], b["class_name"]):
@@ -183,28 +183,6 @@ def audit(parts: list[dict[str, Any]]) -> dict[str, list[str]]:
             fa, fb = _frame(a["assessment"]), _frame(b["assessment"])
             if SequenceMatcher(None, fa, fb).ratio() >= _FRAME_RATIO:
                 out["문형반복"].append(f"{a['class_name']} ≈ {b['class_name']}")
-
-    # 좌우 쌍인데 **문장이 갈라진** 경우 — 이제는 이쪽이 위반이다.
-    for a in parts:
-        if not a["class_name"].startswith("Left_"):
-            continue
-        right = "Right_" + a["class_name"][len("Left_") :]
-        b = next((p for p in parts if p["class_name"] == right), None)
-        if b is None or a.get("gap_level") != b.get("gap_level"):
-            continue  # 등급이 다르면 문장도 달라야 한다
-        ta, tb = a.get("assessment") or "", b.get("assessment") or ""
-        # ⚠️ 인바디를 인용한 쌍은 **갈라지는 게 맞다.** 좌우 세그먼트 수치가 서로
-        #    달라(예: 89.9% / 90.6%) 같은 문장을 쓰면 한쪽이 틀린 값을 말하게 된다.
-        #    "좌우 수치는 같으면 안 된다"는 제품 결정이라 위반으로 세지 않는다.
-        if "%" in ta or "%" in tb:
-            continue
-        # ⚠️ **좌우 이름만 다른 건 위반이 아니다.** 카드 제목이 "왼팔 전완" 인데
-        #    문장이 "양쪽 전완 모두…" 로 시작하면 오히려 어색하다. 내용이 같으면
-        #    좌우 이름은 그 카드에 맞게 부르는 쪽이 낫다 — 그게 이상적인 출력이다.
-        if _strip_side(ta) == _strip_side(tb):
-            continue
-        if ta and tb and ta != tb:
-            out["좌우불일치"].append(f"{a['class_name']} ≠ {right}")
 
     return out
 

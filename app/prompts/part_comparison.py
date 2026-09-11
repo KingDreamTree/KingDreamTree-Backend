@@ -22,7 +22,7 @@
 from typing import Any
 
 from app.prompts.overall_diagnosis import _inbody_block
-from app.prompts.part_rules import assign_frames, look_at
+from app.prompts.part_rules import look_at
 
 #: 색 오버레이를 대신해 **글로** 부위를 지목한다.
 #  ⚠️ 좌우는 «인물 자신 기준» 이다 — 세그멘테이션(Sapiens)이 붙이는 라벨과 같은 규약이어야
@@ -51,7 +51,6 @@ def build_part_comparison_prompt(
                유일한 출처다 — 여기서 만들지 않는다 (사진 경로와 같은 규약).
     """
     lines = ["# 부위 목록", ""]
-    frames = assign_frames([p["class_name"] for p in parts])  # 카드마다 다른 말투 (part_rules 주석)
     for p in parts:
         name = p["class_name"]
         ko = p.get("name_ko") or name
@@ -59,7 +58,6 @@ def build_part_comparison_prompt(
         look = look_at(name)
         if look:
             lines.append(f"    볼 것: {look}")
-        lines.append(f"    문장 방식: {frames[name]}")
     lines += [
         "",
         "# 인바디",

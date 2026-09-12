@@ -869,8 +869,13 @@ async def chat_turn(
         finalized = truthful_card(finalized, effective, ref_names)
         _append_safety_footer(finalized, effective)
 
-    # system 2개를 뗀 나머지가 다음 요청에 그대로 되돌아올 히스토리다.
-    new_history = llm_messages[2:]
+    # 맨 앞 system 2개를 뗀 나머지가 다음 요청에 그대로 되돌아올 히스토리다.
+    # ⚠️ 중간에 끼워 넣은 system 도 함께 뺀다 (#199). finalize 강제 라운드에서 모델에게 주는
+    #    "finalize_revision 으로 마무리하세요" 한 줄이 기록에 남으면, 프론트는 user 가 아닌
+    #    역할을 전부 코치 말풍선으로 그려서 그 지시문이 코치 말처럼 화면에 뜬다. role="tool"
+    #    은 내용이 JSON 이라 프론트의 JSON 숨김 규칙에 걸리지만, 이건 평범한 한국어라 통과한다.
+    #    그 한 줄은 카드를 닫는 그 턴에만 필요했으므로 다음 요청에 다시 보낼 이유도 없다.
+    new_history = [m for m in llm_messages[2:] if m.get("role") != "system"]
 
     return {
         "reply": reply or (finalized or {}).get("summary", ""),

@@ -262,7 +262,9 @@ def build_card_changes(
                 continue  # 원래 운동으로 되돌린 것 — 변경이 아니다
             what = f"{a.get('old_exercise_name')} → {ref_names.get(ref, ref)}"
         elif name == "flag_contraindication":
-            what = f"{a.get('body_part')} → 주의 부위 등록 ({a.get('severity')})"
+            # ⚠️ severity(WARN·BLOCK)는 붙이지 않는다 — 내부 코드값이라 사용자가 뜻을 모른다 (#197).
+            #    저장·루틴 생성에는 그대로 쓰인다. 화면에만 감춘다.
+            what = f"{a.get('body_part')} → 주의 부위 등록"
         else:
             continue
         out.append({"what": what, "why": why})

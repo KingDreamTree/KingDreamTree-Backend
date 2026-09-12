@@ -227,6 +227,22 @@ def _call_key(call: dict[str, Any]) -> tuple[Any, ...] | None:
     return None
 
 
+def _eul_reul(word: str) -> str:
+    """받침이 있으면 «을», 없으면 «를». 운동 이름은 전부 한글로 끝난다 (카탈로그 200개 확인)."""
+    ch = (word or "").strip()[-1:]
+    if not ch or not ("가" <= ch <= "힣"):
+        return "를"
+    return "을" if (ord(ch) - 0xAC00) % 28 else "를"
+
+
+def _euro_ro(word: str) -> str:
+    """받침이 없거나 ㄹ 받침이면 «로», 그 밖에는 «으로» (컬로 · 프레스로 · 스쿼트으로)."""
+    ch = (word or "").strip()[-1:]
+    if not ch or not ("가" <= ch <= "힣"):
+        return "로"
+    return "로" if (ord(ch) - 0xAC00) % 28 in (0, 8) else "으로"
+
+
 def build_card_changes(
     tool_events: list[dict[str, Any]], ref_names: dict[str, str]
 ) -> list[dict[str, str]]:
@@ -260,9 +276,18 @@ def build_card_changes(
             ref = a.get("new_exercise_ref")
             if ref_names.get(ref) == a.get("old_exercise_name"):
                 continue  # 원래 운동으로 되돌린 것 — 변경이 아니다
-            what = f"{a.get('old_exercise_name')} → {ref_names.get(ref, ref)}"
+            old_name = str(a.get("old_exercise_name") or "")
+            new_name = str(ref_names.get(ref, ref) or "")
+            what = f"{old_name}{_eul_reul(old_name)} {new_name}{_euro_ro(new_name)} 교체"
         elif name == "flag_contraindication":
-            what = f"{a.get('body_part')} → 주의 부위 등록 ({a.get('severity')})"
+            # ⚠️ severity(WARN·BLOCK)를 그대로 쓰지 않는다 — 내부 코드값이라 사용자가 뜻을 모른다 (#197).
+            #    저장·루틴 생성에는 계속 쓰이고, 화면에는 뜻만 우리말로 옮긴다.
+            part_name = str(a.get("body_part") or "")
+            what = (
+                f"{part_name} 운동 제외"
+                if str(a.get("severity")) == "BLOCK"
+                else f"{part_name} 주의 필요"
+            )
         else:
             continue
         out.append({"what": what, "why": why})

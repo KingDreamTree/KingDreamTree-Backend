@@ -435,7 +435,7 @@ def rule_truthful_card() -> None:
     whats = [c["what"] for c in build_card_changes(events, ref_names)]
     check(
         "변경 목록이 실행된 도구 3건 그대로",
-        whats == ["레그컬 횟수 -2회", "레그프레스 → 레그 익스텐션", "무릎 → 주의 부위 등록 (WARN)"],
+        whats == ["레그컬 횟수 -2회", "레그프레스를 레그 익스텐션으로 교체", "무릎 주의 필요"],
         str(whats),
     )
 

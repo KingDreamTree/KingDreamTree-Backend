@@ -24,6 +24,9 @@ COPY app app
 COPY data data
 COPY scripts scripts
 
+ARG BUILD_REVISION=""
+ENV BUILD_REVISION=${BUILD_REVISION}
+
 EXPOSE 8000
 
 # 기본 명령은 API. 워커 컨테이너는 compose 에서 command 로 덮어쓴다.

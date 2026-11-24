@@ -4,6 +4,8 @@
 
 **스택**: FastAPI / Sapiens2(세그멘테이션) / OpenAI VLM / Supabase / Docker / EC2
 
+앱 개발 브랜치, 웹 전용 코드 복원, Swagger 자동 배포: [앱 개발 안내](docs/app-development.md).
+
 ---
 
 ## 빠른 시작

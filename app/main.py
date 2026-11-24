@@ -29,7 +29,7 @@ from app.routes.users import router as users_router
 from app.routes.workout_logs import router as workout_logs_router
 
 app = FastAPI(
-    title="KingDreamTree Backend",
+    title="Refit API",
     description=(
         "레퍼런스 이미지 기반 체형 비교 분석 + 개인화 운동 루틴 생성.\n\n"
         "**인증 없음** — 모든 요청에 `X-User-Id` 헤더가 필요합니다 "
@@ -37,7 +37,7 @@ app = FastAPI(
         "무거운 작업은 202 + `job_id`를 반환하고 `GET /jobs/{job_id}` 폴링으로 확인합니다.\n\n"
         "명세: `docs/api-spec-v2.md`"
     ),
-    version="0.2.0",
+    version=f"0.2.0+{settings.build_revision}" if settings.build_revision else "0.2.0",
 )
 
 log = logging.getLogger("app")

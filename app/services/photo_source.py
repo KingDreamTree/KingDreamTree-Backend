@@ -14,10 +14,9 @@
    종전 경로에서 Storage 에 있던 파일과 같은 규격이라, 읽는 쪽은 어디서 왔는지
    구분할 필요가 없다.
 
-⚠️ 팟 경로는 사진마다 **두 벌**을 둔다 — 세그용 가공본과, 얼굴을 가린 OpenAI 행
-   복사본(services/face_mask). GPT 를 부르는 쪽은 `load(photo, for_vlm=True)` 로 읽는다.
-   가린 복사본이 없으면(종전 경로) 가공본을 그대로 준다 — 종전 경로는 기기에서
-   가려 올리지 않으므로 얼굴이 그대로 나간다. 그게 pod 로 옮긴 이유 중 하나다.
+⚠️ GPT 입력은 `load(photo, for_vlm=True)` 로 읽는다. 팟은 준비된 메모리 복사본을,
+   Storage 경로는 저장된 랜드마크로 얼굴을 가린 임시 복사본을 사용한다.
+   저장 사진과 Sapiens 입력은 변경하지 않아 기존 부위 비율 계산을 유지한다.
 
 ⚠️ 등록·해제는 팟 파이프라인(app/pod/pipeline.py)만 한다. 처리가 끝나면 반드시
    `clear(session_id)` — 여기 남아 있으면 "메모리에서 몇 초"라는 말이 거짓이 된다.
@@ -29,7 +28,10 @@ import logging
 import threading
 from typing import Any
 
-from app.services import storage
+from PIL import Image
+
+from app.config import settings
+from app.services import face_mask, images, storage
 
 log = logging.getLogger("services.photo_source")
 
@@ -76,11 +78,27 @@ def held() -> int:
         return len(_mem)
 
 
+def mask_for_vlm(img: Image.Image, landmarks: list[dict[str, Any]] | None) -> Image.Image:
+    """이미지와 같은 좌표계의 랜드마크로 OpenAI 입력 복사본을 만든다.
+
+    기존 Pod의 얼굴 검출/가림 규칙을 사용한다. 얼굴이 검출되지 않는 경우의 한계도
+    동일하다. 좌표가 아예 없는 과거 사진은 무가림으로 보내지 않고 재업로드를 요구한다.
+    """
+    if not landmarks:
+        raise PhotoPrivacyUnavailable(
+            "사진 보호 처리에 필요한 관절 좌표가 없습니다. 사진을 다시 업로드해주세요."
+        )
+    masked, box = face_mask.apply(img, landmarks, settings.storage_face_mask_style)
+    if box is None:
+        log.info("OpenAI 입력의 얼굴 위치가 검출되지 않았습니다 (뒷모습·프레임 밖 등)")
+    return masked
+
+
 def load(photo: dict[str, Any], for_vlm: bool = False) -> bytes:
     """photo 행 → 원본 바이트. 메모리 우선, 없으면 Storage.
 
-    for_vlm=True 는 **OpenAI 로 보낼 사진**을 읽을 때 — 얼굴을 가린 복사본이 있으면
-    그것을 준다. 세그는 False 로 읽는다 (가린 사진은 세그 결과를 틀어뜨린다).
+    for_vlm=True 는 **OpenAI 로 보낼 사진**을 읽을 때. Storage 경로는 읽은 뒤
+    임시 복사본에 얼굴 가림을 적용한다. 세그는 False로 읽어 기존 계산을 유지한다.
 
     ⚠️ 둘 다 없으면(팟 경로인데 메모리가 비었다 = 팟이 재시작했다) 예외다.
        사진은 어디에도 없으므로 재시도해도 같다 — 호출자가 잡을 FAILED 로 종결한다.
@@ -94,10 +112,20 @@ def load(photo: dict[str, Any], for_vlm: bool = False) -> bytes:
             "사진이 서버에 없습니다. 팟이 재시작됐거나 이미 처리가 끝났습니다 — 다시 올려주세요."
         )
     log.info("사진 다운로드: %s/%s", photo["storage_bucket"], path)
-    return storage.download(photo["storage_bucket"], path)
+    raw = storage.download(photo["storage_bucket"], path)
+    if not for_vlm:
+        return raw
+    masked = mask_for_vlm(images.load_rgb(raw), photo.get("pose_landmarks"))
+    return images.encode_photo(masked)[0]
 
 
 class PhotoUnavailable(RuntimeError):
     """사진이 메모리에도 Storage 에도 없다. 재시도 무의미 (worker/run.py `_is_retryable`)."""
+
+    retryable = False
+
+
+class PhotoPrivacyUnavailable(RuntimeError):
+    """과거 저장 사진에 가림용 좌표가 없다. 원본을 외부로 보내지 않고 재업로드한다."""
 
     retryable = False

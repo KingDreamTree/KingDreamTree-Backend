@@ -12,7 +12,8 @@ from app.schemas.enums import CaptureSource, PhotoKind, PoseScaleBasis
 class PoseLandmark(BaseModel):
     """MediaPipe Pose 랜드마크 하나. 좌표는 0~1 정규화 값.
 
-    ⚠️ 반전되지 않은 카메라 원본 기준이다. 거울 사진은 서버가 저장 전에 되돌린다.
+    ⚠️ Storage 응답에서는 signed_url의 가공 사진 기준이다. 서버는 거울 보정·3:4 크롭 시
+    사진과 좌표를 함께 변환한다. 원본 사진 위에 그릴 좌표로 사용하지 않는다.
     """
 
     index: int = Field(description="0~32. MediaPipe Pose 랜드마크 번호")

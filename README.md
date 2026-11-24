@@ -8,6 +8,8 @@
 
 Issue·Assignee·브랜치·커밋·PR·리뷰·Swagger·Flyway 협업 기준: [Refit 협업 가이드](CONTRIBUTING.md).
 
+사진 저장·재조회와 노트북 GPU 시연: [Storage 및 로컬 GPU 안내](docs/storage-local-gpu.md).
+
 ---
 
 ## 빠른 시작

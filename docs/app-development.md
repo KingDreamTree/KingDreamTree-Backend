@@ -7,6 +7,7 @@
 - 웹 전용 코드: 태그 `web-only-before-app-2026-11-24`
 - 기준 커밋: `87421881e3578a822c59d6343ae92b893461b4f4`
 - 앱 개발 통합 브랜치: `app/develop`
+- GitHub 기본 브랜치 및 새 PR의 병합 대상: `app/develop`
 - `main`은 웹 전용 코드로 남겨 둔다.
 
 태그는 Git에 커밋된 소스의 기준점이다. 로컬의 미추적 `web/architecture-guide/`,

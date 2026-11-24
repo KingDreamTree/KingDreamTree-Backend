@@ -7,4 +7,4 @@
 - API 계약을 바꾸면 같은 작업에서 FastAPI 정의·Swagger/OpenAPI·관련 검증을 함께 갱신한다.
 - DB 변경은 `docs/database-migrations.md`와 `db/flyway/sql/`을 따른다. 실제 Supabase 적용은 로컬에서 수행하며 CI의 임시 DB 검사와 구분한다.
 - `.env.flyway`, DB 접속 정보, 덤프, 실제 사용자 데이터는 GitHub·AWS·이슈·PR에 복사하지 않는다. 사용자 미커밋 변경은 보존한다.
-- 기본 브랜치가 `main`인 현재 설정에서는 `app/develop` PR의 자동 이슈 종료와 템플릿 자동 표시를 가정하지 않는다. 기본 브랜치·리뷰 정책이 변경되면 협업 문서도 갱신한다.
+- GitHub 기본 브랜치와 PR 대상은 `app/develop`이다. Issue·PR 템플릿은 이 브랜치에서 자동 표시된다. 병합으로 완료되는 이슈는 `Closes #번호`, 배포 등 후속 확인이 남은 이슈는 `Refs #번호`로 연결하고 확인 후 닫는다.

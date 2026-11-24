@@ -13,11 +13,14 @@
 `.env`, DB 데이터, 모델 파일, AWS 설정은 포함하지 않는다.
 
 기능 작업은 `app/develop`에서 새 브랜치를 만들어 진행하고, 완료되면 다시 합친다.
+먼저 실제 이슈를 만들고 Assignee를 지정한다. 브랜치·커밋·PR 형식은
+[Refit 협업 가이드](../CONTRIBUTING.md)를 따른다.
 
 ```bash
 git switch app/develop
 git pull --ff-only
-git switch -c feat/app-login
+# 실제 생성한 이슈 번호와 작업 설명을 입력한다.
+git switch -c 'feat/#이슈번호-app-login'
 ```
 
 전환 전 코드를 별도 브랜치로 꺼내려면, 현재 작업을 먼저 커밋하거나 보관한 뒤:

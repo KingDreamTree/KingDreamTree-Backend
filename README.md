@@ -6,6 +6,8 @@
 
 앱 개발 브랜치, 웹 전용 코드 복원, Swagger 자동 배포: [앱 개발 안내](docs/app-development.md).
 
+Issue·Assignee·브랜치·커밋·PR·리뷰·Swagger·Flyway 협업 기준: [Refit 협업 가이드](CONTRIBUTING.md).
+
 ---
 
 ## 빠른 시작

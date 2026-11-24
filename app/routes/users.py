@@ -1,56 +1,39 @@
-"""F02 — 사용자 식별자 발급.
-
-⚠️ 로그인이 아니다. `POST /users` 는 헤더 없이 호출되는 유일한 쓰기 엔드포인트다.
-   발급된 UUID를 잃으면 복구 수단이 없다 (docs/api-spec-v2.md F01).
-"""
+"""로그인한 사용자 조회 및 회원 탈퇴. 익명 UUID 발급은 종료했다."""
 
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Response, status
 
-from app.config import settings
 from app.deps import CurrentUser
 from app.errors import ApiError
+from app.schemas.auth import AUTH_RESPONSES
 from app.schemas.user import UserResponse
-from app.services import db, rate_limit, storage
+from app.services import db, storage
 
 log = logging.getLogger("routes.users")
 
-router = APIRouter(tags=["users"])
+router = APIRouter(tags=["users"], responses=AUTH_RESPONSES)
 
 
 @router.post(
     "/users",
     response_model=UserResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="사용자 식별자 발급 (헤더 불필요)",
+    deprecated=True,
+    summary="로그인한 사용자 확인 (GET /users/me 사용 권장)",
 )
-async def create_user(request: Request) -> UserResponse:
-    # ⚠️ #115 — 인증이 없는 유일한 쓰기 엔드포인트. 막지 않으면 스크립트로
-    #    반복 호출해 뒤따르는 사진 업로드(동기 Vision 호출)까지 요금이 그대로
-    #    뛴다. IP 기준 분당 상한만 (app/services/rate_limit.py).
-    client_ip = request.client.host if request.client else "unknown"
-    rate_limit.check(
-        f"create_user:{client_ip}",
-        settings.user_create_rate_limit,
-        settings.user_create_rate_window_sec,
-    )
-    row = db.create_user()
-    return UserResponse(**row)
+def create_user(user: CurrentUser) -> UserResponse:
+    """익명 사용자를 생성하지 않습니다. 계정 생성은 카카오 로그인에 포함됩니다."""
+    return UserResponse(**user)
 
 
 @router.get(
     "/users/me",
     response_model=UserResponse,
-    summary="저장된 식별자 유효성 확인",
+    summary="로그인한 내 정보 조회",
 )
 async def get_me(user: CurrentUser) -> UserResponse:
-    """⚠️ 앱 진입 시 먼저 호출할 것.
-
-    DB가 초기화됐는데 프론트 로컬 스토리지에 옛 id가 남아 있으면
-    이후 모든 요청이 404로 떨어진다. 여기서 한 번에 걸러낸다.
-    """
+    """저장된 리핏 토큰으로 앱 진입 시 로그인 상태와 내 정보를 확인합니다."""
     return UserResponse(**user)
 
 

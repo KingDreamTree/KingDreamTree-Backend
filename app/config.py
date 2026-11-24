@@ -6,6 +6,7 @@
 
 from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,10 +31,17 @@ class Settings(BaseSettings):
     # 구 service_role key. ⚠️ RLS를 전부 우회한다. 서버 사이드 전용.
     supabase_service_role_key: str = ""
 
+    # 카카오 SDK가 발급받은 토큰의 app_id를 검증한다. 앱 키와 다른 숫자 ID다.
+    kakao_app_id: int | None = Field(default=None, gt=0)
+    kakao_timeout_sec: float = Field(default=5.0, gt=0, le=30)
+    # 리핏 토큰은 DB 세션으로 관리한다. 원문은 저장하지 않고 SHA-256 해시만 저장.
+    auth_session_ttl_sec: int = Field(default=3600, ge=60, le=86400)
+    auth_login_rate_limit: int = Field(default=10, ge=1)
+    auth_login_rate_window_sec: int = Field(default=60, ge=1)
+
     #: 프론트가 붙는 오리진. 쉼표로 여러 개, "*" 면 전부 허용.
     #  ⚠️ 없으면 브라우저 요청이 전부 막힌다 (서버는 정상인데 화면에서만 실패).
-    #  ⚠️ 로그인이 없어 CORS 가 데이터를 지켜주지는 않는다 — user_id 를 아는 사람은
-    #     어느 오리진에서든 읽을 수 있다. 오리진 제한은 운영 편의일 뿐이다.
+    #  인증은 Bearer 토큰으로 수행한다. CORS는 브라우저 오리진 제한이다.
     cors_origins: str = "*"
 
     # ------------------------------------------------------------------ #

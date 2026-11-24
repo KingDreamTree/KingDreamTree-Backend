@@ -20,7 +20,7 @@ from app.errors import ApiError, internal_error
 log = logging.getLogger("app")
 
 _HTTP_CODES = {
-    401: "MISSING_USER_ID",
+    401: "MISSING_ACCESS_TOKEN",
     403: "FORBIDDEN",
     404: "NOT_FOUND",
     405: "METHOD_NOT_ALLOWED",
@@ -33,7 +33,10 @@ _HTTP_CODES = {
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error_handler(request: Request, exc: ApiError) -> JSONResponse:
-        return JSONResponse(status_code=exc.status_code, content=exc.to_dict())
+        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else {}
+        if request.url.path.startswith("/api/v1/auth/"):
+            headers["Cache-Control"] = "no-store"
+        return JSONResponse(status_code=exc.status_code, content=exc.to_dict(), headers=headers)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(
@@ -48,15 +51,21 @@ def register_exception_handlers(app: FastAPI) -> None:
                 "error": {
                     "code": "INVALID_REQUEST",
                     "message": "요청 형식이 올바르지 않습니다.",
-                    "detail": {"errors": jsonable_encoder(exc.errors())},
+                    # 입력값/ctx에는 로그인 토큰과 개인정보가 들어갈 수 있다.
+                    "detail": {
+                        "errors": jsonable_encoder(
+                            [
+                                {k: e[k] for k in ("type", "loc", "msg") if k in e}
+                                for e in exc.errors()
+                            ]
+                        )
+                    },
                 }
             },
         )
 
     @app.exception_handler(StarletteHTTPException)
-    async def http_exception_handler(
-        request: Request, exc: StarletteHTTPException
-    ) -> JSONResponse:
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
         """프레임워크가 직접 내는 에러도 우리 형태로 바꾼다.
 
         ⚠️ 없는 경로(404)·허용 안 된 메서드(405)는 FastAPI 가 {"detail": "..."} 로

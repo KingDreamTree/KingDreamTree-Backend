@@ -17,6 +17,7 @@ HIRELINK 협업 가이드의 형식과 Swagger 관리 원칙을 Refit에 맞추�
 | Merge/Sync | 검사·리뷰 후 병합, 배포 및 이슈 종료 확인, 로컬 최신화 | GitHub + Git |
 
 `main`은 기존 웹 전용 코드로 보존한다. 앱 작업을 `main`에서 시작하거나 `main`으로 PR을 만들지 않는다.
+GitHub 기본 브랜치도 `app/develop`이다. 새 PR에서는 base가 `app/develop`인지 확인한다.
 웹 기준 태그는 `web-only-before-app-2026-11-24`다. `app/develop`에도 기능 변경을 직접 push하지 않고 작업 브랜치와 PR을 사용한다.
 기존 서버·브랜치 운영은 [앱 개발 안내](docs/app-development.md)를 참고한다.
 
@@ -126,9 +127,9 @@ Refs #실제이슈번호
 해당하지 않는 항목은 삭제하거나 비해당 이유를 적는다. 실행한 테스트·명령·결과를 남기고 실제 확인한 것만 `[x]`로 표시한다.
 필수 검증을 마친 뒤 PR을 제출한다. 검증이 불가능한 항목은 완료 처리하지 않고 이유와 제약을 적어 팀원과 논의한다.
 
-GitHub 기본 브랜치는 현재 `main`이므로 `app/develop` 대상 PR에서는 `Closes #번호`만으로
-이슈가 자동 종료되지 않는다. `Refs #번호`로 실제 이슈를 참조하고, 병합·필요한 배포 검증을 마친 담당자가
-이슈 완료 항목을 확인한 뒤 직접 닫는다. [GitHub 이슈 연결 기준](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)
+GitHub 기본 브랜치는 `app/develop`이다. 병합으로 완료되는 작업은 `Closes #번호`를 적으면
+해당 PR 병합 시 이슈가 자동 종료된다. 배포·운영 검증 등 후속 확인이 남은 작업은 `Refs #번호`로 참조하고,
+검증을 마친 담당자가 완료 항목을 확인한 뒤 직접 닫는다. [GitHub 이슈 연결 기준](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue)
 
 ## 7. Swagger와 OpenAPI 명세 관리
 
@@ -233,8 +234,11 @@ git pull --ff-only origin app/develop
 ## 11. GitHub 템플릿 표시와 문서 관리
 
 Issue·PR 템플릿의 GitHub 자동 표시는 **저장소 기본 브랜치에 파일이 있어야** 활성화된다.
-현재 기본 브랜치 `main`을 보존하므로, 앱 브랜치에만 추가한 양식이 GitHub 작성 화면에 자동으로 뜬다고 가정하지 않는다.
-자동 표시가 되지 않으면 위 양식 파일에서 본문을 복사해 작성한다.
+기본 브랜치를 `app/develop`으로 설정했으며, 이 브랜치의 `.github/ISSUE_TEMPLATE/`와
+`.github/PULL_REQUEST_TEMPLATE.md`가 새 Issue·PR 작성 화면에 사용된다. `main`의 웹 코드는 그대로 보존한다.
+설정 변경 전에 열어 둔 PR 화면은 닫고 작업 브랜치 → `app/develop` 방향으로 새로 연다.
+자동 입력은 본문 양식을 제공하는 기능이다. 실제 변경 요약·검증 결과·관련 이슈는 작성자가 채우고,
+Assignee·Reviewer도 작업에 맞게 지정한다. 브랜치를 push했다고 PR이 자동 생성되는 설정은 아니다.
 GitHub CLI를 사용할 때는 작성한 본문을 UTF-8 파일에 저장하고 `--body-file`로 전달한다.
 Issue 템플릿의 YAML front matter는 본문에서 제외한다.
 [GitHub 템플릿 표시 기준](https://docs.github.com/en/enterprise-cloud@latest/communities/using-templates-to-encourage-useful-issues-and-pull-requests/about-issue-and-pull-request-templates)

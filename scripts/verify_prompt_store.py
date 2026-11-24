@@ -111,7 +111,7 @@ def main() -> int:
         "이전 활성 버전을 끈다",
         "SET is_active = false WHERE name = 'part.rules' AND is_active" in sql,
     )
-    check("한 트랜잭션", sql.count("BEGIN;") == 1 and sql.count("COMMIT;") == 1)
+    check("Flyway가 트랜잭션 관리", "\nBEGIN;" not in sql and "\nCOMMIT;" not in sql)
     for bad in ("part rules", "x'; DROP TABLE users;--", "Part.Rules", "", ".rules"):
         check(f"이름 거부: {bad!r}", raises(lambda b=bad: pv.sql_new(b, "x", "n"), ValueError))
     check(
@@ -122,7 +122,7 @@ def main() -> int:
     seed = pv.sql_seed("part.rules", body, "v1")
     check(
         "시드는 그 이름이 없을 때만",
-        "WHERE NOT EXISTS (SELECT 1 FROM prompt_version WHERE name = 'part.rules')" in seed,
+        "WHERE NOT EXISTS (SELECT 1 FROM public.prompt_version WHERE name = 'part.rules')" in seed,
     )
     act = pv.sql_activate("part.rules", 2, "되돌림")
     check(

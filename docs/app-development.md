@@ -31,11 +31,13 @@ git switch -c restore/web-only web-only-before-app-2026-11-24
 
 ## 자동 반영 흐름
 
-`app/develop`에 push → Swagger/OpenAPI 생성 검사 → OpenAPI 파일 보관 →
+`app/develop`에 push → Swagger/OpenAPI 생성 검사 및 임시 DB 마이그레이션 검사 → OpenAPI 파일 보관 →
 EC2에서 해당 커밋의 Docker 이미지 빌드 → API/worker 재시작 → 외부 접속 검사.
 
 - 워크플로: `.github/workflows/app-deploy.yml` (`app-deploy`)
-- PR은 문서 생성 검사만 실행한다. 서버 배포는 `app/develop` push에서만 실행한다.
+- PR은 문서와 임시 DB 검사만 실행한다. 서버 배포는 `app/develop` push에서만 실행한다.
+- 실제 DB 변경은 [Flyway 운영 안내](database-migrations.md)에 따라 로컬에서 먼저 적용한다.
+  DB 비밀번호는 로컬에만 보관하며 GitHub/AWS에서 실제 DB 마이그레이션을 실행하지 않는다.
 - 기존 `deploy.yml` (`main` 배포)은 GitHub Actions에서 **비활성화**한다.
   같은 EC2를 사용하는 두 브랜치가 서로의 배포를 덮어쓰지 않도록 유지해야 한다.
   `gh workflow disable deploy.yml`로 비활성화 상태를 다시 설정할 수 있다.

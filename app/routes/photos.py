@@ -32,12 +32,14 @@ from app.errors import (
     unsupported_media_type,
 )
 from app.schemas.enums import CaptureSource, JobKind, PhotoKind, PoseScaleBasis
+from app.schemas.error import ErrorResponse
 from app.schemas.photo import ReferencePhotoResponse, UploadTokenResponse, UserPhotoResponse
 from app.services import (
     db,
     diagnosis_repo,
     images,
     photo_screening,
+    photo_source,
     pose,
     rate_limit,
     storage,
@@ -48,6 +50,15 @@ from app.worker import queue
 log = logging.getLogger("routes.photos")
 
 router = APIRouter(tags=["photos"])
+
+PHOTO_UPLOAD_ERRORS = {
+    400: {"model": ErrorResponse, "description": "파일 누락 또는 요청 형식 오류"},
+    401: {"model": ErrorResponse, "description": "인증 정보 누락 또는 유효하지 않음"},
+    404: {"model": ErrorResponse, "description": "본인 소유 세션을 찾을 수 없음"},
+    413: {"model": ErrorResponse, "description": "업로드 용량 초과"},
+    415: {"model": ErrorResponse, "description": "지원하지 않는 사진 형식"},
+    422: {"model": ErrorResponse, "description": "사람 검출·자세·사진 적합성 기준 미달"},
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -217,17 +228,17 @@ def _store(
     return photo, job
 
 
-def _reference_bytes(reference: dict[str, Any]) -> bytes | None:
-    """2차 검사에 넣을 레퍼런스 원본. 못 읽으면 None (검사는 건너뛴다).
-
-    ⚠️ 여기서 실패해도 업로드를 막지 않는다. 레퍼런스를 못 읽는 건 사용자 잘못이
-       아니고, 그것 때문에 사진을 반려하면 사용자가 할 수 있는 게 없다.
-    """
+def _reference_bytes(reference: dict[str, Any]) -> bytes:
+    """비교 검사에 넣을 보호된 기준 사진. 실패 시 검사를 생략하고 저장하지 않는다."""
     try:
-        return storage.download(reference["storage_bucket"], reference["storage_path"])
+        return photo_source.load(reference, for_vlm=True)
+    except photo_source.PhotoPrivacyUnavailable:
+        raise precondition_not_met(
+            "기준 사진의 관절 좌표가 없어 보호 처리를 할 수 없습니다. 기준 사진을 다시 업로드해주세요."
+        ) from None
     except Exception:  # noqa: BLE001
-        log.exception("레퍼런스 원본을 읽지 못했습니다 — 2차 검사를 건너뜁니다")
-        return None
+        log.exception("기준 사진을 읽지 못했습니다 — 저장하지 않고 재시도를 안내합니다")
+        raise screening_unavailable() from None
 
 
 def _landmarks_for_storage(raw_json: str | None, is_mirrored: bool) -> list[dict[str, Any]]:
@@ -249,7 +260,8 @@ def _landmarks_for_storage(raw_json: str | None, is_mirrored: bool) -> list[dict
     "/sessions/{session_id}/photos/reference",
     response_model=ReferencePhotoResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="레퍼런스 사진 등록 (재업로드는 교체)",
+    summary="기준 사진 업로드·저장 및 세그멘테이션 작업 등록",
+    responses=PHOTO_UPLOAD_ERRORS,
 )
 async def upload_reference(
     user_id: UserId,
@@ -276,8 +288,9 @@ async def upload_reference(
         UploadFile | None,
         File(
             description=(
-                "jpeg/png/heic/webp 등, 10MB 이하. "
-                "⚠️ PHOTO_PIPELINE=pod 에서는 보내지 않는다 — 사진은 분석 시작 시 팟으로 직접"
+                "PHOTO_PIPELINE=storage(앱 시연): 필수. jpeg/png/heic/webp 등, 10MB 이하. "
+                "가공 JPEG를 Storage에 저장하고 GPU 작업을 등록한다. "
+                "기존 PHOTO_PIPELINE=pod에서는 파일 없이 메타데이터만 보낸다."
             )
         ),
     ] = None,
@@ -351,14 +364,16 @@ async def upload_reference(
         was_mirrored=is_mirrored,
         created_at=str(photo["created_at"]),
         job_id=str(job["job_id"]) if job else None,
-        pose_landmarks=landmarks,
+        pose_landmarks=photo.get("pose_landmarks"),
         signed_url=url,
         signed_url_expires_at=expires_at.isoformat(),
         segmented=False,
     )
 
 
-def _photo_view(photo: dict[str, Any], kind: PhotoKind, job_kind: JobKind) -> ReferencePhotoResponse:
+def _photo_view(
+    photo: dict[str, Any], kind: PhotoKind, job_kind: JobKind
+) -> ReferencePhotoResponse:
     """저장된 사진 행 → 조회 응답. 팟 경로 행(storage_path NULL)은 signed_url 이 없다."""
     session_id = UUID(str(photo["session_id"]))
     photo_id = UUID(str(photo["photo_id"]))
@@ -429,12 +444,22 @@ async def get_user_photo(session: OwnedSession) -> ReferencePhotoResponse:
     "/sessions/{session_id}/photos/user",
     response_model=UserPhotoResponse,
     status_code=status.HTTP_201_CREATED,
-    summary="촬영본/업로드본 저장 (임계값 미달이면 저장하지 않고 422)",
+    summary="사용자 사진 업로드·검사·저장 (기존 자세 기준 미달 시 422)",
+    responses={
+        **PHOTO_UPLOAD_ERRORS,
+        409: {"model": ErrorResponse, "description": "기준 사진 등록 또는 재업로드 필요"},
+        503: {
+            "model": ErrorResponse,
+            "description": "비교 사진 또는 AI 검사 일시 장애. 저장하지 않음",
+        },
+    },
 )
 async def upload_user_photo(
     user_id: UserId,
     session: OwnedSession,
-    capture_source: Annotated[CaptureSource, Form()],
+    capture_source: Annotated[
+        CaptureSource, Form(description="앱 사진 선택은 UPLOAD. 기존 촬영 경로만 CAPTURE.")
+    ],
     pose_landmarks: Annotated[str, Form()],
     pose_similarity: Annotated[float, Form(description="0~100. 산식은 docs/pose-scoring.md")],
     framing_score: Annotated[
@@ -482,7 +507,9 @@ async def upload_user_photo(
     ] = "full",
     file: Annotated[
         UploadFile | None,
-        File(description="⚠️ PHOTO_PIPELINE=pod 에서는 보내지 않는다 — 사진은 팟으로 직접"),
+        File(
+            description="PHOTO_PIPELINE=storage(앱 시연): 필수 사진 파일. 기존 pod 모드에서는 생략."
+        ),
     ] = None,
 ) -> UserPhotoResponse:
     session_id = UUID(str(session["session_id"]))
@@ -498,9 +525,7 @@ async def upload_user_photo(
         if file is not None:
             raise pod_upload_required()
         landmarks = _landmarks_for_storage(pose_landmarks, is_mirrored)
-        pose.ensure_observation_ranges(
-            pose_oks=pose_oks, person_area_ratio=pose_person_area_ratio
-        )
+        pose.ensure_observation_ranges(pose_oks=pose_oks, person_area_ratio=pose_person_area_ratio)
         if facing_delta > 10.0:
             log.warning("facing_delta %.2f > 10 — 10.0 으로 눌러 저장합니다", facing_delta)
             facing_delta = 10.0
@@ -580,12 +605,17 @@ async def upload_user_photo(
     #    판정 없이 들여보내면 잘못된 진단이 정상처럼 나간다)
     # ⚠️ 여기서 JPEG 로 인코딩하지 않는다. 판정 쪽에서 어차피 768px 로 줄이므로
     #    원본 크기로 인코딩 → 디코딩을 한 번씩 더 하는 셈이 된다.
-    #    거울 여부는 판정 기준(옷·거리·잘림) 어디에도 영향이 없어 그대로 넘긴다.
+    # 얼굴 가림에는 사진과 랜드마크의 방향이 같아야 하므로 복사본 방향만 맞춘다.
+    # _store에는 입력 img를 유지하여 거울 보정을 두 번 적용하지 않는다.
     try:
         # ⚠️ #111 — _reference_bytes 는 동기 Storage 다운로드다. await 앞에서
         #    그대로 부르면 이벤트 루프가 그 왕복 동안 막힌다.
         ref_bytes = await run_in_threadpool(_reference_bytes, reference)
-        screening = await photo_screening.screen(img, ref_bytes)
+        screening_image = images.flip_horizontal(img) if is_mirrored else img
+        screening_image = await run_in_threadpool(
+            photo_source.mask_for_vlm, screening_image, landmarks
+        )
+        screening = await photo_screening.screen(screening_image, ref_bytes)
     except photo_screening.ScreeningUnavailable:
         raise screening_unavailable() from None
     if not screening.suitable:

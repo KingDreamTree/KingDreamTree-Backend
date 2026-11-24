@@ -8,6 +8,8 @@
 
 Issue·Assignee·브랜치·커밋·PR·리뷰·Swagger·Flyway 협업 기준: [Refit 협업 가이드](CONTRIBUTING.md).
 
+사진 저장·재조회와 노트북 GPU 시연: [Storage 및 로컬 GPU 안내](docs/storage-local-gpu.md).
+
 앱 인증: [카카오 로그인·로그아웃 및 React Native API 계약](docs/app-auth.md).
 이 브랜치의 보호된 API는 리핏 Bearer 토큰이 필요하며 `X-User-Id` 인증은 지원하지 않는다.
 기존 웹/스모크 도구의 익명 UUID 호출 방식은 앱 인증 계약에 맞춰 전환해야 한다.

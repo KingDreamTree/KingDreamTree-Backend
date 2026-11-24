@@ -63,7 +63,10 @@ class SegmentationResponse(BaseModel):
 
     #: ⚠️ 팟 경로(PHOTO_PIPELINE=pod)에서는 null — 서버에 사진이 없다. 화면은
     #  기기 원본을 was_mirrored 면 좌우 반전하고 crop_box 로 잘라, 그 위에 맵을 얹는다.
-    photo_url: str | None = None
+    photo_url: str | None = Field(
+        default=None,
+        description="Storage 모드의 저장 사진 URL. 거울 보정·3:4 크롭이 완료되어 추가 반전/크롭하지 않습니다.",
+    )
     photo_width: int | None = None
     photo_height: int | None = None
     was_mirrored: bool = False

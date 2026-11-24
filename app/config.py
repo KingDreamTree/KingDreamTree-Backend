@@ -4,6 +4,8 @@
    임계값이 바뀔 때마다 코드를 고치면 나중에 "어느 값으로 뽑은 결과인지" 추적이 안 된다.
 """
 
+from typing import Literal
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -73,6 +75,8 @@ class Settings(BaseSettings):
     #     적용돼 있어야 한다 (photo.storage_path NULL 허용 + crop_box).
     #  ⚠️ 프론트(업로드 주소)·API·팟이 맞물린다 — 셋을 같은 날 전환한다.
     photo_pipeline: str = "storage"
+    # Storage 경로의 OpenAI 입력 복사본에만 적용한다. 저장 사진/세그 입력은 유지.
+    storage_face_mask_style: Literal["blur", "fill"] = "blur"
 
     #: API 와 팟이 공유하는 업로드 토큰 서명 비밀. **둘 다 같은 값**이어야 한다.
     #  ⚠️ 새면 누구나 토큰을 만들어 팟에 사진을 올리고 스크리닝 GPT 요금을 태울 수

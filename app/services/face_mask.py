@@ -1,4 +1,4 @@
-"""OpenAI 로 나가는 사진의 얼굴을 가린다 — 팟 전용.
+"""OpenAI로 나가는 사진의 얼굴을 가린다 — Pod 및 Storage 입력에서 공용.
 
     face_mask.apply(img, landmarks, style) -> (가린 이미지, 박스 | None)
 

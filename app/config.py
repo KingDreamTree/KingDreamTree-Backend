@@ -34,7 +34,8 @@ class Settings(BaseSettings):
     # 카카오 SDK가 발급받은 토큰의 app_id를 검증한다. 앱 키와 다른 숫자 ID다.
     kakao_app_id: int | None = Field(default=None, gt=0)
     kakao_timeout_sec: float = Field(default=5.0, gt=0, le=30)
-    # 리핏 토큰은 DB 세션으로 관리한다. 원문은 저장하지 않고 SHA-256 해시만 저장.
+    # 액세스 토큰 수명. 별도 refresh 세션은 시간 만료 없이 로그아웃까지 유지한다.
+    # 토큰 원문은 저장하지 않고 SHA-256 해시만 저장.
     auth_session_ttl_sec: int = Field(default=3600, ge=60, le=86400)
     auth_login_rate_limit: int = Field(default=10, ge=1)
     auth_login_rate_window_sec: int = Field(default=60, ge=1)

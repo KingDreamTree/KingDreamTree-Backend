@@ -5,9 +5,13 @@ SDK/앱이 보낸 사용자 ID를 신뢰하거나 기존 익명 기록에 자동
 """
 
 import hashlib
+import base64
+import hmac
 import re
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from math import ceil
 from uuid import UUID
 
 import httpx
@@ -80,15 +84,17 @@ def token_hash(token: str) -> str:
 
 def create_login(info: KakaoTokenInfo) -> dict:
     token = "refit_" + secrets.token_urlsafe(32)
+    refresh_token = "refit_refresh_" + secrets.token_urlsafe(32)
     try:
         row = (
             db.get_client()
             .rpc(
-                "refit_kakao_login",
+                "refit_kakao_login_persistent",
                 {
                     "p_app_id": info.app_id,
                     "p_subject": str(info.id),
                     "p_token_hash": token_hash(token),
+                    "p_refresh_hash": token_hash(refresh_token),
                     "p_ttl_seconds": settings.auth_session_ttl_sec,
                 },
             )
@@ -98,13 +104,46 @@ def create_login(info: KakaoTokenInfo) -> dict:
     except Exception:
         # DB 예외에는 쿼리 등이 포함될 수 있으므로 인증 정보를 로그/응답에 옮기지 않는다.
         raise unavailable() from None
+    return token_response(token, refresh_token, row)
+
+
+def token_response(token: str, refresh_token: str, row: dict) -> dict:
+    expires_at = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
     return {
         "access_token": token,
+        "refresh_token": refresh_token,
         "token_type": "Bearer",
-        "expires_in": settings.auth_session_ttl_sec,
+        "expires_in": max(0, ceil((expires_at - datetime.now(timezone.utc)).total_seconds())),
         "expires_at": row["expires_at"],
         "user": {key: row[key] for key in ("user_id", "is_pro_user", "created_at")},
     }
+
+
+def refresh(token: str, request_id: UUID) -> dict:
+    # Same credential + retry ID reconstructs the same response without storing secrets.
+    # Domain-separated HMAC-SHA256 outputs are opaque; the old token stays the secret key.
+    def derive(kind: str, prefix: str) -> str:
+        digest = hmac.new(
+            token.encode("ascii"), f"refit-refresh-v1:{kind}:{request_id}".encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        return prefix + base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+    access = derive("access", "refit_")
+    next_refresh = derive("refresh", "refit_refresh_")
+    try:
+        rows = db.get_client().rpc("refit_refresh_login", {
+            "p_refresh_hash": token_hash(token),
+            "p_request_id": str(request_id),
+            "p_token_hash": token_hash(access),
+            "p_next_refresh_hash": token_hash(next_refresh),
+            "p_ttl_seconds": settings.auth_session_ttl_sec,
+        }).execute().data
+    except Exception:
+        raise unavailable() from None
+    if not rows:
+        raise unauthorized("INVALID_REFRESH_TOKEN")
+    return token_response(access, next_refresh, rows[0])
 
 
 def authenticate(token: str) -> AuthSession:
@@ -120,10 +159,15 @@ def authenticate(token: str) -> AuthSession:
     return AuthSession(user_id=UUID(str(rows[0]["user_id"])), token_hash=digest)
 
 
-def logout(session: AuthSession) -> None:
+def logout(access_token: str | None, refresh_token: str | None) -> None:
+    if refresh_token is None and access_token is None:
+        raise unauthorized("MISSING_ACCESS_TOKEN")
+    if access_token is not None and not re.fullmatch(r"refit_[A-Za-z0-9_-]{43}", access_token):
+        raise unauthorized()
     try:
-        db.get_client().table("auth_session").delete().eq(
-            "token_hash", session.token_hash
-        ).execute()
+        db.get_client().rpc("refit_logout", {
+            "p_token_hash": token_hash(access_token) if access_token else None,
+            "p_refresh_hash": token_hash(refresh_token) if refresh_token else None,
+        }).execute()
     except Exception:
         raise unavailable() from None

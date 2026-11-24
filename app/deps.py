@@ -12,7 +12,7 @@ from app.services import auth, db
 bearer = HTTPBearer(
     auto_error=False,
     scheme_name="RefitBearer",
-    description="POST /api/v1/auth/kakao에서 발급받은 리핏 access_token. 카카오 토큰이 아닙니다.",
+    description="/auth/kakao 또는 /auth/refresh의 리핏 access_token. 카카오/리프레시 토큰이 아닙니다.",
 )
 
 

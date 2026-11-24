@@ -93,10 +93,20 @@ class MemoryAuthStore:
         self.users = {}
         self.identities = {}
         self.sessions = {}
+        self.refresh_tokens = {}
+        self.families = {}
+        self.access_families = {}
+
+    def revoke(self, family):
+        for digest in list(self.sessions):
+            if self.access_families.get(digest) == family:
+                self.sessions.pop(digest)
+        self.refresh_tokens = {k: v for k, v in self.refresh_tokens.items() if v["family"] != family}
+        self.families.pop(family, None)
 
     def rpc(self, name, args):
         def execute():
-            if name == "refit_kakao_login":
+            if name == "refit_kakao_login_persistent":
                 identity = (args["p_app_id"], args["p_subject"])
                 user_id = self.identities.setdefault(identity, str(uuid4()))
                 now = datetime.now(timezone.utc)
@@ -110,7 +120,40 @@ class MemoryAuthStore:
                 )
                 expires_at = now + timedelta(seconds=args["p_ttl_seconds"])
                 self.sessions[args["p_token_hash"]] = (user_id, expires_at)
+                family = str(uuid4())
+                self.families[family] = user_id
+                self.access_families[args["p_token_hash"]] = family
+                self.refresh_tokens[args["p_refresh_hash"]] = {"family": family, "request": None}
                 return SimpleNamespace(data=[{**user, "expires_at": expires_at.isoformat()}])
+            if name == "refit_refresh_login":
+                old = self.refresh_tokens.get(args["p_refresh_hash"])
+                if not old:
+                    return SimpleNamespace(data=[])
+                family = old["family"]
+                if old["request"]:
+                    child = self.refresh_tokens.get(args["p_next_refresh_hash"])
+                    if old["request"] == args["p_request_id"] and child and child["request"] is None:
+                        return SimpleNamespace(data=[old["response"]])
+                    self.revoke(family)
+                    return SimpleNamespace(data=[])
+                user_id = self.families[family]
+                expires = datetime.now(timezone.utc) + timedelta(seconds=args["p_ttl_seconds"])
+                row = {**self.users[user_id], "expires_at": expires.isoformat()}
+                old.update(request=args["p_request_id"], response=row)
+                self.refresh_tokens[args["p_next_refresh_hash"]] = {"family": family, "request": None}
+                self.sessions[args["p_token_hash"]] = (user_id, expires)
+                self.access_families[args["p_token_hash"]] = family
+                return SimpleNamespace(data=[row])
+            if name == "refit_logout":
+                if args["p_refresh_hash"]:
+                    family = self.refresh_tokens.get(args["p_refresh_hash"], {}).get("family")
+                else:
+                    family = self.access_families.get(args["p_token_hash"])
+                if family:
+                    self.revoke(family)
+                else:
+                    self.sessions.pop(args["p_token_hash"], None)
+                return SimpleNamespace(data=[])
             if name == "refit_auth_session":
                 session = self.sessions.get(args["p_token_hash"])
                 valid = session and session[1] > datetime.now(timezone.utc)
@@ -195,7 +238,7 @@ class AuthApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 204)
         self.assertEqual(response.content, b"")
         self.assertEqual(self.client.get("/api/v1/users/me", headers=headers).status_code, 401)
-        self.assertEqual(self.client.post("/api/v1/auth/logout", headers=headers).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/logout", headers=headers).status_code, 204)
         self.assertEqual(
             self.client.get(
                 "/api/v1/users/me", headers=self.bearer(second["access_token"])
@@ -213,6 +256,105 @@ class AuthApiTests(unittest.TestCase):
         )
         response = self.client.get("/api/v1/users/me", headers=self.bearer(login["access_token"]))
         self.assertEqual(response.status_code, 401)
+
+    def refresh(self, token, request_id=None):
+        return self.client.post("/api/v1/auth/refresh", json={
+            "refresh_token": token, "request_id": str(request_id or uuid4()),
+        })
+
+    def test_expired_access_renews_without_kakao_and_survives_restart(self):
+        first = self.login()
+        self.store.sessions[auth.token_hash(first["access_token"])] = (
+            first["user"]["user_id"], datetime.now(timezone.utc) - timedelta(days=365),
+        )
+        # All credentials live in the DB, not per-process auth state.
+        with TestClient(app) as reopened:
+            response = reopened.post("/api/v1/auth/refresh", json={
+                "refresh_token": first["refresh_token"], "request_id": str(uuid4()),
+            })
+        self.assertEqual(response.status_code, 200, response.text)
+        second = response.json()
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertNotEqual(second["refresh_token"], first["refresh_token"])
+        self.assertNotIn(second["refresh_token"], self.store.refresh_tokens)
+        self.assertEqual(first["user"], second["user"])
+        self.assertEqual(self.client.get("/api/v1/users/me", headers=self.bearer(second["access_token"])).status_code, 200)
+        self.verify.assert_awaited_once()  # No provider call on refresh.
+
+    def test_lost_refresh_response_can_be_retried_with_same_id(self):
+        first = self.login()
+        request_id = uuid4()
+        response = self.refresh(first["refresh_token"], request_id)
+        retry = self.refresh(first["refresh_token"], request_id)
+        self.assertEqual(response.status_code, 200)
+        for field in ("access_token", "refresh_token", "expires_at", "user"):
+            self.assertEqual(response.json()[field], retry.json()[field])
+        self.assertEqual(self.refresh(retry.json()["refresh_token"]).status_code, 200)
+
+    def test_refresh_replay_revokes_entire_family_only(self):
+        first, other_device = self.login(), self.login()
+        second = self.refresh(first["refresh_token"]).json()
+        replay = self.refresh(first["refresh_token"])
+        self.assertEqual(replay.status_code, 401)
+        self.assertEqual(replay.json()["error"]["code"], "INVALID_REFRESH_TOKEN")
+        for token in (first["access_token"], second["access_token"]):
+            self.assertEqual(self.client.get("/api/v1/users/me", headers=self.bearer(token)).status_code, 401)
+        self.assertEqual(self.refresh(second["refresh_token"]).status_code, 401)
+        self.assertEqual(self.refresh(other_device["refresh_token"]).status_code, 200)
+        self.assertEqual(len(self.store.users), 1)
+
+    def test_logout_with_refresh_after_access_expiry_preserves_user_and_other_device(self):
+        first, other = self.login(), self.login()
+        rotated = self.refresh(first["refresh_token"]).json()
+        self.store.sessions[auth.token_hash(rotated["access_token"])] = (
+            first["user"]["user_id"], datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+        for _ in range(2):
+            response = self.client.post("/api/v1/auth/logout", json={"refresh_token": rotated["refresh_token"]})
+            self.assertEqual(response.status_code, 204, response.text)
+        self.assertEqual(self.refresh(rotated["refresh_token"]).status_code, 401)
+        self.assertEqual(self.refresh(first["refresh_token"]).status_code, 401)
+        self.assertEqual(self.refresh(other["refresh_token"]).status_code, 200)
+        self.assertEqual(len(self.store.users), 1)
+
+    def test_bearer_logout_also_revokes_refresh_tokens(self):
+        first = self.login()
+        rotated = self.refresh(first["refresh_token"]).json()
+        response = self.client.post("/api/v1/auth/logout", headers=self.bearer(first["access_token"]))
+        self.assertEqual(response.status_code, 204)
+        self.assertEqual(self.refresh(rotated["refresh_token"]).status_code, 401)
+
+    def test_refresh_tokens_cannot_authenticate_business_endpoints(self):
+        first = self.login()
+        self.assertEqual(self.client.get("/api/v1/users/me", headers=self.bearer(first["refresh_token"])).status_code, 401)
+        self.assertEqual(self.refresh(first["access_token"]).status_code, 400)
+        for body in ({}, {"refresh_token": "secret-token", "request_id": str(uuid4())},
+                     {"refresh_token": first["refresh_token"], "request_id": "invalid"}):
+            response = self.client.post("/api/v1/auth/refresh", json=body)
+            self.assertEqual(response.status_code, 400)
+            self.assertNotIn(first["refresh_token"], response.text)
+            self.assertNotIn("secret-token", response.text)
+        self.assertEqual(self.refresh("refit_refresh_" + "A" * 43).status_code, 401)
+        self.assertEqual(self.client.post("/api/v1/auth/logout").status_code, 401)
+
+    def test_refresh_database_outage_does_not_invalidate_credentials(self):
+        first = self.login()
+        with patch.object(db, "get_client", side_effect=RuntimeError("secret-db-value")):
+            response = self.refresh(first["refresh_token"])
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("secret-db-value", response.text)
+        self.assertEqual(self.refresh(first["refresh_token"]).status_code, 200)
+
+    def test_retry_recovery_reports_expired_access_but_preserves_next_refresh(self):
+        first = self.login()
+        request_id = uuid4()
+        rotated = self.refresh(first["refresh_token"], request_id).json()
+        parent = self.store.refresh_tokens[auth.token_hash(first["refresh_token"])]
+        parent["response"]["expires_at"] = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        retry = self.refresh(first["refresh_token"], request_id).json()
+        self.assertEqual(retry["expires_in"], 0)
+        self.assertEqual(retry["refresh_token"], rotated["refresh_token"])
+        self.assertEqual(self.refresh(retry["refresh_token"]).status_code, 200)
 
     def test_cross_user_photo_access_still_rejected(self):
         login = self.login()
@@ -264,13 +406,15 @@ class AuthApiTests(unittest.TestCase):
         for route, method in (
             ("/api/v1/users/me", "get"),
             ("/api/v1/sessions/{session_id}/photos/user", "post"),
-            ("/api/v1/auth/logout", "post"),
         ):
             operation = paths[route][method]
             self.assertEqual(operation["security"], [{"RefitBearer": []}])
             self.assertIn("401", operation["responses"])
             self.assertFalse(any(p["name"] == "X-User-Id" for p in operation.get("parameters", [])))
         self.assertTrue(paths["/api/v1/users"]["post"]["deprecated"])
+        self.assertFalse(paths["/api/v1/auth/refresh"]["post"].get("security"))
+        self.assertIn({}, paths["/api/v1/auth/logout"]["post"]["security"])
+        self.assertIn("refresh_token", schema["components"]["schemas"]["LoginResponse"]["required"])
 
         # 로컬 JSON 참조가 모두 해석되는지 확인한다.
         def check(node):

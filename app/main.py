@@ -13,8 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.exception_handlers import register_exception_handlers
-from app.services.db import get_client
+from app.openapi import install_error_docs
 from app.routes.analysis import router as analysis_router
+from app.routes.auth import router as auth_router
 from app.routes.body_parts import router as body_parts_router
 from app.routes.coach_chat import router as coach_chat_router
 from app.routes.inbody import router as inbody_router
@@ -27,15 +28,17 @@ from app.routes.sessions import router as sessions_router
 from app.routes.storage import router as storage_router
 from app.routes.users import router as users_router
 from app.routes.workout_logs import router as workout_logs_router
+from app.services.db import get_client
 
 app = FastAPI(
     title="Refit API",
     description=(
         "레퍼런스 이미지 기반 체형 비교 분석 + 개인화 운동 루틴 생성.\n\n"
-        "**인증 없음** — 모든 요청에 `X-User-Id` 헤더가 필요합니다 "
-        "(`POST /users`, `GET /body-parts` 제외).\n\n"
+        "**카카오 로그인** — `POST /api/v1/auth/kakao`로 리핏 토큰을 발급받고 "
+        "보호된 API에는 `Authorization: Bearer <access_token>`을 전달합니다. "
+        "`X-User-Id` 인증은 지원하지 않습니다. Swagger의 Authorize에 리핏 토큰을 넣으세요.\n\n"
         "무거운 작업은 202 + `job_id`를 반환하고 `GET /jobs/{job_id}` 폴링으로 확인합니다.\n\n"
-        "명세: `docs/api-spec-v2.md`"
+        "앱 인증 계약: `docs/app-auth.md`"
     ),
     version=f"0.2.0+{settings.build_revision}" if settings.build_revision else "0.2.0",
 )
@@ -58,12 +61,7 @@ if settings.photo_pipeline == "pod" and not settings.pod_upload_secret:
 #    프론트 콘솔에만 CORS 오류가 뜨므로 원인을 찾는 데 시간이 오래 걸린다.
 #    (curl·Postman 으로는 잘 되는데 화면에서만 안 되는 상태)
 #
-# ⚠️ allow_credentials 는 켜지 않는다. 우리는 쿠키를 안 쓰고 X-User-Id 헤더로만
-#    식별한다. 켜면 allow_origins="*" 를 못 쓰게 되기도 한다.
-#
-# ⚠️ **CORS 는 우리 데이터를 지켜주지 않는다.** user_id 를 아는 사람은 어느
-#    오리진에서든 그 사용자의 데이터를 읽을 수 있다(로그인이 없으므로).
-#    오리진 제한은 "우리 프론트만 붙게" 하는 운영 편의일 뿐이다.
+# 쿠키 대신 Authorization 헤더를 사용한다. 사용자 검증은 공통 Bearer 의존성이 담당한다.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list(),
@@ -91,6 +89,7 @@ register_exception_handlers(app)
 API_PREFIX = "/api/v1"
 
 for _router in (
+    auth_router,
     body_parts_router,
     jobs_router,
     users_router,
@@ -106,6 +105,9 @@ for _router in (
     coach_chat_router,
 ):
     app.include_router(_router, prefix=API_PREFIX)
+
+
+install_error_docs(app)
 
 # 구 스캐폴드(/analyze, /compare)는 F08·F09 가 새 구조로 대체해 삭제했다.
 # 관련 DTO(schemas/analyze.py, schemas/compare.py)도 함께 제거됐다.

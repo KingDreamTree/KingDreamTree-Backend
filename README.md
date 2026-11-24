@@ -8,6 +8,10 @@
 
 Issue·Assignee·브랜치·커밋·PR·리뷰·Swagger·Flyway 협업 기준: [Refit 협업 가이드](CONTRIBUTING.md).
 
+앱 인증: [카카오 로그인·로그아웃 및 React Native API 계약](docs/app-auth.md).
+이 브랜치의 보호된 API는 리핏 Bearer 토큰이 필요하며 `X-User-Id` 인증은 지원하지 않는다.
+기존 웹/스모크 도구의 익명 UUID 호출 방식은 앱 인증 계약에 맞춰 전환해야 한다.
+
 ---
 
 ## 빠른 시작
@@ -28,7 +32,7 @@ uvicorn app.main:app --reload --port 8000
 
 ⚠️ **`USE_MOCK=true` 는 DB 를 대신해주지 않는다.** mock 이 우회하는 것은 VLM 호출뿐이고,
 DB·스토리지는 그대로 Supabase 로 나간다. `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`
-없이는 `POST /api/v1/users` 부터 500 이다.
+없이는 카카오 토큰 교환과 사용자 조회 등 DB 작업을 사용할 수 없다.
 
 ⚠️ **`SUPABASE_URL` 은 `https://<프로젝트>.supabase.co` 까지만.** 끝에 `/rest/v1` 을 붙이면
 클라이언트가 한 번 더 붙여서 `PGRST125 Invalid path` 가 난다.

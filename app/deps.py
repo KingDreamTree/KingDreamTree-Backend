@@ -1,38 +1,41 @@
-"""FastAPI 의존성 — 인증(없음)과 소유권 검증.
-
-⚠️ 이 프로젝트에는 로그인이 없다. 요청마다 X-User-Id 헤더로 사용자를 식별한다.
-   따라서 **모든 자식 리소스 조회는 analysis_session.user_id 까지 조인해
-   X-User-Id와 일치하는지 확인해야 한다.** 한 군데라도 빠뜨리면
-   session_id만 알면 남의 데이터가 열린다.
-
-   그 검증을 라우터마다 손으로 쓰지 말고 여기 의존성으로만 통과시킬 것.
-"""
+"""FastAPI 공통 Bearer 인증과 리소스 소유권 검증."""
 
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import Depends, Header, Path
+from fastapi import Depends, Path
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.errors import invalid_user_id, missing_user_id, not_found
-from app.services import db
+from app.errors import not_found
+from app.services import auth, db
+
+bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="RefitBearer",
+    description="POST /api/v1/auth/kakao에서 발급받은 리핏 access_token. 카카오 토큰이 아닙니다.",
+)
 
 
-async def get_user_id(
-    x_user_id: Annotated[str | None, Header(alias="X-User-Id")] = None,
-) -> UUID:
-    """헤더에서 user_id를 꺼내 형식만 검증한다 (DB 조회 없음)."""
-    if not x_user_id:
-        raise missing_user_id()
-    try:
-        return UUID(x_user_id)
-    except ValueError:
-        raise invalid_user_id() from None
+def get_auth_session(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> auth.AuthSession:
+    if credentials is None:
+        raise auth.unauthorized("MISSING_ACCESS_TOKEN")
+    return auth.authenticate(credentials.credentials)
+
+
+CurrentAuthSession = Annotated[auth.AuthSession, Depends(get_auth_session)]
+
+
+def get_user_id(session: CurrentAuthSession) -> UUID:
+    """검증된 서버 세션에서만 내부 사용자 ID를 얻는다. X-User-Id는 받지 않는다."""
+    return session.user_id
 
 
 UserId = Annotated[UUID, Depends(get_user_id)]
 
 
-async def get_current_user(user_id: UserId) -> dict[str, Any]:
+def get_current_user(user_id: UserId) -> dict[str, Any]:
     """user_id가 실제로 존재하는지까지 확인한다."""
     user = db.get_user(user_id)
     if user is None:

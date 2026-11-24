@@ -38,20 +38,6 @@ class ApiError(Exception):
 # --------------------------------------------------------------------------- #
 
 
-def missing_user_id() -> ApiError:
-    return ApiError(401, "MISSING_USER_ID", "X-User-Id 헤더가 필요합니다.")
-
-
-def invalid_user_id() -> ApiError:
-    """헤더는 왔는데 UUID 형식이 아니다.
-
-    ⚠️ MISSING_USER_ID 와 나눈다. "헤더가 필요합니다"라고 하면 프론트는
-       헤더를 안 보낸 줄 알고 엉뚱한 데를 고친다. 실제로는 저장된 값이 깨진 것이라
-       재발급이 답이다.
-    """
-    return ApiError(401, "INVALID_USER_ID", "X-User-Id 형식이 올바르지 않습니다.")
-
-
 def not_found(what: str = "리소스") -> ApiError:
     """⚠️ 소유권 불일치도 이걸 쓴다.
 

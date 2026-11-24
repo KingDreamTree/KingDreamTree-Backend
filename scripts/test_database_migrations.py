@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+from scripts.check_auth_schema import verify_auth_schema
 from scripts.prompt_version import sql_activate, sql_new
 
 
@@ -96,6 +97,7 @@ def main() -> None:
         assert flyway("validate")["validationSuccessful"] is True
         assert flyway("migrate")["migrationsExecuted"] == 0
         assert int(sql("SELECT count(*) FROM pg_tables WHERE schemaname='public';")) >= 18
+        verify_auth_schema(sql)
         # Exercise generated prompt SQL with Flyway's default schema and an outer
         # transaction, including a failed activation that must preserve the old one.
         for content in ("synthetic v1", "synthetic v2"):

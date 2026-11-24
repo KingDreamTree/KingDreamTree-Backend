@@ -14,8 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.11'
           cache: pip
@@ -28,7 +28,7 @@ jobs:
           PHOTO_PIPELINE: storage
           BUILD_REVISION: ${{ github.sha }}
         run: python scripts/check_api_docs.py --output openapi.json --expected-revision "$GITHUB_SHA"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         with:
           name: openapi-${{ github.sha }}
           path: openapi.json
@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Build and deploy the checked commit on EC2
         uses: appleboy/ssh-action@v1.2.0
         env:

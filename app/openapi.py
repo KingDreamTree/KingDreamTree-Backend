@@ -31,8 +31,15 @@ def install_error_docs(app: FastAPI) -> None:
                             },
                         )
                 # RequestValidationError는 실제로 400 + 공통 오류 본문을 반환한다.
-                if "422" in responses:
+                validation_schema = (
+                    responses.get("422", {})
+                    .get("content", {})
+                    .get("application/json", {})
+                    .get("schema", {})
+                )
+                if validation_schema.get("$ref") == "#/components/schemas/HTTPValidationError":
                     responses.pop("422")
+                if operation.get("requestBody") or operation.get("parameters"):
                     responses.setdefault(
                         "400", {"description": "요청 형식 오류", "content": content}
                     )

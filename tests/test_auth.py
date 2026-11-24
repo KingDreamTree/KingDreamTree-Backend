@@ -8,11 +8,15 @@ from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import httpx
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import settings
 from app.errors import ApiError
+from app.exception_handlers import register_exception_handlers
 from app.main import app
+from app.openapi import install_error_docs
+from app.schemas.auth import AuthErrorResponse
 from app.services import auth, db, rate_limit
 
 
@@ -282,6 +286,29 @@ class AuthApiTests(unittest.TestCase):
                     check(value)
 
         check(schema)
+
+
+class OpenApiErrorTests(unittest.TestCase):
+    def test_domain_422_is_preserved_while_validation_is_400(self):
+        sample = FastAPI()
+        register_exception_handlers(sample)
+
+        @sample.post("/photo", responses={422: {"model": AuthErrorResponse}})
+        def reject_photo(body: dict):
+            raise ApiError(422, "POSE_MISMATCH", "자세를 맞춰주세요.")
+
+        install_error_docs(sample)
+        with TestClient(sample) as client:
+            self.assertEqual(client.post("/photo", json={}).status_code, 422)
+            self.assertEqual(client.post("/photo", json=[]).status_code, 400)
+            responses = client.get("/openapi.json").json()["paths"]["/photo"]["post"]["responses"]
+            self.assertIn("400", responses)
+            self.assertEqual(
+                responses["422"]["content"]["application/json"]["schema"],
+                {
+                    "$ref": "#/components/schemas/AuthErrorResponse",
+                },
+            )
 
 
 if __name__ == "__main__":

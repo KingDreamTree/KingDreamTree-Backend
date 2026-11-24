@@ -3,6 +3,7 @@
 import re
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
@@ -26,10 +27,33 @@ class KakaoLoginRequest(BaseModel):
         return value
 
 
+class RefreshTokenRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    refresh_token: SecretStr = Field(
+        description="리핏 refresh_token. OS 보안 저장소에 보관하며 일반 API의 Bearer로 사용하지 않습니다.",
+        min_length=57, max_length=57,
+    )
+
+    @field_validator("refresh_token")
+    @classmethod
+    def valid_refresh(cls, value: SecretStr) -> SecretStr:
+        if not re.fullmatch(r"refit_refresh_[A-Za-z0-9_-]{43}", value.get_secret_value()):
+            raise ValueError("리프레시 토큰 형식이 올바르지 않습니다.")
+        return value
+
+
+class RefreshRequest(RefreshTokenRequest):
+    request_id: UUID = Field(
+        description="갱신 시 생성·보관한 UUID. 응답 유실 재시도에는 같은 값을, 다음 갱신에는 새 값을 사용합니다.",
+    )
+
+
 class LoginResponse(BaseModel):
     access_token: str = Field(description="리핏 전용 불투명 토큰. 해석하지 말고 Bearer로 전달.")
     token_type: Literal["Bearer"] = "Bearer"
-    expires_in: int = Field(description="리핏 토큰 수명(초). 만료 후 카카오 토큰으로 재로그인.")
+    refresh_token: str = Field(description="자동 갱신용 리핏 토큰. 갱신 응답의 새 값으로 교체합니다.")
+    expires_in: int = Field(ge=0, description="액세스 토큰의 남은 유효시간(초). 만료 시 /auth/refresh로 자동 갱신.")
     expires_at: datetime = Field(description="리핏 토큰 만료 시각(UTC).")
     user: UserResponse
 

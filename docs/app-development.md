@@ -42,6 +42,10 @@ EC2에서 해당 커밋의 Docker 이미지 빌드 → API/worker 재시작 → 
 - `app-deploy`는 `main`에 없으므로 수동 실행 버튼에 의존하지 않는다.
   서버를 켠 뒤 실패한 실행의 **Re-run failed jobs**를 사용하거나 새 커밋을 push한다.
 - `EC2_HOST`, `EC2_SSH_KEY`는 기존 GitHub Actions repository secrets를 사용한다.
+- `EC2_HOST`는 `api.refit.live`로 설정한다. `EC2_SSH_KEY`는 현재 인스턴스의
+  `refit-ec2` 키 페어에 해당하는 개인키이며, 저장소 파일에 넣지 않는다.
+- repository variable `EC2_HOST_FINGERPRINT`로 검증된 서버 SSH 지문을 고정한다.
+  서버 교체 시 AWS 콘솔 등 신뢰할 수 있는 경로로 서버를 확인한 뒤 갱신한다.
 - 서버 경로는 `~/KingDreamTree-Backend`, SSH 사용자는 `ubuntu`다.
 - 배포 서버는 커밋을 직접 체크아웃한다. 서버에서 `git pull`로 수동 갱신하지 않는다.
 - Docker의 `BUILD_REVISION`에 커밋 SHA를 넣는다. 서버 `.env`에 같은 변수를
@@ -69,7 +73,7 @@ FastAPI 라우트와 Pydantic 스키마에서 생성된다. 형식을 변경하�
 
 1. 기존 EC2 인스턴스를 시작하고 상태 검사 통과를 기다린다.
 2. 탄력적 IP 연결과 `api.refit.live` DNS를 확인한다. IP가 달라졌다면
-   DNS와 GitHub secret `EC2_HOST`를 새 IP에 맞춘다.
+   DNS를 새 IP에 맞춘다. `EC2_HOST`는 도메인 이름을 그대로 사용한다.
 3. 기존 보안 그룹의 SSH(배포용), HTTP/HTTPS 접근과 서버 `.env`를 확인한다.
 4. GitHub Actions에서 최신 `app-deploy` 실패 실행을 재실행한다.
 5. `deploy` 작업이 성공하고 Swagger에 같은 커밋 SHA가 표시되는지 확인한다.

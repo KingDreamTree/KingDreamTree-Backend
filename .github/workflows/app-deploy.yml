@@ -54,6 +54,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
+          fingerprint: ${{ vars.EC2_HOST_FINGERPRINT }}
           envs: DEPLOY_SHA
           timeout: 30s
           command_timeout: 25m
